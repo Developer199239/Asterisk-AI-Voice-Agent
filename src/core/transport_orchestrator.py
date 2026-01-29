@@ -52,6 +52,9 @@ class ContextConfig:
     pre_call_tools: Optional[List[str]] = None  # Tool names to run after answer, before AI speaks
     post_call_tools: Optional[List[str]] = None  # Tool names to run after call ends
     
+    # In-call HTTP tool configurations (defined inline in context)
+    in_call_http_tools: Optional[Dict[str, Any]] = None  # In-call HTTP tool configs (name -> config)
+    
     # Global tool opt-out per context (Milestone 24)
     disable_global_pre_call_tools: Optional[List[str]] = None  # Global pre-call tools to disable
     disable_global_in_call_tools: Optional[List[str]] = None  # Global in-call tools to disable
@@ -150,6 +153,8 @@ class TransportOrchestrator:
                     # Phase tool configuration (Milestone 24)
                     pre_call_tools=context_dict.get('pre_call_tools'),
                     post_call_tools=context_dict.get('post_call_tools'),
+                    # In-call HTTP tool configurations
+                    in_call_http_tools=context_dict.get('in_call_http_tools'),
                     disable_global_pre_call_tools=context_dict.get('disable_global_pre_call_tools'),
                     disable_global_in_call_tools=context_dict.get('disable_global_in_call_tools'),
                     disable_global_post_call_tools=context_dict.get('disable_global_post_call_tools'),

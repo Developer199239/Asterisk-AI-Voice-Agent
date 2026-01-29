@@ -487,6 +487,40 @@ After outputting a tool call, provide a brief spoken response.
         
         if http_tool_count > 0:
             logger.info(f"🌐 Initialized {http_tool_count} HTTP tools from config")
+
+    def initialize_in_call_http_tools_from_config(self, in_call_tools_config: Dict[str, Any]) -> None:
+        """
+        Initialize in-call HTTP tools from YAML config.
+        
+        Scans the in_call_tools config for entries with 'kind: in_call_http_lookup'
+        and registers them as AI-invokable tools.
+        
+        Args:
+            in_call_tools_config: The 'in_call_tools' section from ai-agent.yaml or context config
+        """
+        if not in_call_tools_config:
+            return
+        
+        in_call_tool_count = 0
+        
+        for tool_name, tool_config in in_call_tools_config.items():
+            if not isinstance(tool_config, dict):
+                continue
+            
+            kind = tool_config.get('kind', 'in_call_http_lookup')
+            
+            if kind == 'in_call_http_lookup':
+                try:
+                    from src.tools.http.in_call_lookup import create_in_call_http_tool
+                    tool = create_in_call_http_tool(tool_name, tool_config)
+                    self.register_instance(tool)
+                    in_call_tool_count += 1
+                    logger.info(f"✅ Registered in-call HTTP tool: {tool_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to create in-call HTTP tool {tool_name}: {e}")
+        
+        if in_call_tool_count > 0:
+            logger.info(f"📞 Initialized {in_call_tool_count} in-call HTTP tools from config")
     
     def list_tools(self) -> List[str]:
         """

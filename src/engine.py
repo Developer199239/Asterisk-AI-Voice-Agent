@@ -534,6 +534,10 @@ class Engine:
             tools_config = getattr(self.config, 'tools', None)
             if tools_config:
                 tool_registry.initialize_http_tools_from_config(tools_config)
+            # Initialize in-call HTTP tools from config
+            in_call_tools_config = getattr(self.config, 'in_call_tools', None)
+            if in_call_tools_config:
+                tool_registry.initialize_in_call_http_tools_from_config(in_call_tools_config)
             logger.info("✅ Tool calling system initialized", tool_count=len(tool_registry.list_tools()))
         except Exception as e:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
@@ -11043,9 +11047,27 @@ class Engine:
                         has_tools_attr=hasattr(context_config, 'tools') if context_config else False,
                     )
                     if context_config:
+                        # Register per-context in-call HTTP tools if defined
+                        in_call_http_tools_cfg = getattr(context_config, "in_call_http_tools", None)
+                        if in_call_http_tools_cfg:
+                            try:
+                                from src.tools.registry import tool_registry
+                                tool_registry.initialize_in_call_http_tools_from_config(in_call_http_tools_cfg)
+                                logger.debug(
+                                    "Registered per-context in-call HTTP tools",
+                                    call_id=call_id,
+                                    context=session.context_name,
+                                    tool_count=len(in_call_http_tools_cfg),
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to register context in-call HTTP tools: {e}", call_id=call_id)
+                        
                         # Contexts are the source of truth for tool allowlisting, but never expose
                         # pre-call/post-call phase tools as in-call tools (defense-in-depth for YAML edits).
                         allowed = list(getattr(context_config, "tools", None) or [])
+                        # Also include any in-call HTTP tools defined in this context
+                        if in_call_http_tools_cfg:
+                            allowed.extend(list(in_call_http_tools_cfg.keys()))
                         try:
                             from src.tools.base import ToolPhase
                             from src.tools.registry import tool_registry
