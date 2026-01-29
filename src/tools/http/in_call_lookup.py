@@ -163,8 +163,8 @@ class InCallHTTPTool(Tool):
             }
         
         try:
-            # Build substitution context (context vars + AI params)
-            sub_context = self._build_substitution_context(parameters, context)
+            # Build substitution context (context vars + pre-call results + AI params)
+            sub_context = await self._build_substitution_context(parameters, context)
             
             # Build request
             url = self._substitute_variables(self.config.url, sub_context)
@@ -284,17 +284,20 @@ class InCallHTTPTool(Tool):
                 "message": self.config.error_message,
             }
     
-    def _build_substitution_context(
+    async def _build_substitution_context(
         self,
         ai_params: Dict[str, Any],
         context: ToolExecutionContext
     ) -> Dict[str, str]:
         """
-        Build combined substitution context from call context and AI parameters.
+        Build combined substitution context from call context, pre-call results, and AI parameters.
         
         Context variables (auto-injected):
         - caller_number, called_number, caller_name
         - context_name, call_id
+        
+        Pre-call variables (from pre-call HTTP lookups):
+        - Any variables fetched by pre-call tools (e.g., customer_name, account_id)
         
         AI parameters (provided by AI during function call):
         - Whatever parameters are defined in the tool config
@@ -307,7 +310,26 @@ class InCallHTTPTool(Tool):
             "call_id": context.call_id or "",
         }
         
-        # Add AI-provided parameters
+        # Add pre-call tool results (fetched before call started)
+        # These are stored in session.pre_call_results by pre-call HTTP lookup tools
+        try:
+            if context.session_store:
+                session = await context.session_store.get_by_call_id(context.call_id)
+                if session:
+                    pre_call_results = getattr(session, 'pre_call_results', None) or {}
+                    for key, value in pre_call_results.items():
+                        # Don't override built-in context variables
+                        if key not in sub:
+                            sub[key] = str(value) if value is not None else ""
+                    if pre_call_results:
+                        logger.debug(
+                            f"Added pre-call variables to in-call tool context: {list(pre_call_results.keys())}",
+                            extra={"tool": self.config.name, "call_id": context.call_id}
+                        )
+        except Exception as e:
+            logger.warning(f"Failed to load pre-call results for in-call tool: {e}")
+        
+        # Add AI-provided parameters (these override pre-call vars if same name)
         for key, value in ai_params.items():
             if value is not None:
                 sub[key] = str(value)
