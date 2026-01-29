@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import axios from 'axios';
-import { Plus, Trash2, Settings, Webhook, Search, Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, Settings, Webhook, Search, Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, Lock } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { Modal } from '../ui/Modal';
@@ -332,7 +332,9 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     <div className="font-medium text-sm flex items-center gap-2">
                                         {key}
                                         {tool.is_global && (
-                                            <span className="text-xs bg-blue-500/20 text-blue-600 px-1.5 py-0.5 rounded">Global</span>
+                                            <span className="text-xs bg-blue-500/20 text-blue-600 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                                <Lock className="w-3 h-3" /> Global
+                                            </span>
                                         )}
                                     </div>
                                     <div className="text-xs text-muted-foreground">
