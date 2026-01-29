@@ -342,16 +342,14 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                 footer={
                     <>
                         <button onClick={() => setEditingTool(null)} className="px-4 py-2 border rounded hover:bg-accent">Cancel</button>
-                        {(phase === 'pre_call' || phase === 'in_call') && (
-                            <button 
-                                onClick={handleTestTool} 
-                                disabled={testing || !toolForm.url}
-                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-                            >
-                                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                                {testing ? 'Testing...' : 'Test'}
-                            </button>
-                        )}
+                        <button 
+                            onClick={handleTestTool} 
+                            disabled={testing || !toolForm.url}
+                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                            {testing ? 'Testing...' : 'Test'}
+                        </button>
                         <button onClick={handleSaveTool} className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90">Save</button>
                     </>
                 }
