@@ -35,14 +35,14 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         onChange({ ...config, ...patch });
     };
 
-    const getHttpToolsByPhase = (phase: 'pre_call' | 'post_call') => {
+    const getHttpToolsByPhase = (phase: 'pre_call' | 'post_call' | 'in_call') => {
         if (!httpTools) return [];
         return Object.entries(httpTools)
             .filter(([_, tool]) => tool?.phase === phase && tool?.enabled !== false)
             .map(([name, tool]) => ({ name, ...tool }));
     };
 
-    const handlePhaseToolToggle = (phase: 'pre_call_tools' | 'post_call_tools', toolName: string) => {
+    const handlePhaseToolToggle = (phase: 'pre_call_tools' | 'post_call_tools' | 'in_call_http_tools', toolName: string) => {
         const currentTools = config[phase] || [];
         const newTools = currentTools.includes(toolName)
             ? currentTools.filter((t: string) => t !== toolName)
@@ -50,7 +50,7 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         updateConfig(phase, newTools);
     };
 
-    const handleGlobalToolDisable = (phase: 'disable_global_pre_call_tools' | 'disable_global_post_call_tools', toolName: string) => {
+    const handleGlobalToolDisable = (phase: 'disable_global_pre_call_tools' | 'disable_global_post_call_tools' | 'disable_global_in_call_http_tools', toolName: string) => {
         const currentDisabled = config[phase] || [];
         const newDisabled = currentDisabled.includes(toolName)
             ? currentDisabled.filter((t: string) => t !== toolName)
@@ -58,8 +58,10 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         updateConfig(phase, newDisabled);
     };
 
-    const isGlobalToolDisabled = (phase: 'pre_call' | 'post_call', toolName: string) => {
-        const key = phase === 'pre_call' ? 'disable_global_pre_call_tools' : 'disable_global_post_call_tools';
+    const isGlobalToolDisabled = (phase: 'pre_call' | 'post_call' | 'in_call', toolName: string) => {
+        const key = phase === 'pre_call' ? 'disable_global_pre_call_tools' 
+            : phase === 'post_call' ? 'disable_global_post_call_tools'
+            : 'disable_global_in_call_http_tools';
         return (config[key] || []).includes(toolName);
     };
 
@@ -272,6 +274,7 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                     {expandedPhases.in_call && (
                         <div className="p-3 border-t border-border bg-background/50">
                             <div className="grid grid-cols-2 gap-2">
+                                {/* Built-in tools */}
                                 {toolOptions.map(tool => (
                                     <label
                                         key={tool}
@@ -289,6 +292,45 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                                             onChange={() => handleToolToggle(tool)}
                                         />
                                         <span className="text-xs font-medium">{displayToolName(tool)}</span>
+                                    </label>
+                                ))}
+                                {/* HTTP tools with phase=in_call */}
+                                {getHttpToolsByPhase('in_call').map(tool => (
+                                    <label 
+                                        key={`http-${tool.name}`} 
+                                        className={`flex items-center justify-between p-2 rounded border border-border bg-card/30 ${
+                                            tool.is_global && isGlobalToolDisabled('in_call', tool.name) ? 'opacity-50' : 'hover:bg-accent'
+                                        } cursor-pointer`}
+                                    >
+                                        <div className="flex items-center space-x-2">
+                                            {!tool.is_global && (
+                                                <input
+                                                    type="checkbox"
+                                                    className="rounded border-input text-primary focus:ring-primary"
+                                                    checked={(config.in_call_http_tools || []).includes(tool.name)}
+                                                    onChange={() => handlePhaseToolToggle('in_call_http_tools', tool.name)}
+                                                />
+                                            )}
+                                            <span className="text-xs font-medium">{tool.name}</span>
+                                            {tool.is_global && <span title="Global tool (runs for all contexts)"><Lock className="w-3 h-3 text-blue-500" /></span>}
+                                        </div>
+                                        {tool.is_global && (
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    handleGlobalToolDisable('disable_global_in_call_http_tools', tool.name);
+                                                }}
+                                                className={`text-xs px-2 py-0.5 rounded ${
+                                                    isGlobalToolDisabled('in_call', tool.name)
+                                                        ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                                        : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                                }`}
+                                                title={isGlobalToolDisabled('in_call', tool.name) ? 'Click to enable for this context' : 'Click to disable for this context'}
+                                            >
+                                                {isGlobalToolDisabled('in_call', tool.name) ? 'Disabled' : 'Enabled'}
+                                            </button>
+                                        )}
                                     </label>
                                 ))}
                             </div>

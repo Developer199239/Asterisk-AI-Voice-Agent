@@ -470,7 +470,7 @@ const ContextsPage = () => {
                     toolEnabledMap={toolEnabledMap}
                     availableProfiles={availableProfiles}
                     defaultProfileName={defaultProfileName}
-                    httpTools={config.tools}
+                    httpTools={{...config.tools, ...config.in_call_tools}}
                     onChange={setContextForm}
                     isNew={isNewContext}
                 />
