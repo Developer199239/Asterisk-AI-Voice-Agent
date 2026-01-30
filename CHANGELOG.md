@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
-## [5.3.1] - 2026-01-30
+## [5.3.1] - 2026-02-01
 
 ### Added
 
@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RTP Greeting Cutoff on External Trunk Calls**: Fixed issue where greeting audio was cut off on calls from external trunks. Root cause: Asterisk ExternalMedia requires audio to flow through the mixing bridge before it sends RTP. Added "RTP kick" that plays brief silence through the bridge immediately after ExternalMedia setup, triggering RTP flow in ~40-50ms instead of waiting 5-7 seconds for caller audio.
 - **Admin UI Setup Wizard (AAVA-164)**: ElevenLabs Agent ID field now auto-populates from `.env` file when re-running the wizard.
 - **Admin UI Log Export (AAVA-162)**: Exported debug logs now redact email addresses (`[EMAIL_REDACTED]`) to protect user privacy.
 - **Admin UI Environment Changes (AAVA-161)**: "Apply Changes" after modifying `.env` variables now uses `docker compose --force-recreate` instead of container restart, ensuring environment variable changes are actually applied (e.g., `LOG_TO_FILE`, `LOG_FILE_PATH`).
