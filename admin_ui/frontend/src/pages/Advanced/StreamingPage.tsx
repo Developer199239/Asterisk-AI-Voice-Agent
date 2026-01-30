@@ -239,6 +239,13 @@ const StreamingPage = () => {
                                 tooltip="Reduced min start for greetings - faster initial response (default: 40ms)."
                             />
                             <FormInput
+                                label="Greeting RTP Wait (ms)"
+                                type="number"
+                                value={streamingConfig.greeting_rtp_wait_ms || 250}
+                                onChange={(e) => updateStreamingConfig('greeting_rtp_wait_ms', parseInt(e.target.value))}
+                                tooltip="ExternalMedia only: How long to wait for RTP endpoint before falling back to file playback for greeting (default: 250ms). Increase if greetings are cut off."
+                            />
+                            <FormInput
                                 label="Empty Backoff Ticks Max"
                                 type="number"
                                 value={streamingConfig.empty_backoff_ticks_max || 5}

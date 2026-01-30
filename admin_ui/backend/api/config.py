@@ -1165,6 +1165,10 @@ async def export_logs():
                         if logs:
                             # Strip ANSI escape codes for clean log files
                             clean_logs = strip_ansi_codes(logs)
+                            # Redact email addresses for privacy (AAVA-162)
+                            import re
+                            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+                            clean_logs = re.sub(email_pattern, '[EMAIL_REDACTED]', clean_logs)
                             zip_file.writestr(f'{container_name}.log', clean_logs)
                             found_logs = True
                     except Exception as e:

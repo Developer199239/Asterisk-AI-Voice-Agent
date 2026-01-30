@@ -359,13 +359,14 @@ async def _check_active_calls() -> dict:
 
 
 @router.post("/containers/{container_id}/restart")
-async def restart_container(container_id: str, force: bool = False):
+async def restart_container(container_id: str, force: bool = False, recreate: bool = False):
     """
     Restart a container using Docker SDK (preferred) or docker-compose.
     
     Args:
         container_id: Container name or service name
         force: If False and active calls exist, returns warning instead of restarting
+        recreate: If True, use docker-compose --force-recreate to pick up .env changes (AAVA-161)
     
     Returns:
         Success response with health_status, or warning if active calls and not forced.
@@ -419,6 +420,11 @@ async def restart_container(container_id: str, force: bool = False):
     # NOTE: docker restart does NOT reload env_file changes.
     # Restart is still useful for recovering from crashes and non-env changes.
     # Use explicit "recreate" actions (via updater-runner) when env_file changes must be applied.
+
+    # AAVA-161: If recreate=True, use docker-compose --force-recreate to pick up .env changes
+    if recreate and is_known and container_name != "admin_ui":
+        logger.info("Using force-recreate for %s to apply env changes", safe_container_name)
+        return await _recreate_via_compose(container_name, health_check=True)
 
     # Special-case: Restarting admin-ui from inside admin-ui is inherently racy if we try to
     # force-recreate it (the API process is the one being replaced). Use a scheduled Docker-SDK
