@@ -1351,30 +1351,35 @@ class StreamingPlaybackManager:
                         if waited_ms < float(wait_ms):
                             return "wait"
                         
-                        # Phase 2: RTP wait expired - defer fallback until greeting completes
-                        # Continue buffering until sentinel_seen (AgentAudioDone) or max timeout
-                        sentinel_seen = bool(info.get('sentinel_seen', False))
-                        if not sentinel_seen and waited_ms < float(max_greeting_wait_ms):
-                            # Mark that we're deferring fallback to collect all greeting audio
+                        # Phase 2: RTP wait expired - give provider a grace period to finish
+                        # Use a shorter deferred timeout (3 seconds) since we can't reliably detect
+                        # greeting completion when RTP is unavailable (sentinel_seen won't be set)
+                        deferred_grace_ms = 3000  # 3 second grace after initial wait
+                        total_wait_threshold = float(wait_ms) + deferred_grace_ms
+                        
+                        if waited_ms < total_wait_threshold:
+                            # Mark that we're deferring fallback to collect more greeting audio
                             if not info.get('greeting_fallback_deferred'):
                                 info['greeting_fallback_deferred'] = True
+                                info['deferred_start_ms'] = waited_ms
                                 self.active_streams[call_id] = info
                                 logger.info(
-                                    "🔄 GREETING FALLBACK DEFERRED - Waiting for greeting to complete",
+                                    "🔄 GREETING FALLBACK DEFERRED - Collecting audio for fallback",
                                     call_id=call_id,
                                     waited_ms=round(waited_ms),
-                                    max_wait_ms=max_greeting_wait_ms,
+                                    grace_ms=deferred_grace_ms,
+                                    will_trigger_at_ms=round(total_wait_threshold),
                                 )
                             return "wait"
                         
-                        # Phase 3: Greeting complete (sentinel) or max timeout - trigger fallback
-                        info["end_reason"] = "rtp-remote-endpoint-timeout" if not sentinel_seen else "greeting-complete-fallback"
+                        # Phase 3: Grace period expired - trigger fallback with collected audio
+                        info["end_reason"] = "rtp-greeting-deferred-timeout"
                         self.active_streams[call_id] = info
                         logger.info(
                             "🎵 GREETING FALLBACK TRIGGERED - Collecting all buffered audio",
                             call_id=call_id,
                             waited_ms=round(waited_ms),
-                            sentinel_seen=sentinel_seen,
+                            grace_ms=deferred_grace_ms,
                             reason=info.get('end_reason'),
                         )
             except Exception:
