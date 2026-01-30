@@ -244,11 +244,16 @@ class StreamingPlaybackManager:
         except Exception:
             self.greeting_min_start_ms = 0
         # ExternalMedia greeting: give Asterisk a short window to start sending inbound RTP
-        # (needed to learn the remote endpoint). After this window, we fall back to file playback.
+        # (needed to learn the remote endpoint). After this window, we defer fallback until greeting completes.
         try:
             self.greeting_rtp_wait_ms = int(self.streaming_config.get('greeting_rtp_wait_ms', 250))
         except Exception:
             self.greeting_rtp_wait_ms = 250
+        # Max wait for greeting to complete before triggering fallback (collects all audio)
+        try:
+            self.greeting_max_wait_ms = int(self.streaming_config.get('greeting_max_wait_ms', 15000))
+        except Exception:
+            self.greeting_max_wait_ms = 15000
         self.greeting_min_start_chunks = (
             max(1, int(math.ceil(self.greeting_min_start_ms / max(1, self.chunk_size_ms))))
             if self.greeting_min_start_ms > 0 else self.min_start_chunks
@@ -1313,12 +1318,15 @@ class StreamingPlaybackManager:
             # drain the jitter buffer and leave nothing for file playback fallback.
             try:
                 rem = self.frame_remainders.get(call_id, b"") or b""
-                self.frame_remainders[call_id] = frame + rem
+                # FIX: Append frame to end (chronological order), not prepend
+                # Previously: frame + rem (wrong - newest first)
+                # Now: rem + frame (correct - oldest first)
+                self.frame_remainders[call_id] = rem + frame
             except Exception:
                 pass
 
             # ExternalMedia greeting can fail before we learn the remote RTP endpoint (Asterisk may
-            # not emit RTP until the caller speaks). Wait briefly, then fall back.
+            # not emit RTP until the caller speaks). Wait for greeting to complete, then fall back.
             try:
                 info = self.active_streams.get(call_id, {}) or {}
                 is_greeting = str(info.get("playback_type") or "") == "greeting"
@@ -1330,18 +1338,47 @@ class StreamingPlaybackManager:
                     and not self.rtp_server.has_remote_endpoint(call_id)
                 ):
                     wait_ms = int(getattr(self, "greeting_rtp_wait_ms", 0) or 0)
+                    # Max wait for greeting to complete before fallback (default 15 seconds)
+                    max_greeting_wait_ms = int(getattr(self, "greeting_max_wait_ms", 15000) or 15000)
                     if wait_ms > 0:
                         now = time.time()
                         start_ts = float(info.get("rtp_wait_started_ts") or 0.0) or now
                         info["rtp_wait_started_ts"] = start_ts
                         waited_ms = (now - start_ts) * 1000.0
                         self.active_streams[call_id] = info
+                        
+                        # Phase 1: Wait for RTP endpoint (greeting_rtp_wait_ms)
                         if waited_ms < float(wait_ms):
                             return "wait"
-                        info["end_reason"] = "rtp-remote-endpoint-timeout"
+                        
+                        # Phase 2: RTP wait expired - defer fallback until greeting completes
+                        # Continue buffering until sentinel_seen (AgentAudioDone) or max timeout
+                        sentinel_seen = bool(info.get('sentinel_seen', False))
+                        if not sentinel_seen and waited_ms < float(max_greeting_wait_ms):
+                            # Mark that we're deferring fallback to collect all greeting audio
+                            if not info.get('greeting_fallback_deferred'):
+                                info['greeting_fallback_deferred'] = True
+                                self.active_streams[call_id] = info
+                                logger.info(
+                                    "🔄 GREETING FALLBACK DEFERRED - Waiting for greeting to complete",
+                                    call_id=call_id,
+                                    waited_ms=round(waited_ms),
+                                    max_wait_ms=max_greeting_wait_ms,
+                                )
+                            return "wait"
+                        
+                        # Phase 3: Greeting complete (sentinel) or max timeout - trigger fallback
+                        info["end_reason"] = "rtp-remote-endpoint-timeout" if not sentinel_seen else "greeting-complete-fallback"
                         self.active_streams[call_id] = info
+                        logger.info(
+                            "🎵 GREETING FALLBACK TRIGGERED - Collecting all buffered audio",
+                            call_id=call_id,
+                            waited_ms=round(waited_ms),
+                            sentinel_seen=sentinel_seen,
+                            reason=info.get('end_reason'),
+                        )
             except Exception:
-                pass
+                logger.debug("Greeting fallback check failed", call_id=call_id, exc_info=True)
             return "error"
         if not filler:
             self._decrement_buffered_bytes(call_id, len(frame))
