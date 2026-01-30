@@ -468,8 +468,8 @@ class StreamingConfig(BaseModel):
     greeting_min_start_ms: int = Field(default=0)
     # ExternalMedia-specific: how long to wait (ms) for inbound RTP to establish the remote endpoint
     # before we start deferring fallback for the greeting. Total timeout = this + 3s grace period.
-    # Asterisk 22 with Strict RTP may take 5+ seconds for external trunk calls.
-    greeting_rtp_wait_ms: int = Field(default=3000)
+    # With RTP kick enabled, this should trigger quickly; fallback is a safety net.
+    greeting_rtp_wait_ms: int = Field(default=1000)
     # ExternalMedia-specific: maximum time (ms) to wait for greeting to complete before triggering
     # fallback. This allows full greeting audio to be collected even when RTP endpoint is slow.
     # After greeting_rtp_wait_ms expires, we continue buffering until AgentAudioDone or this timeout.

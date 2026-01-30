@@ -2300,6 +2300,12 @@ class Engine:
                                bridge_id=bridge_id,
                                caller_channel_id=caller_channel_id)
                     
+                    # CRITICAL: Play brief silence to "kick" RTP flow from Asterisk
+                    # Without this, Asterisk won't send RTP to ExternalMedia until audio
+                    # flows through the bridge (which may not happen for external trunk calls
+                    # until the caller starts speaking). This fixes greeting cutoff issues.
+                    asyncio.create_task(self._kick_rtp_flow(bridge_id, caller_channel_id))
+                    
                     # Start the provider session now that media path is connected
                     if not session.provider_session_active:
                         await self._ensure_provider_session_started(caller_channel_id)
@@ -2317,6 +2323,53 @@ class Engine:
                         external_media_id=external_media_id, 
                         error=str(e), 
                         exc_info=True)
+
+    async def _kick_rtp_flow(self, bridge_id: str, caller_channel_id: str) -> None:
+        """
+        Play brief silence through the bridge to trigger Asterisk RTP flow.
+        
+        Without this, Asterisk won't send RTP to ExternalMedia until audio flows
+        through the bridge. For external trunk calls, this can take 5+ seconds
+        (until the caller starts speaking), causing greeting audio to be cut off.
+        
+        Playing a short silence (or any audio) through the bridge triggers Asterisk
+        to start sending RTP to all channels in the bridge, including ExternalMedia.
+        """
+        try:
+            # Play very short silence to kick RTP flow
+            # Using Asterisk's built-in silence sound - "silence/1" is 1 second
+            # We use a shorter one if available, but any audio will trigger the flow
+            response = await self.ari_client.send_command(
+                "POST",
+                f"bridges/{bridge_id}/play",
+                data={"media": "sound:silence/1"}
+            )
+            if response and response.get("id"):
+                logger.info(
+                    "🎯 RTP KICK - Played silence to trigger RTP flow",
+                    bridge_id=bridge_id,
+                    caller_channel_id=caller_channel_id,
+                    playback_id=response.get("id"),
+                )
+                # Stop the playback immediately - we just needed to kick the flow
+                await asyncio.sleep(0.1)  # Brief delay to ensure RTP starts
+                try:
+                    await self.ari_client.stop_playback(response["id"])
+                except Exception:
+                    pass  # Playback may have finished or been interrupted
+            else:
+                logger.warning(
+                    "🎯 RTP KICK - Failed to play silence for RTP flow kick",
+                    bridge_id=bridge_id,
+                    caller_channel_id=caller_channel_id,
+                )
+        except Exception as e:
+            logger.debug(
+                "RTP kick failed (non-fatal)",
+                bridge_id=bridge_id,
+                caller_channel_id=caller_channel_id,
+                error=str(e),
+            )
 
     async def _retry_attach_external_media_channel(
         self,
@@ -2354,6 +2407,8 @@ class Engine:
                             caller_channel_id=session.caller_channel_id,
                             attempt=attempt,
                         )
+                        # Kick RTP flow for retry path as well
+                        asyncio.create_task(self._kick_rtp_flow(session.bridge_id, session.caller_channel_id))
                         if not session.provider_session_active:
                             await self._ensure_provider_session_started(session.caller_channel_id)
                         return
