@@ -152,6 +152,9 @@ class DeepgramProviderConfig(BaseModel):
     base_url: str = Field(default="https://api.deepgram.com")
     tts_voice: Optional[str] = None
     stt_language: str = Field(default="en-US")
+    # Deepgram Voice Agent language (for full agent mode)
+    # Supported: en, en-US, es, fr, de, it, pt, nl, ja, zh, ko, hi, ru, pl, uk, tr, sv, da, no, fi, cs, el, he, ar, id, ms, th, vi
+    agent_language: str = Field(default="en")
     # Deepgram Voice Agent (monolithic) WebSocket endpoint
     voice_agent_base_url: str = Field(
         default="wss://agent.deepgram.com/v1/agent/converse"

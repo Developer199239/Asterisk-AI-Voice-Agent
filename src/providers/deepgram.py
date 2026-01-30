@@ -447,6 +447,9 @@ class DeepgramProvider(AIProviderInterface):
             prompt_preview=think_prompt[:80] + "..." if len(think_prompt) > 80 else think_prompt,
         )
 
+        # Get configured agent language (default: "en")
+        agent_language = self._get_config_value("agent_language", "en")
+        
         # Build settings with configured audio formats
         settings = {
             "type": "Settings",
@@ -455,7 +458,7 @@ class DeepgramProvider(AIProviderInterface):
                 "output": { "encoding": output_format, "sample_rate": int(output_sample_rate), "container": "none" }
             },
             "agent": {
-                "language": "en",  # Twilio uses "en" not "en-US"
+                "language": agent_language,
                 "listen": { 
                     "provider": { 
                         "type": "deepgram", 
@@ -500,7 +503,7 @@ class DeepgramProvider(AIProviderInterface):
                 },
                 "agent": {
                     "greeting": greeting_val,
-                    "language": "en-US",
+                    "language": agent_language,
                     "listen": { "provider": { "type": "deepgram", "model": listen_model } },
                     "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
                     "speak": { "provider": { "type": "deepgram", "model": speak_model } }

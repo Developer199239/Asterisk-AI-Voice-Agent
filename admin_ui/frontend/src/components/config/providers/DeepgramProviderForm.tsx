@@ -102,6 +102,65 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
 
                     <div className="space-y-2">
                         <label className="text-sm font-medium">
+                            Agent Language
+                            <span className="text-xs text-muted-foreground ml-2">(agent_language)</span>
+                        </label>
+                        <select
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.agent_language || 'en'}
+                            onChange={(e) => handleChange('agent_language', e.target.value)}
+                        >
+                            <optgroup label="English">
+                                <option value="en">English (en)</option>
+                                <option value="en-US">English US (en-US)</option>
+                                <option value="en-GB">English UK (en-GB)</option>
+                                <option value="en-AU">English AU (en-AU)</option>
+                                <option value="en-IN">English IN (en-IN)</option>
+                            </optgroup>
+                            <optgroup label="Spanish">
+                                <option value="es">Spanish (es)</option>
+                                <option value="es-419">Spanish LATAM (es-419)</option>
+                            </optgroup>
+                            <optgroup label="European">
+                                <option value="fr">French (fr)</option>
+                                <option value="de">German (de)</option>
+                                <option value="it">Italian (it)</option>
+                                <option value="pt">Portuguese (pt)</option>
+                                <option value="pt-BR">Portuguese BR (pt-BR)</option>
+                                <option value="nl">Dutch (nl)</option>
+                                <option value="pl">Polish (pl)</option>
+                                <option value="uk">Ukrainian (uk)</option>
+                                <option value="ru">Russian (ru)</option>
+                                <option value="sv">Swedish (sv)</option>
+                                <option value="da">Danish (da)</option>
+                                <option value="no">Norwegian (no)</option>
+                                <option value="fi">Finnish (fi)</option>
+                                <option value="cs">Czech (cs)</option>
+                                <option value="el">Greek (el)</option>
+                                <option value="tr">Turkish (tr)</option>
+                            </optgroup>
+                            <optgroup label="Asian">
+                                <option value="ja">Japanese (ja)</option>
+                                <option value="zh">Chinese (zh)</option>
+                                <option value="ko">Korean (ko)</option>
+                                <option value="hi">Hindi (hi)</option>
+                                <option value="id">Indonesian (id)</option>
+                                <option value="ms">Malay (ms)</option>
+                                <option value="th">Thai (th)</option>
+                                <option value="vi">Vietnamese (vi)</option>
+                            </optgroup>
+                            <optgroup label="Other">
+                                <option value="he">Hebrew (he)</option>
+                                <option value="ar">Arabic (ar)</option>
+                            </optgroup>
+                        </select>
+                        <p className="text-xs text-muted-foreground">
+                            Language for Voice Agent conversation. Must match your TTS voice language.
+                        </p>
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">
                             Voice Model
                             <span className="text-xs text-muted-foreground ml-2">(tts_model)</span>
                         </label>
