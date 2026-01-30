@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [5.3.1] - 2026-01-30
+
+### Fixed
+
+- **Admin UI Setup Wizard (AAVA-164)**: ElevenLabs Agent ID field now auto-populates from `.env` file when re-running the wizard.
+- **Admin UI Log Export (AAVA-162)**: Exported debug logs now redact email addresses (`[EMAIL_REDACTED]`) to protect user privacy.
+- **Admin UI Environment Changes (AAVA-161)**: "Apply Changes" after modifying `.env` variables now uses `docker compose --force-recreate` instead of container restart, ensuring environment variable changes are actually applied (e.g., `LOG_TO_FILE`, `LOG_FILE_PATH`).
+
 ## [5.2.5] - 2026-01-28
 
 ### Added
