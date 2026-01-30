@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.3.1] - 2026-01-30
 
+### Added
+
+- **Deepgram Language Configuration**: Voice Agent language is now configurable via Admin UI and YAML (`agent_language` field). Supports 30+ languages including English variants, Spanish, French, German, Japanese, Chinese, and more.
+
 ### Fixed
 
 - **Admin UI Setup Wizard (AAVA-164)**: ElevenLabs Agent ID field now auto-populates from `.env` file when re-running the wizard.
