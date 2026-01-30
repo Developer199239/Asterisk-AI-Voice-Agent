@@ -1098,8 +1098,9 @@ class GoogleLiveProvider(AIProviderInterface):
             # Handle audio output
             if "inlineData" in part:
                 inline_data = part["inlineData"]
-                if inline_data.get("mimeType", "").startswith("audio/pcm"):
-                    await self._handle_audio_output(inline_data["data"])
+                mime_type = inline_data.get("mimeType", "") or ""
+                if mime_type.startswith("audio/pcm"):
+                    await self._handle_audio_output(inline_data["data"], mime_type=mime_type)
             
             # Handle text output (for debugging/logging only)
             # Note: We now get cleaner AI transcriptions from outputTranscription field
@@ -1189,12 +1190,30 @@ class GoogleLiveProvider(AIProviderInterface):
                 exc_info=True,
             )
 
-    async def _handle_audio_output(self, audio_b64: str) -> None:
+    @staticmethod
+    def _extract_pcm_rate_from_mime_type(mime_type: str) -> Optional[int]:
+        """
+        Parse an inlineData mimeType like:
+          - "audio/pcm;rate=24000"
+          - "audio/pcm; rate=24000"
+        """
+        if not mime_type:
+            return None
+        m = re.search(r"(?:^|;)\s*rate\s*=\s*(\d+)\s*(?:;|$)", mime_type, flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    async def _handle_audio_output(self, audio_b64: str, *, mime_type: str = "") -> None:
         """
         Handle audio output from Gemini.
 
         Args:
-            audio_b64: Base64-encoded PCM16 audio (at output_sample_rate_hz from config)
+            audio_b64: Base64-encoded PCM16 audio
+            mime_type: inlineData mimeType (may include `rate=...`)
         """
         try:
             self._last_audio_out_monotonic = time.monotonic()
@@ -1225,8 +1244,35 @@ class GoogleLiveProvider(AIProviderInterface):
             _GOOGLE_LIVE_AUDIO_RECEIVED.inc(len(pcm16_provider))
 
             # Resample from provider output rate to target wire rate (from config)
-            provider_output_rate = self.config.output_sample_rate_hz
+            configured_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+            provider_reported_output_rate = int(self._extract_pcm_rate_from_mime_type(mime_type) or 0)
+            provider_output_rate = provider_reported_output_rate or configured_output_rate
             target_rate = self.config.target_sample_rate_hz
+
+            # Log output rate negotiation once per call for RCA/debug (INFO-level).
+            try:
+                if not getattr(self, "_logged_output_rate_mismatch", False):
+                    self._logged_output_rate_mismatch = True
+                    if provider_reported_output_rate and configured_output_rate and provider_reported_output_rate != configured_output_rate:
+                        logger.warning(
+                            "Google Live output PCM rate differs from configured output_sample_rate_hz; using provider rate",
+                            call_id=self._call_id,
+                            provider="google_live",
+                            configured_output_sample_rate_hz=configured_output_rate,
+                            provider_reported_output_sample_rate_hz=provider_reported_output_rate,
+                            used_output_sample_rate_hz=provider_output_rate,
+                        )
+                    else:
+                        logger.info(
+                            "Google Live output PCM rate",
+                            call_id=self._call_id,
+                            provider="google_live",
+                            configured_output_sample_rate_hz=configured_output_rate,
+                            provider_reported_output_sample_rate_hz=(provider_reported_output_rate or None),
+                            used_output_sample_rate_hz=provider_output_rate,
+                        )
+            except Exception:
+                logger.debug("Failed to emit Google Live output PCM rate log", call_id=self._call_id, exc_info=True)
             
             if provider_output_rate != target_rate:
                 pcm16_target, _ = resample_audio(

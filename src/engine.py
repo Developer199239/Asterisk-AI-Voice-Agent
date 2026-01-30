@@ -2746,6 +2746,84 @@ class Engine:
                             call_id=caller_channel_id,
                             provider=session.provider_name,
                         )
+
+            # RCA: emit a deterministic per-call header snapshot for log-driven `agent rca`.
+            # This MUST be INFO-level so it is available even when debug logging is disabled.
+            try:
+                tp = getattr(session, "transport_profile", None)
+                tp_fmt = (
+                    getattr(tp, "wire_encoding", None)
+                    or getattr(tp, "format", None)
+                    or ""
+                )
+                tp_rate = int(
+                    getattr(tp, "wire_sample_rate", 0)
+                    or getattr(tp, "sample_rate", 0)
+                    or 0
+                )
+                tp_source = getattr(tp, "source", "") or ""
+                # TransportProfile from the TransportOrchestrator does not carry a `.source` field.
+                # Emit a stable source string so log-driven RCA can explain where the profile came from.
+                if not tp_source and tp is not None:
+                    if hasattr(tp, "wire_encoding") and hasattr(tp, "profile_name"):
+                        tp_source = "orchestrator"
+                    elif hasattr(tp, "format") and hasattr(tp, "sample_rate"):
+                        tp_source = "legacy"
+
+                streaming_cfg = getattr(self.config, "streaming", None)
+                vad_cfg = getattr(self.config, "vad", None)
+                barge_cfg = getattr(self.config, "barge_in", None)
+                audiosocket_cfg = getattr(self.config, "audiosocket", None)
+                external_media_cfg = getattr(self.config, "external_media", None)
+                provider_cfg = None
+                try:
+                    providers_map = getattr(self.config, "providers", {}) or {}
+                    if isinstance(providers_map, dict):
+                        provider_cfg = providers_map.get(getattr(session, "provider_name", "") or "")
+                except Exception:
+                    provider_cfg = None
+
+                logger.info(
+                    "RCA_CALL_START",
+                    call_id=caller_channel_id,
+                    caller_number=getattr(session, "caller_number", None) or "unknown",
+                    called_number=getattr(session, "called_number", None) or "unknown",
+                    caller_name=getattr(session, "caller_name", None) or "",
+                    context_name=getattr(session, "context_name", None) or "",
+                    provider_name=getattr(session, "provider_name", None) or "",
+                    pipeline_name=getattr(session, "pipeline_name", None) or "",
+                    audio_transport=getattr(self.config, "audio_transport", "") or "",
+                    downstream_mode=getattr(self.config, "downstream_mode", "") or "",
+                    tp_encoding=tp_fmt,
+                    tp_sample_rate=tp_rate,
+                    tp_source=tp_source,
+                    audiosocket_format=getattr(audiosocket_cfg, "format", "") if audiosocket_cfg else "",
+                    audiosocket_host=getattr(audiosocket_cfg, "host", "") if audiosocket_cfg else "",
+                    audiosocket_port=int(getattr(audiosocket_cfg, "port", 0) or 0) if audiosocket_cfg else 0,
+                    external_media_codec=getattr(external_media_cfg, "codec", "") if external_media_cfg else "",
+                    external_media_rtp_host=getattr(external_media_cfg, "rtp_host", "") if external_media_cfg else "",
+                    external_media_rtp_port=int(getattr(external_media_cfg, "rtp_port", 0) or 0) if external_media_cfg else 0,
+                    external_media_advertise_host=getattr(external_media_cfg, "advertise_host", "") if external_media_cfg else "",
+                    streaming_sample_rate=int(getattr(streaming_cfg, "sample_rate", 0) or 0) if streaming_cfg else 0,
+                    streaming_jitter_buffer_ms=int(getattr(streaming_cfg, "jitter_buffer_ms", 0) or 0) if streaming_cfg else 0,
+                    streaming_min_start_ms=int(getattr(streaming_cfg, "min_start_ms", 0) or 0) if streaming_cfg else 0,
+                    streaming_low_watermark_ms=int(getattr(streaming_cfg, "low_watermark_ms", 0) or 0) if streaming_cfg else 0,
+                    vad_webrtc_aggressiveness=int(getattr(vad_cfg, "webrtc_aggressiveness", 0) or 0) if vad_cfg else 0,
+                    vad_confidence_threshold=float(getattr(vad_cfg, "confidence_threshold", 0.0) or 0.0) if vad_cfg else 0.0,
+                    vad_energy_threshold=int(getattr(vad_cfg, "energy_threshold", 0) or 0) if vad_cfg else 0,
+                    vad_enhanced_enabled=bool(getattr(vad_cfg, "enhanced_enabled", False)) if vad_cfg else False,
+                    barge_in_post_tts_end_protection_ms=int(getattr(barge_cfg, "post_tts_end_protection_ms", 0) or 0) if barge_cfg else 0,
+                    provider_input_encoding=(provider_cfg.get("input_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_input_sample_rate_hz=int(provider_cfg.get("input_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                    provider_provider_input_encoding=(provider_cfg.get("provider_input_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_provider_input_sample_rate_hz=int(provider_cfg.get("provider_input_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                    provider_output_encoding=(provider_cfg.get("output_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_output_sample_rate_hz=int(provider_cfg.get("output_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                    provider_target_encoding=(provider_cfg.get("target_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_target_sample_rate_hz=int(provider_cfg.get("target_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                )
+            except Exception:
+                logger.debug("Failed to emit RCA_CALL_START", call_id=caller_channel_id, exc_info=True)
             
             # Step 5: Create ExternalMedia channel or originate Local channel
             if self.config.audio_transport == "externalmedia":
@@ -4546,6 +4624,26 @@ class Engine:
                 _cleanup_completed_at[call_id] = _time.time()
             except Exception:
                 pass
+
+            # RCA: emit teardown summary for log-driven `agent rca`.
+            try:
+                logger.info(
+                    "RCA_CALL_END",
+                    call_id=call_id,
+                    call_outcome=call_outcome,
+                    duration_seconds=int(call_duration_seconds or 0),
+                    caller_number=getattr(session, "caller_number", None) or "unknown",
+                    called_number=getattr(session, "called_number", None) or "unknown",
+                    context_name=getattr(session, "context_name", None) or "",
+                    provider_name=getattr(session, "provider_name", None) or "",
+                    pipeline_name=getattr(session, "pipeline_name", None) or "",
+                    audio_transport=getattr(self.config, "audio_transport", "") or "",
+                    transferred=bool(getattr(session, "transfer_active", False) or getattr(session, "transfer_state", None)),
+                    transfer_destination=getattr(session, "transfer_destination", None) or getattr(session, "transfer_target", None) or "",
+                    media_rx_confirmed=bool(getattr(session, "media_rx_confirmed", False)),
+                )
+            except Exception:
+                logger.debug("Failed to emit RCA_CALL_END", call_id=call_id, exc_info=True)
 
             logger.info("Call cleanup completed", call_id=call_id)
         except Exception as exc:
