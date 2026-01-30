@@ -1094,18 +1094,32 @@ async def export_logs():
                     with open(settings.CONFIG_PATH, 'r') as f:
                         parsed = yaml.safe_load(f) or {}
 
+                    import re
+                    email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+                    # Pattern for hostnames that look like internal infrastructure
+                    hostname_pattern = re.compile(r'\b(?:pbx|sip|voip|trunk|asterisk)[a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b', re.IGNORECASE)
+                    
                     def redact(obj):
                         if isinstance(obj, dict):
                             out = {}
                             for k, v in obj.items():
                                 key = str(k).lower()
+                                # Redact sensitive keys
                                 if any(s in key for s in ["api_key", "apikey", "token", "secret", "password", "pass", "key"]):
                                     out[k] = "[REDACTED]"
+                                # Redact email fields
+                                elif "email" in key:
+                                    out[k] = "[EMAIL_REDACTED]"
                                 else:
                                     out[k] = redact(v)
                             return out
                         if isinstance(obj, list):
                             return [redact(v) for v in obj]
+                        # Redact email addresses and sensitive hostnames in string values
+                        if isinstance(obj, str):
+                            result = email_pattern.sub('[EMAIL_REDACTED]', obj)
+                            result = hostname_pattern.sub('[HOSTNAME_REDACTED]', result)
+                            return result
                         return obj
 
                     redacted = redact(parsed)
@@ -1165,10 +1179,14 @@ async def export_logs():
                         if logs:
                             # Strip ANSI escape codes for clean log files
                             clean_logs = strip_ansi_codes(logs)
-                            # Redact email addresses for privacy (AAVA-162)
+                            # Redact sensitive information for privacy (AAVA-162)
                             import re
-                            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-                            clean_logs = re.sub(email_pattern, '[EMAIL_REDACTED]', clean_logs)
+                            # Email addresses
+                            clean_logs = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[EMAIL_REDACTED]', clean_logs)
+                            # PBX/SIP/VoIP hostnames (likely internal infrastructure)
+                            clean_logs = re.sub(r'\b(?:pbx|sip|voip|trunk|asterisk)[a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b', '[HOSTNAME_REDACTED]', clean_logs, flags=re.IGNORECASE)
+                            # API key previews (e.g., api_key_preview=AIzaSyB2..._H_M)
+                            clean_logs = re.sub(r'(api_key_preview=)[^\s\]]+', r'\1[REDACTED]', clean_logs)
                             zip_file.writestr(f'{container_name}.log', clean_logs)
                             found_logs = True
                     except Exception as e:
