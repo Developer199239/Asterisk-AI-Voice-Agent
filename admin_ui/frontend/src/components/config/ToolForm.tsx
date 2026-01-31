@@ -87,6 +87,28 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
         updateNestedConfig('transfer', 'destinations', destinations);
     };
 
+    const renameInternalExtensionKey = (fromKey: string, toKeyRaw: string) => {
+        const toKey = (toKeyRaw || '').trim();
+        if (!toKey) {
+            alert('Extension key cannot be empty.');
+            return;
+        }
+        if (toKey === fromKey) return;
+
+        const existing = { ...(config.extensions?.internal || {}) };
+        if (Object.prototype.hasOwnProperty.call(existing, toKey)) {
+            alert(`An extension with key '${toKey}' already exists.`);
+            return;
+        }
+
+        const renamed: Record<string, any> = {};
+        Object.entries(existing).forEach(([k, v]) => {
+            if (k === fromKey) renamed[toKey] = v;
+            else renamed[k] = v;
+        });
+        updateNestedConfig('extensions', 'internal', renamed);
+    };
+
     return (
         <div className="space-y-8">
             {/* AI Identity & General Settings */}
@@ -348,8 +370,13 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                         <FormLabel>Extensions (Internal)</FormLabel>
                         <button
                             onClick={() => {
-                                const key = `ext_${Object.keys(config.extensions?.internal || {}).length + 1}`;
                                 const existing = config.extensions?.internal || {};
+                                let idx = Object.keys(existing).length + 1;
+                                let key = `ext_${idx}`;
+                                while (Object.prototype.hasOwnProperty.call(existing, key)) {
+                                    idx += 1;
+                                    key = `ext_${idx}`;
+                                }
                                 updateNestedConfig('extensions', 'internal', { ...existing, [key]: { name: '', description: '', dial_string: '', transfer: true, device_state_tech: 'auto' } });
                             }}
                             className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors"
@@ -364,9 +391,17 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                     <input
                                         className="w-full border rounded px-2 py-1 text-sm bg-muted"
                                         placeholder="Key"
-                                        value={key}
-                                        disabled
-                                        title="Extension Key"
+                                        defaultValue={key}
+                                        onBlur={(e) => {
+                                            const nextKey = (e.target as HTMLInputElement).value;
+                                            if (nextKey !== key) renameInternalExtensionKey(key, nextKey);
+                                        }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                (e.target as HTMLInputElement).blur();
+                                            }
+                                        }}
+                                        title="Extension key (recommend numeric like 2765). Used for transfers and availability checks."
                                     />
                                 </div>
                                 <div className="md:col-span-2">
