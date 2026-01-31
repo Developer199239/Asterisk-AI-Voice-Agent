@@ -42,6 +42,7 @@ from ..audio import (
     resample_audio,
 )
 from ..config import GoogleProviderConfig
+from src.tools.telephony.hangup_policy import normalize_hangup_policy
 
 # Tool calling support
 from src.tools.registry import tool_registry
@@ -116,9 +117,11 @@ class GoogleLiveProvider(AIProviderInterface):
         config: GoogleProviderConfig,
         on_event,
         gating_manager=None,
+        hangup_policy: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(on_event)
         self.config = config
+        self._hangup_policy = normalize_hangup_policy(hangup_policy or {})
         self.websocket: Optional[ClientConnection] = None
         self._receive_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
@@ -195,54 +198,21 @@ class GoogleLiveProvider(AIProviderInterface):
     def _norm_text(value: str) -> str:
         return re.sub(r"\s+", " ", (value or "").strip().lower())
 
-    @classmethod
-    def _detect_user_end_intent(cls, text: str) -> Optional[str]:
-        t = cls._norm_text(text)
+    def _detect_user_end_intent(self, text: str) -> Optional[str]:
+        t = self._norm_text(text)
         if not t:
             return None
-        markers = (
-            "no transcript",
-            "no transcript needed",
-            "don't send a transcript",
-            "do not send a transcript",
-            "no need for a transcript",
-            "no thanks",
-            "no thank you",
-            "that's all",
-            "that is all",
-            "that's it",
-            "that is it",
-            "nothing else",
-            "all set",
-            "all good",
-            "end the call",
-            "end call",
-            "hang up",
-            "hangup",
-            "goodbye",
-            "bye",
-        )
+        markers = (self._hangup_policy.get("markers") or {}).get("end_call", [])
         for m in markers:
             if m in t:
                 return m
         return None
 
-    @classmethod
-    def _detect_assistant_farewell(cls, text: str) -> Optional[str]:
-        t = cls._norm_text(text)
+    def _detect_assistant_farewell(self, text: str) -> Optional[str]:
+        t = self._norm_text(text)
         if not t:
             return None
-        markers = (
-            "goodbye",
-            "bye",
-            "thank you for calling",
-            "thanks for calling",
-            "have a great day",
-            "have a good day",
-            "take care",
-            "ending the call",
-            "i'll let you go",
-        )
+        markers = (self._hangup_policy.get("markers") or {}).get("assistant_farewell", [])
         for m in markers:
             if m in t:
                 return m

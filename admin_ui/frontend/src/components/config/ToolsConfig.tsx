@@ -1,5 +1,69 @@
 import React from 'react';
 
+const DEFAULT_HANGUP_POLICY_MODE = 'normal';
+const DEFAULT_HANGUP_END_CALL_MARKERS = [
+    "no transcript",
+    "no transcript needed",
+    "don't send a transcript",
+    "do not send a transcript",
+    "no need for a transcript",
+    "no thanks",
+    "no thank you",
+    "that's all",
+    "that is all",
+    "that's it",
+    "that is it",
+    "nothing else",
+    "all set",
+    "all good",
+    "end the call",
+    "end call",
+    "hang up",
+    "hangup",
+    "goodbye",
+    "bye",
+];
+const DEFAULT_HANGUP_ASSISTANT_FAREWELL_MARKERS = [
+    "goodbye",
+    "bye",
+    "thank you for calling",
+    "thanks for calling",
+    "have a great day",
+    "have a good day",
+    "take care",
+    "ending the call",
+    "i'll let you go",
+];
+const DEFAULT_HANGUP_AFFIRMATIVE_MARKERS = [
+    "yes",
+    "yeah",
+    "yep",
+    "correct",
+    "that's correct",
+    "thats correct",
+    "that's right",
+    "thats right",
+    "right",
+    "exactly",
+    "affirmative",
+];
+const DEFAULT_HANGUP_NEGATIVE_MARKERS = [
+    "no",
+    "nope",
+    "nah",
+    "negative",
+    "don't",
+    "dont",
+    "do not",
+    "not",
+    "not needed",
+    "no need",
+    "no thanks",
+    "no thank you",
+    "decline",
+    "skip",
+];
+
 interface ToolsConfigProps {
     config: any;
     onChange: (newConfig: any) => void;
@@ -19,6 +83,26 @@ const ToolsConfig: React.FC<ToolsConfigProps> = ({ config, onChange }) => {
             }
         });
     };
+
+    const updateHangupPolicy = (field: string, value: any) => {
+        const current = config.hangup_call?.policy || {};
+        handleNestedChange('hangup_call', 'policy', { ...current, [field]: value });
+    };
+
+    const updateHangupMarkers = (field: string, value: string[]) => {
+        const current = config.hangup_call?.policy || {};
+        const markers = { ...(current.markers || {}), [field]: value };
+        handleNestedChange('hangup_call', 'policy', { ...current, markers });
+    };
+
+    const parseMarkerList = (value: string) =>
+        (value || '')
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+
+    const renderMarkerList = (value: string[] | undefined, fallback: string[]) =>
+        (Array.isArray(value) && value.length > 0 ? value : fallback).join('\n');
 
     return (
         <div className="space-y-6">
@@ -90,6 +174,68 @@ const ToolsConfig: React.FC<ToolsConfigProps> = ({ config, onChange }) => {
                             className="w-full p-2 rounded border border-input bg-background"
                             value={config.hangup_call?.farewell_message || ''}
                             onChange={(e) => handleNestedChange('hangup_call', 'farewell_message', e.target.value)}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Hangup Guardrail Mode</label>
+                        <select
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.hangup_call?.policy?.mode || DEFAULT_HANGUP_POLICY_MODE}
+                            onChange={(e) => updateHangupPolicy('mode', e.target.value)}
+                        >
+                            <option value="relaxed">Relaxed</option>
+                            <option value="normal">Normal</option>
+                            <option value="strict">Strict</option>
+                        </select>
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Enforce Transcript Offer</label>
+                        <input
+                            type="checkbox"
+                            checked={config.hangup_call?.policy?.enforce_transcript_offer ?? true}
+                            onChange={(e) => updateHangupPolicy('enforce_transcript_offer', e.target.checked)}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Block During Contact Confirmation</label>
+                        <input
+                            type="checkbox"
+                            checked={config.hangup_call?.policy?.block_during_contact_capture ?? true}
+                            onChange={(e) => updateHangupPolicy('block_during_contact_capture', e.target.checked)}
+                        />
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">End-Call Markers</label>
+                        <textarea
+                            className="w-full p-2 rounded border border-input bg-background text-sm min-h-[120px]"
+                            value={renderMarkerList(config.hangup_call?.policy?.markers?.end_call, DEFAULT_HANGUP_END_CALL_MARKERS)}
+                            onChange={(e) => updateHangupMarkers('end_call', parseMarkerList(e.target.value))}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Assistant Farewell Markers</label>
+                        <textarea
+                            className="w-full p-2 rounded border border-input bg-background text-sm min-h-[120px]"
+                            value={renderMarkerList(config.hangup_call?.policy?.markers?.assistant_farewell, DEFAULT_HANGUP_ASSISTANT_FAREWELL_MARKERS)}
+                            onChange={(e) => updateHangupMarkers('assistant_farewell', parseMarkerList(e.target.value))}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Affirmative Markers</label>
+                        <textarea
+                            className="w-full p-2 rounded border border-input bg-background text-sm min-h-[120px]"
+                            value={renderMarkerList(config.hangup_call?.policy?.markers?.affirmative, DEFAULT_HANGUP_AFFIRMATIVE_MARKERS)}
+                            onChange={(e) => updateHangupMarkers('affirmative', parseMarkerList(e.target.value))}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Negative Markers</label>
+                        <textarea
+                            className="w-full p-2 rounded border border-input bg-background text-sm min-h-[120px]"
+                            value={renderMarkerList(config.hangup_call?.policy?.markers?.negative, DEFAULT_HANGUP_NEGATIVE_MARKERS)}
+                            onChange={(e) => updateHangupMarkers('negative', parseMarkerList(e.target.value))}
                         />
                     </div>
                 </div>

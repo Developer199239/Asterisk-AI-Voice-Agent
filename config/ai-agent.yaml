@@ -1340,6 +1340,69 @@ tools:
     enabled: true
     farewell_message: Thank you for calling. Goodbye!
     require_confirmation: false
+    policy:
+      mode: normal
+      enforce_transcript_offer: true
+      block_during_contact_capture: true
+      markers:
+        end_call:
+          - no transcript
+          - no transcript needed
+          - don't send a transcript
+          - do not send a transcript
+          - no need for a transcript
+          - no thanks
+          - no thank you
+          - that's all
+          - that is all
+          - that's it
+          - that is it
+          - nothing else
+          - all set
+          - all good
+          - end the call
+          - end call
+          - hang up
+          - hangup
+          - goodbye
+          - bye
+        assistant_farewell:
+          - goodbye
+          - bye
+          - thank you for calling
+          - thanks for calling
+          - have a great day
+          - have a good day
+          - take care
+          - ending the call
+          - i'll let you go
+        affirmative:
+          - yes
+          - yeah
+          - yep
+          - correct
+          - that's correct
+          - thats correct
+          - that's right
+          - thats right
+          - right
+          - exactly
+          - affirmative
+        negative:
+          - no
+          - nope
+          - nah
+          - negative
+          - don't
+          - dont
+          - do not
+          - not
+          - not needed
+          - no need
+          - no thanks
+          - no thank you
+          - decline
+          - skip
   leave_voicemail:
     enabled: true
     extension: '2765'

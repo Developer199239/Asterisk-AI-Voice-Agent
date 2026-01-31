@@ -271,6 +271,7 @@ type RCAReport struct {
 	Warnings []string `json:"warnings,omitempty"`
 
 	AudioIssues []string `json:"audio_issues,omitempty"`
+	ToolCalls   []ToolCallRecord `json:"tool_calls,omitempty"`
 
 	Symptom         string           `json:"symptom,omitempty"`
 	SymptomAnalysis *SymptomAnalysis `json:"symptom_analysis,omitempty"`
@@ -288,6 +289,7 @@ func buildRCAReport(analysis *Analysis, llm *LLMDiagnosis) *RCAReport {
 		Errors:       capSlice(analysis.Errors, 20),
 		Warnings:     capSlice(analysis.Warnings, 20),
 		AudioIssues:  capSlice(analysis.AudioIssues, 50),
+		ToolCalls:    analysis.ToolCalls,
 		Symptom:      analysis.Symptom,
 		Metrics:      analysis.Metrics,
 		LLMDiagnosis: llm,
@@ -556,6 +558,7 @@ type Analysis struct {
 	Errors             []string
 	Warnings           []string
 	AudioIssues        []string
+	ToolCalls          []ToolCallRecord
 	MetricsMap         map[string]string
 	Metrics            *CallMetrics
 	BaselineComparison *BaselineComparison
@@ -632,6 +635,7 @@ func (r *Runner) analyzeBasic(logData string) *Analysis {
 	analysis.HasAudioSocket = hasAudioSocketEvidence
 	analysis.HasExternalMedia = hasExternalMediaEvidence
 	analysis.AudioTransport = detectTransportBestEffort(logData, hasAudioSocketEvidence, hasExternalMediaEvidence)
+	analysis.ToolCalls = ExtractToolCalls(logData)
 
 	return analysis
 }
@@ -915,6 +919,32 @@ func (r *Runner) displayFindings(analysis *Analysis) {
 		}
 		if len(analysis.Warnings) > 3 {
 			fmt.Printf("  ... and %d more\n", len(analysis.Warnings)-3)
+		}
+		fmt.Println()
+	}
+
+	// Tool calls
+	if len(analysis.ToolCalls) > 0 {
+		infoColor.Printf("Tool Calls (%d):\n", len(analysis.ToolCalls))
+		count := len(analysis.ToolCalls)
+		if count > 5 {
+			count = 5
+		}
+		for i := 0; i < count; i++ {
+			tc := analysis.ToolCalls[i]
+			line := fmt.Sprintf("  %d. %s", i+1, tc.Name)
+			if tc.Status != "" {
+				line += fmt.Sprintf(" → %s", tc.Status)
+			}
+			if tc.Message != "" {
+				line += fmt.Sprintf(" (%s)", truncate(tc.Message, 80))
+			} else if tc.Arguments != "" {
+				line += fmt.Sprintf(" args=%s", truncate(tc.Arguments, 80))
+			}
+			fmt.Println(line)
+		}
+		if len(analysis.ToolCalls) > count {
+			fmt.Printf("  ... and %d more\n", len(analysis.ToolCalls)-count)
 		}
 		fmt.Println()
 	}

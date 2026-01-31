@@ -62,6 +62,7 @@ from .core.models import CallSession
 from .core.outbound_store import get_outbound_store
 from .utils.audio_capture import AudioCaptureManager
 from src.pipelines.base import LLMResponse
+from src.tools.telephony.hangup_policy import resolve_hangup_policy, text_contains_marker_word
 
 logger = get_logger(__name__)
 
@@ -1953,17 +1954,24 @@ class Engine:
                         logger.error(f"Failed to build GoogleProviderConfig for google_live: {e}", exc_info=True)
                         continue
 
+                    hangup_policy = resolve_hangup_policy(getattr(self.config, "tools", None))
                     provider = GoogleLiveProvider(
                         google_cfg,
                         self.on_provider_event,
-                        gating_manager=self.audio_gating_manager
+                        gating_manager=self.audio_gating_manager,
+                        hangup_policy=hangup_policy,
                     )
                     # Set session store for turn latency tracking (Milestone 21)
                     provider._session_store = self.session_store
                     self.providers[name] = provider
                     # Per-call factory (supports concurrent calls).
                     self.provider_factories[name] = (
-                        lambda cfg=google_cfg: GoogleLiveProvider(self._clone_config(cfg), self.on_provider_event, gating_manager=self.audio_gating_manager)
+                        lambda cfg=google_cfg, policy=hangup_policy: GoogleLiveProvider(
+                            self._clone_config(cfg),
+                            self.on_provider_event,
+                            gating_manager=self.audio_gating_manager,
+                            hangup_policy=policy,
+                        )
                     )
                     logger.info(
                         "Provider 'google_live' loaded successfully",
@@ -9031,32 +9039,22 @@ class Engine:
                     #   (set `hangup_call_guardrail: true` in pipeline llm options).
                     llm_adapter_key = getattr(getattr(pipeline, "llm_adapter", None), "component_key", None)
                     guardrail_cfg = (llm_options or {}).get("hangup_call_guardrail")
-                    if guardrail_cfg is None:
-                        hangup_guardrail_enabled = llm_adapter_key == "ollama_llm"
+                    hangup_policy = resolve_hangup_policy(getattr(self.config, "tools", None))
+                    policy_mode = str(hangup_policy.get("mode") or "normal").strip().lower()
+                    if policy_mode == "relaxed":
+                        hangup_guardrail_enabled = False
+                    elif policy_mode == "strict":
+                        hangup_guardrail_enabled = True
                     else:
-                        hangup_guardrail_enabled = bool(guardrail_cfg)
+                        if guardrail_cfg is None:
+                            hangup_guardrail_enabled = llm_adapter_key == "ollama_llm"
+                        else:
+                            hangup_guardrail_enabled = bool(guardrail_cfg)
 
                     if hangup_guardrail_enabled and tool_calls and any(tc.get("name") == "hangup_call" for tc in tool_calls):
                         normalized_user_text = re.sub(r"\s+", " ", (transcript_text or "").strip().lower())
-                        end_markers = (
-                            "that's all",
-                            "that is all",
-                            "that's it",
-                            "that is it",
-                            "nothing else",
-                            "all set",
-                            "all good",
-                            "end the call",
-                            "end call",
-                            "hang up",
-                            "hangup",
-                            "goodbye",
-                            "bye",
-                        )
-                        has_end_intent = any(
-                            re.search(rf"(?:^|\\b){re.escape(m)}(?:\\b|$)", normalized_user_text)
-                            for m in end_markers
-                        )
+                        end_markers = (hangup_policy.get("markers") or {}).get("end_call", [])
+                        has_end_intent = text_contains_marker_word(normalized_user_text, end_markers)
                         if not has_end_intent:
                             before_count = len(tool_calls)
                             tool_calls = [tc for tc in tool_calls if tc.get("name") != "hangup_call"]
