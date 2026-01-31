@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, Settings } from 'lucide-react';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { Modal } from '../ui/Modal';
@@ -80,8 +80,20 @@ const DEFAULT_HANGUP_NEGATIVE_MARKERS = [
 ];
 
 const ToolForm = ({ config, onChange }: ToolFormProps) => {
-    const [editingDestination, setEditingDestination] = useState<string | null>(null);
-    const [destinationForm, setDestinationForm] = useState<any>({});
+	    const [editingDestination, setEditingDestination] = useState<string | null>(null);
+	    const [destinationForm, setDestinationForm] = useState<any>({});
+	    const [hangupMarkerDraft, setHangupMarkerDraft] = useState({
+	        end_call: '',
+	        assistant_farewell: '',
+	        affirmative: '',
+	        negative: '',
+	    });
+	    const [hangupMarkerDirty, setHangupMarkerDirty] = useState({
+	        end_call: false,
+	        assistant_farewell: false,
+	        affirmative: false,
+	        negative: false,
+	    });
 
     const updateConfig = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
@@ -108,14 +120,66 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
         updateNestedConfig('hangup_call', 'policy', { ...current, markers });
     };
 
-    const parseMarkerList = (value: string) =>
-        (value || '')
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0);
+	    const parseMarkerList = (value: string) =>
+	        (value || '')
+	            .split('\n')
+	            .map((line) => line.trim())
+	            .filter((line) => line.length > 0);
 
-    const renderMarkerList = (value: string[] | undefined, fallback: string[]) =>
-        (Array.isArray(value) && value.length > 0 ? value : fallback).join('\n');
+	    const renderMarkerList = (value: string[] | undefined, fallback: string[]) =>
+	        (Array.isArray(value) && value.length > 0 ? value : fallback).join('\n');
+
+	    const endCallMarkerText = renderMarkerList(
+	        config.hangup_call?.policy?.markers?.end_call,
+	        DEFAULT_HANGUP_END_CALL_MARKERS
+	    );
+	    const assistantFarewellMarkerText = renderMarkerList(
+	        config.hangup_call?.policy?.markers?.assistant_farewell,
+	        DEFAULT_HANGUP_ASSISTANT_FAREWELL_MARKERS
+	    );
+	    const affirmativeMarkerText = renderMarkerList(
+	        config.hangup_call?.policy?.markers?.affirmative,
+	        DEFAULT_HANGUP_AFFIRMATIVE_MARKERS
+	    );
+	    const negativeMarkerText = renderMarkerList(
+	        config.hangup_call?.policy?.markers?.negative,
+	        DEFAULT_HANGUP_NEGATIVE_MARKERS
+	    );
+
+	    useEffect(() => {
+	        setHangupMarkerDraft((prev) => {
+	            let changed = false;
+	            const next = { ...prev };
+
+	            if (!hangupMarkerDirty.end_call && prev.end_call !== endCallMarkerText) {
+	                next.end_call = endCallMarkerText;
+	                changed = true;
+	            }
+	            if (!hangupMarkerDirty.assistant_farewell && prev.assistant_farewell !== assistantFarewellMarkerText) {
+	                next.assistant_farewell = assistantFarewellMarkerText;
+	                changed = true;
+	            }
+	            if (!hangupMarkerDirty.affirmative && prev.affirmative !== affirmativeMarkerText) {
+	                next.affirmative = affirmativeMarkerText;
+	                changed = true;
+	            }
+	            if (!hangupMarkerDirty.negative && prev.negative !== negativeMarkerText) {
+	                next.negative = negativeMarkerText;
+	                changed = true;
+	            }
+
+	            return changed ? next : prev;
+	        });
+	    }, [
+	        hangupMarkerDirty.end_call,
+	        hangupMarkerDirty.assistant_farewell,
+	        hangupMarkerDirty.affirmative,
+	        hangupMarkerDirty.negative,
+	        endCallMarkerText,
+	        assistantFarewellMarkerText,
+	        affirmativeMarkerText,
+	        negativeMarkerText,
+	    ]);
 
     const handleAttendedTransferToggle = (enabled: boolean) => {
         const existing = config.attended_transfer || {};
@@ -451,46 +515,66 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     {config.hangup_call?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2">
                             <FormLabel>Hangup Phrase Lists (one per line)</FormLabel>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                                <div className="space-y-2">
-                                    <FormLabel tooltip="User phrases that indicate the call should end.">End-Call Markers</FormLabel>
-                                    <textarea
-                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                        value={renderMarkerList(config.hangup_call?.policy?.markers?.end_call, DEFAULT_HANGUP_END_CALL_MARKERS)}
-                                        onChange={(e) => updateHangupMarkers('end_call', parseMarkerList(e.target.value))}
-                                        placeholder="bye\nthat's all\nend the call"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <FormLabel tooltip="Assistant farewell phrases that should trigger hangup completion.">Assistant Farewell Markers</FormLabel>
-                                    <textarea
-                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                        value={renderMarkerList(config.hangup_call?.policy?.markers?.assistant_farewell, DEFAULT_HANGUP_ASSISTANT_FAREWELL_MARKERS)}
-                                        onChange={(e) => updateHangupMarkers('assistant_farewell', parseMarkerList(e.target.value))}
-                                        placeholder="thank you for calling\ngoodbye"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <FormLabel tooltip="User phrases that indicate acceptance (e.g., transcript offer).">Affirmative Markers</FormLabel>
-                                    <textarea
-                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                        value={renderMarkerList(config.hangup_call?.policy?.markers?.affirmative, DEFAULT_HANGUP_AFFIRMATIVE_MARKERS)}
-                                        onChange={(e) => updateHangupMarkers('affirmative', parseMarkerList(e.target.value))}
-                                        placeholder="yes\nyep\ncorrect"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <FormLabel tooltip="User phrases that indicate decline (e.g., transcript offer).">Negative Markers</FormLabel>
-                                    <textarea
-                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                        value={renderMarkerList(config.hangup_call?.policy?.markers?.negative, DEFAULT_HANGUP_NEGATIVE_MARKERS)}
-                                        onChange={(e) => updateHangupMarkers('negative', parseMarkerList(e.target.value))}
-                                        placeholder="no\nno thanks\nskip"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    )}
+	                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+	                                <div className="space-y-2">
+	                                    <FormLabel tooltip="User phrases that indicate the call should end.">End-Call Markers</FormLabel>
+	                                    <textarea
+	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
+	                                        value={hangupMarkerDirty.end_call ? hangupMarkerDraft.end_call : endCallMarkerText}
+	                                        onChange={(e) => {
+	                                            const text = e.target.value;
+	                                            setHangupMarkerDirty((prev) => ({ ...prev, end_call: true }));
+	                                            setHangupMarkerDraft((prev) => ({ ...prev, end_call: text }));
+	                                            updateHangupMarkers('end_call', parseMarkerList(text));
+	                                        }}
+	                                        placeholder="bye\nthat's all\nend the call"
+	                                    />
+	                                </div>
+	                                <div className="space-y-2">
+	                                    <FormLabel tooltip="Assistant farewell phrases that should trigger hangup completion.">Assistant Farewell Markers</FormLabel>
+	                                    <textarea
+	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
+	                                        value={hangupMarkerDirty.assistant_farewell ? hangupMarkerDraft.assistant_farewell : assistantFarewellMarkerText}
+	                                        onChange={(e) => {
+	                                            const text = e.target.value;
+	                                            setHangupMarkerDirty((prev) => ({ ...prev, assistant_farewell: true }));
+	                                            setHangupMarkerDraft((prev) => ({ ...prev, assistant_farewell: text }));
+	                                            updateHangupMarkers('assistant_farewell', parseMarkerList(text));
+	                                        }}
+	                                        placeholder="thank you for calling\ngoodbye"
+	                                    />
+	                                </div>
+	                                <div className="space-y-2">
+	                                    <FormLabel tooltip="User phrases that indicate acceptance (e.g., transcript offer).">Affirmative Markers</FormLabel>
+	                                    <textarea
+	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
+	                                        value={hangupMarkerDirty.affirmative ? hangupMarkerDraft.affirmative : affirmativeMarkerText}
+	                                        onChange={(e) => {
+	                                            const text = e.target.value;
+	                                            setHangupMarkerDirty((prev) => ({ ...prev, affirmative: true }));
+	                                            setHangupMarkerDraft((prev) => ({ ...prev, affirmative: text }));
+	                                            updateHangupMarkers('affirmative', parseMarkerList(text));
+	                                        }}
+	                                        placeholder="yes\nyep\ncorrect"
+	                                    />
+	                                </div>
+	                                <div className="space-y-2">
+	                                    <FormLabel tooltip="User phrases that indicate decline (e.g., transcript offer).">Negative Markers</FormLabel>
+	                                    <textarea
+	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
+	                                        value={hangupMarkerDirty.negative ? hangupMarkerDraft.negative : negativeMarkerText}
+	                                        onChange={(e) => {
+	                                            const text = e.target.value;
+	                                            setHangupMarkerDirty((prev) => ({ ...prev, negative: true }));
+	                                            setHangupMarkerDraft((prev) => ({ ...prev, negative: text }));
+	                                            updateHangupMarkers('negative', parseMarkerList(text));
+	                                        }}
+	                                        placeholder="no\nno thanks\nskip"
+	                                    />
+	                                </div>
+	                            </div>
+	                        </div>
+	                    )}
                 </div>
 
                 {/* Leave Voicemail */}
