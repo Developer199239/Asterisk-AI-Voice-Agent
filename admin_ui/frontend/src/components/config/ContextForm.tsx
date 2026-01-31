@@ -72,7 +72,8 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         'hangup_call',
         'leave_voicemail',
         'send_email_summary',
-        'request_transcript'
+        'request_transcript',
+        'check_extension_status',
     ];
     const toolOptionsBase = (availableTools && availableTools.length > 0) ? availableTools : fallbackTools;
     const selectedTools = Array.isArray(config.tools) ? config.tools : [];

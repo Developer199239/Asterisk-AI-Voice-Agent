@@ -71,6 +71,20 @@ const ContextsPage = () => {
             const routes = res.data?.tool_routes || {};
             const mcpTools = Object.keys(routes).filter((t) => typeof t === 'string' && t.startsWith('mcp_'));
 
+            // Built-in (Python) in-call tools that may not appear under `tools:` in YAML unless
+            // explicitly configured/disabled. Keep this list broad so users can enable tools
+            // per-context from the UI.
+            const builtinInCallTools = [
+                'transfer',
+                'attended_transfer',
+                'cancel_transfer',
+                'hangup_call',
+                'leave_voicemail',
+                'send_email_summary',
+                'request_transcript',
+                'check_extension_status',
+            ];
+
             const toolsBlock = parsedConfig?.tools || {};
             const yamlToolEntries = Object.entries(toolsBlock)
                 .filter(([k, v]) => {
@@ -86,28 +100,18 @@ const ContextsPage = () => {
                 })
                 .map(([k, v]) => ({ name: k, enabled: (v as any)?.enabled !== false }));
             const toolsFromYaml = yamlToolEntries.map((t) => t.name);
-            const fallbackBuiltin = [
-                'transfer',
-                'attended_transfer',
-                'cancel_transfer',
-                'hangup_call',
-                'leave_voicemail',
-                'send_email_summary',
-                'request_transcript'
-            ];
 
             const merged = Array.from(new Set([
-                ...(toolsFromYaml.length > 0 ? toolsFromYaml : fallbackBuiltin),
+                ...builtinInCallTools,
+                ...toolsFromYaml,
                 ...mcpTools
             ])).sort();
             setAvailableTools(merged);
             const nextMap: Record<string, boolean> = {};
             yamlToolEntries.forEach((t) => { nextMap[t.name] = t.enabled; });
             mcpTools.forEach((t) => { nextMap[t] = true; });
-            // If we are falling back (no tools in YAML), assume enabled unless selected otherwise.
-            if (toolsFromYaml.length === 0) {
-                fallbackBuiltin.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
-            }
+            // Assume built-in tools are enabled unless configured otherwise in YAML.
+            builtinInCallTools.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
             setToolEnabledMap(nextMap);
         } catch (err) {
             // Non-fatal: MCP may be disabled or ai-engine down. Fall back to YAML tools.
@@ -124,21 +128,20 @@ const ContextsPage = () => {
                 })
                 .map(([k, v]) => ({ name: k, enabled: (v as any)?.enabled !== false }));
             const toolsFromYaml = yamlToolEntries.map((t) => t.name);
-            const fallbackBuiltin = [
+            const builtinInCallTools = [
                 'transfer',
                 'attended_transfer',
                 'cancel_transfer',
                 'hangup_call',
                 'leave_voicemail',
                 'send_email_summary',
-                'request_transcript'
+                'request_transcript',
+                'check_extension_status',
             ];
-            setAvailableTools((toolsFromYaml.length > 0 ? toolsFromYaml : fallbackBuiltin).slice().sort());
+            setAvailableTools(Array.from(new Set([...builtinInCallTools, ...toolsFromYaml])).slice().sort());
             const nextMap: Record<string, boolean> = {};
             yamlToolEntries.forEach((t) => { nextMap[t.name] = t.enabled; });
-            if (toolsFromYaml.length === 0) {
-                fallbackBuiltin.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
-            }
+            builtinInCallTools.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
             setToolEnabledMap(nextMap);
         }
     };
