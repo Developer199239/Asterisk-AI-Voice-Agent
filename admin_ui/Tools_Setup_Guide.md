@@ -2,7 +2,7 @@
 
 **Version**: 1.0.0  
 **Last Updated**: January 2026  
-**Applies to**: v4.2.0+
+**Applies to**: v5.3.1+
 
 ---
 
@@ -34,6 +34,7 @@ The Admin UI **Test** button makes real outbound HTTP requests.
 - By default, the test endpoint blocks requests to localhost/private targets to reduce SSRF risk.
   - To allow private/localhost testing (trusted network only), set `AAVA_HTTP_TOOL_TEST_ALLOW_PRIVATE=1`.
   - To allow specific hostnames, set `AAVA_HTTP_TOOL_TEST_ALLOW_HOSTS=host1,host2`.
+  - To allow redirects, set `AAVA_HTTP_TOOL_TEST_FOLLOW_REDIRECTS=1` (default is disabled).
 
 ---
 
@@ -100,7 +101,7 @@ Output variables map API response fields to prompt variables:
 
 Click **Save** to apply changes.
 
-> **Test Connection** is **Post-MVP** (not required for MVP).
+Optional: use **Test** to validate your request/response shape before saving.
 
 ---
 

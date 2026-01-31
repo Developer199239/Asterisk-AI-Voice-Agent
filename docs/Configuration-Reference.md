@@ -429,7 +429,7 @@ contexts:
 
 ## Environment Variable Resolution
 
-**Current Scope**: Environment variable placeholders (`${VAR}`, `${VAR:-default}`) are resolved **only for the local provider** configuration.
+Environment variable placeholders (`${VAR}`, `${VAR:-default}`) are expanded for the **entire YAML file** when `config/ai-agent.yaml` is loaded.
 
 Example (supported):
 ```yaml
@@ -438,9 +438,9 @@ providers:
     base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}  # ✅ Resolved
 ```
 
-Other provider configs should use environment variables directly via Python's `os.getenv()` in their implementation, or reference env vars in `.env` which are loaded at startup.
-
-**Note**: Future versions may extend env var resolution to all provider configurations.
+Notes:
+- Expansion happens **before YAML parsing**. Use `${VAR:-default}` to avoid empty-string surprises.
+- Avoid putting secrets directly in YAML; prefer `.env` + `${VAR}` placeholders.
 
 ## Admin UI HTTP Tool Testing (Security)
 

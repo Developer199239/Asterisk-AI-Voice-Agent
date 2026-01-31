@@ -1221,6 +1221,7 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 
 ## Version History
 
+- **v5.3.1** (2026-02-01) - Phase Tools (HTTP + webhooks) + Deepgram language + Admin UI + RCA enhancements + stability fixes
 - **v5.2.5** (2026-01-28) - Stable Updates improvements + updater image publishing + AudioSocket default
 - **v5.2.4** (2026-01-26) - Admin UI Docker Services hardening + remove background update checks
 - **v5.2.3** (2026-01-26) - Agent update targets only impacted services on compose changes
@@ -1236,7 +1237,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v5.2.5...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v5.3.1...HEAD
+[5.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.3.1
 [5.2.5]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.5
 [5.2.4]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.4
 [5.2.3]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.3

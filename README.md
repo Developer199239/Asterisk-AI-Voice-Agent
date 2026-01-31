@@ -110,7 +110,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.2.5.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.3.1.
 
 ### Option B: Manual Setup
 ```bash
@@ -153,23 +153,21 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v5.2.5
+## 🎉 What's New in v5.3.1
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🔄 Updates UX (v5.2.1+)
-- Admin UI: **System → Updates** page (GitHub-style): check updates → choose branch → preview impact → proceed
-- Preview shows **files changed** and **containers to rebuild/restart** (with opt-in “Update UI too”)
-- Detached updater job survives `admin_ui` rebuild/restarts and keeps a **Recent Runs** summary with rollback options
+### 🧰 Phase Tools (v5.3.1)
+- Pre-call HTTP lookups, in-call HTTP tools, and post-call webhooks (Milestone 24)
+- Admin UI includes an HTTP tool **Test** feature with SSRF-safe defaults
 
-### 🛠️ Update Hardening (v5.2.2+)
-- Admin UI: Updates prefer pulling the published updater image (fallback to local build when needed)
-- Agent CLI: `agent update` supports semver tag refs like `v5.2.5` (in addition to branches)
+### 🗣️ Deepgram Voice Agent Language (v5.3.1)
+- Configure `providers.deepgram.agent_language` via Admin UI or YAML
 
-### 🔊 Default Transport (v5.2.5)
-- Fresh installs now default to **AudioSocket** (`audio_transport: audiosocket`) for simpler, modern deployments
-- ExternalMedia RTP remains supported as a legacy/compat fallback
+### 🩹 Stability & Ops (v5.3.1)
+- Fix ExternalMedia RTP greeting cutoff on some trunk calls
+- Admin UI: safer “Apply Changes”, improved YAML error recovery, and log export redaction
 
 For full release notes, see [CHANGELOG.md](CHANGELOG.md).
 

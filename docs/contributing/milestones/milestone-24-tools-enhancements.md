@@ -47,7 +47,7 @@ The existing `SendEmailSummaryTool` is effectively a post-call tool but runs dur
 
 Both use `Authorization: Bearer <token>` header. Private tokens are simpler but lack granular scopes.
 
-**Pre-Call Use Case (CRM Lookup by Phone)** (validate request/response shape via official docs; “Test Connection” is **Post-MVP**):
+**Pre-Call Use Case (CRM Lookup by Phone)** (validate request/response shape via official docs; Admin UI “Test” is available in v5.3.1+):
 
 ```http
 POST https://services.leadconnectorhq.com/contacts/search
@@ -1166,9 +1166,9 @@ This section documents known risks introduced by the pre-call and post-call HTTP
 - SSL verification enabled by default
 - Regular dependency updates via CI/CD
 
-### Outbound HTTP Safety (Recommended, Post-MVP)
+### Outbound HTTP Safety (Recommended)
 
-Phase tools introduce operator-configured outbound HTTP requests (and future “Test Connection” UI, Post-MVP), which can create **SSRF-style risk** if misconfigured.
+Phase tools introduce operator-configured outbound HTTP requests (including the Admin UI “Test” feature), which can create **SSRF-style risk** if misconfigured.
 
 MVP stance:
 - Allow outbound requests to any URL (operator-managed), but keep strong defaults: short timeouts, response size limits, and secret redaction in logs/UI.
