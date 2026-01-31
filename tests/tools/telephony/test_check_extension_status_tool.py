@@ -108,3 +108,45 @@ class TestCheckExtensionStatusTool:
         assert result["status"] == "success"
         assert result["availability_source"] == "endpoint_state"
         assert result["available"] is True
+
+    @pytest.mark.asyncio
+    async def test_resolves_transfer_destination_key_to_extension(self, tool, tool_context, mock_ari_client):
+        tool_context.config["tools"]["transfer"] = {
+            "destinations": {
+                "support_agent": {"type": "extension", "target": "6000", "description": "Support"},
+            }
+        }
+
+        mock_ari_client.send_command = AsyncMock(return_value={"name": "SIP/6000", "state": "NOT_INUSE"})
+
+        result = await tool.execute({"extension": "support_agent"}, tool_context)
+        assert result["status"] == "success"
+        assert result["extension"] == "6000"
+        assert result["device_state_id"] == "SIP/6000"
+        assert result["available"] is True
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_invalid_device_state_by_trying_other_tech(self, tool, tool_context, mock_ari_client):
+        tool_context.config["tools"]["extensions"]["internal"]["2765"] = {
+            "name": "Agent",
+            "dial_string": "SIP/2765",  # wrong tech
+            "device_state_tech": "auto",
+        }
+
+        async def send_command_side_effect(method, resource, data=None, params=None):
+            # First attempt uses dial_string tech (SIP) -> INVALID.
+            if method == "GET" and resource == "deviceStates/SIP%2F2765":
+                return {"name": "SIP/2765", "state": "INVALID"}
+            # Tool then probes endpoints and retries deviceStates with PJSIP -> NOT_INUSE.
+            if method == "GET" and resource == "endpoints/PJSIP/2765":
+                return {"technology": "PJSIP", "resource": "2765", "state": "online", "channel_ids": []}
+            if method == "GET" and resource == "deviceStates/PJSIP%2F2765":
+                return {"name": "PJSIP/2765", "state": "NOT_INUSE"}
+            raise Exception(f"Unexpected ARI call: {method} {resource}")
+
+        mock_ari_client.send_command = AsyncMock(side_effect=send_command_side_effect)
+
+        result = await tool.execute({"extension": "2765"}, tool_context)
+        assert result["status"] == "success"
+        assert result["device_state_id"] == "PJSIP/2765"
+        assert result["available"] is True

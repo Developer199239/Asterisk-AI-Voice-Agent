@@ -33,6 +33,10 @@ def _as_str_list(value: Any) -> List[str]:
         return [str(v) for v in value if v is not None]
     return [str(value)]
 
+def _looks_like_extension_number(value: str) -> bool:
+    value = (value or "").strip()
+    return bool(value) and value.isdigit()
+
 
 def _parse_dial_string_tech(dial_string: str) -> Optional[str]:
     dial_string = (dial_string or "").strip()
@@ -80,6 +84,34 @@ def _resolve_extension_entry(
             return ext_num, dict(ext_cfg), "config.alias"
 
     return "", {}, ""
+
+def _resolve_transfer_destination_extension(
+    *,
+    target: str,
+    destinations: Dict[str, Any],
+) -> Tuple[str, Dict[str, Any], str]:
+    """
+    Resolve a transfer destination key (tools.transfer.destinations.<key>) to an extension number.
+
+    Returns:
+        (extension_number, destination_config, resolution_source)
+    """
+    target = (target or "").strip()
+    if not target or not isinstance(destinations, dict):
+        return "", {}, ""
+
+    dest = destinations.get(target)
+    if not isinstance(dest, dict):
+        return "", {}, ""
+
+    if str(dest.get("type", "") or "").strip().lower() != "extension":
+        return "", {}, ""
+
+    ext = str(dest.get("target", "") or "").strip()
+    if not _looks_like_extension_number(ext):
+        return "", {}, ""
+
+    return ext, dict(dest), "config.transfer.destinations"
 
 
 def _resolve_device_state_id(
@@ -162,7 +194,14 @@ async def _probe_endpoint(
         )
     except Exception:
         return None
-    return resp if isinstance(resp, dict) else None
+    if not isinstance(resp, dict):
+        return None
+
+    # ARI error payloads are often JSON objects too (e.g., {"message": "..."}).
+    # Only treat this as a valid endpoint if it resembles the Endpoint model.
+    if "technology" not in resp or "resource" not in resp:
+        return None
+    return resp
 
 
 class CheckExtensionStatusTool(Tool):
@@ -212,7 +251,30 @@ class CheckExtensionStatusTool(Tool):
         device_state_id = str(parameters.get("device_state_id", "") or "").strip()
 
         extensions_cfg = context.get_config_value("tools.extensions.internal", {}) or {}
-        resolved_ext, ext_entry, ext_source = _resolve_extension_entry(target=target, extensions_config=extensions_cfg)
+        transfer_destinations = context.get_config_value("tools.transfer.destinations", {}) or {}
+
+        # Resolve what the caller/model provided into a real extension number.
+        resolved_ext = ""
+        ext_entry: Dict[str, Any] = {}
+        ext_source = ""
+        destination_cfg: Dict[str, Any] = {}
+        destination_source = ""
+
+        if _looks_like_extension_number(target):
+            resolved_ext = target
+            ext_entry = dict(extensions_cfg.get(target) or {}) if isinstance(extensions_cfg, dict) else {}
+            ext_source = "parameter.extension"
+        else:
+            # First, resolve via internal extension config (key/name/aliases).
+            resolved_ext, ext_entry, ext_source = _resolve_extension_entry(target=target, extensions_config=extensions_cfg)
+            # Next, allow passing a transfer destination key like "support_agent" / "sales_agent".
+            if not resolved_ext:
+                resolved_ext, destination_cfg, destination_source = _resolve_transfer_destination_extension(
+                    target=target, destinations=transfer_destinations
+                )
+                if resolved_ext and not ext_entry and isinstance(extensions_cfg, dict):
+                    ext_entry = dict(extensions_cfg.get(resolved_ext) or {})
+
         extension = resolved_ext or target
 
         # Resolve device_state_id/tech using config + parameters.
@@ -227,15 +289,20 @@ class CheckExtensionStatusTool(Tool):
         endpoint_info: Dict[str, Any] = {}
         used_tech = ""
         if not resolved_id and not device_state_id and not tech:
+            # Only auto-detect tech for numeric extensions. If the target is a logical key, we
+            # should have resolved it via config first; otherwise we'd hit endpoints/PJSIP/<key>.
+            if not _looks_like_extension_number(extension):
+                resolved_id = ""
+            else:
             # Try common techs in an opinionated order (most FreePBX installs are PJSIP-first).
-            for candidate in ("PJSIP", "SIP"):
-                endpoint = await _probe_endpoint(context=context, tech=candidate, extension=extension)
-                if endpoint:
-                    endpoint_info = endpoint
-                    used_tech = candidate
-                    source = "ari.endpoints.detected"
-                    resolved_id = f"{candidate}/{extension}"
-                    break
+                for candidate in ("PJSIP", "SIP"):
+                    endpoint = await _probe_endpoint(context=context, tech=candidate, extension=extension)
+                    if endpoint:
+                        endpoint_info = endpoint
+                        used_tech = candidate
+                        source = "ari.endpoints.detected"
+                        resolved_id = f"{candidate}/{extension}"
+                        break
 
         # If we did resolve a tech (via config/param), also try to fetch endpoint state for extra context.
         if not endpoint_info:
@@ -299,6 +366,36 @@ class CheckExtensionStatusTool(Tool):
             state = str(device_state_resp.get("state", "") or "")
         state_norm = state.strip().upper()
 
+        # If we got INVALID, try to recover (common when tech is wrong, e.g. SIP vs PJSIP).
+        if state_norm == "INVALID" and not device_state_id:
+            if _looks_like_extension_number(extension):
+                for candidate in ("PJSIP", "SIP"):
+                    if resolved_id and resolved_id.startswith(f"{candidate}/"):
+                        continue
+                    endpoint = await _probe_endpoint(context=context, tech=candidate, extension=extension)
+                    if not endpoint:
+                        continue
+                    try:
+                        candidate_id = f"{candidate}/{extension}"
+                        encoded_candidate = quote(candidate_id, safe="")
+                        candidate_resp = await context.ari_client.send_command(
+                            method="GET",
+                            resource=f"deviceStates/{encoded_candidate}",
+                        )
+                    except Exception:
+                        continue
+                    if isinstance(candidate_resp, dict):
+                        cstate = str(candidate_resp.get("state", "") or "").strip().upper()
+                        if cstate and cstate != "INVALID":
+                            device_state_resp = candidate_resp
+                            resolved_id = candidate_id
+                            state_norm = cstate
+                            name = str(candidate_resp.get("name", "") or "")
+                            source = "ari.deviceStates.fallback"
+                            endpoint_info = endpoint_info or endpoint
+                            used_tech = candidate
+                            break
+
         endpoint_state = ""
         endpoint_channel_ids: List[str] = []
         if isinstance(endpoint_info, dict):
@@ -339,6 +436,13 @@ class CheckExtensionStatusTool(Tool):
             "available": available,
             "availability_source": availability_source,
         }
+
+        if destination_source:
+            result["destination_resolution_source"] = destination_source
+            result["destination_key"] = target
+            result["destination_target"] = resolved_ext
+            # Keep a small subset of destination config to avoid leaking large blobs.
+            result["destination_type"] = str(destination_cfg.get("type", "") or "")
 
         if endpoint_state:
             result["endpoint_state"] = endpoint_state

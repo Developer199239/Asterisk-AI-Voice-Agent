@@ -25,7 +25,7 @@ import time
 import struct
 import audioop
 import re
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 from collections import deque
 
 import websockets
@@ -48,6 +48,32 @@ from src.tools.registry import tool_registry
 from src.tools.adapters.google import GoogleToolAdapter
 
 logger = get_logger(__name__)
+
+
+def _merge_transcription_fragment(buffer: str, fragment: str, last_fragment: str) -> Tuple[str, str]:
+    """
+    Merge a transcription fragment into an existing buffer.
+
+    Some providers repeat the same fragment or send cumulative text. This helper keeps the
+    resulting transcript stable (prevents duplicated phrases like "Goodbye!Goodbye!").
+    """
+    fragment = str(fragment or "")
+    if not fragment:
+        return buffer, last_fragment
+
+    # Drop exact duplicate fragment repeats.
+    if fragment == last_fragment:
+        return buffer, last_fragment
+
+    # If the provider sends cumulative text (new fragment contains the full buffer), replace.
+    if buffer and fragment.startswith(buffer):
+        return fragment, fragment
+
+    # If we somehow receive a fragment that is already fully present as the suffix, ignore.
+    if buffer and buffer.endswith(fragment):
+        return buffer, fragment
+
+    return f"{buffer}{fragment}", fragment
 
 # Constants
 _GEMINI_INPUT_RATE = 16000  # Gemini requires 16kHz input
@@ -137,6 +163,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._model_text_buffer: str = ""
         self._last_final_user_text: str = ""
         self._last_final_assistant_text: str = ""
+        self._last_input_transcription_fragment: str = ""
+        self._last_output_transcription_fragment: str = ""
         
         # Turn latency tracking (Milestone 21 - Call History)
         self._turn_start_time: Optional[float] = None
@@ -1003,8 +1031,9 @@ class GoogleLiveProvider(AIProviderInterface):
                 # Measures: last user speech → first AI audio response
                 self._turn_start_time = time.time()
                 self._turn_first_audio_received = False
-                # Concatenate fragments (not replace!)
-                self._input_transcription_buffer += text
+                self._input_transcription_buffer, self._last_input_transcription_fragment = _merge_transcription_fragment(
+                    self._input_transcription_buffer, text, self._last_input_transcription_fragment
+                )
                 logger.debug(
                     "Google Live input transcription fragment",
                     call_id=self._call_id,
@@ -1028,8 +1057,9 @@ class GoogleLiveProvider(AIProviderInterface):
             text = output_transcription.get("text", "")
             if text:
                 self._turn_has_assistant_output = True
-                # Concatenate AI speech fragments
-                self._output_transcription_buffer += text
+                self._output_transcription_buffer, self._last_output_transcription_fragment = _merge_transcription_fragment(
+                    self._output_transcription_buffer, text, self._last_output_transcription_fragment
+                )
                 logger.debug(
                     "Google Live output transcription fragment",
                     call_id=self._call_id,
@@ -1065,6 +1095,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
                 await self._track_conversation_message("user", self._input_transcription_buffer)
                 self._input_transcription_buffer = ""
+                self._last_input_transcription_fragment = ""
 
             # Save AI speech if buffered (prefer outputTranscription, fall back to modelTurn.text)
             assistant_final_text = (self._output_transcription_buffer or self._model_text_buffer or "").strip()
@@ -1083,6 +1114,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     assistant_text=self._last_final_assistant_text,
                 )
                 self._output_transcription_buffer = ""
+                self._last_output_transcription_fragment = ""
                 self._model_text_buffer = ""
             
             # Reset turn tracking for next turn (Milestone 21)
