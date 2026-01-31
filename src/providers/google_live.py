@@ -448,6 +448,13 @@ class GoogleLiveProvider(AIProviderInterface):
         self._ws_unavailable_logged = False
         self._ws_send_close_logged = False
         self._hangup_ready_emitted = False
+        self._input_transcription_buffer = ""
+        self._output_transcription_buffer = ""
+        self._model_text_buffer = ""
+        self._last_final_user_text = ""
+        self._last_final_assistant_text = ""
+        self._last_input_transcription_fragment = ""
+        self._last_output_transcription_fragment = ""
         # Per-call tool allowlist (contexts are the source of truth).
         # Missing/None is treated as [] for safety.
         if context and "tools" in context:
@@ -458,7 +465,7 @@ class GoogleLiveProvider(AIProviderInterface):
         logger.info(
             "Starting Google Live session",
             call_id=call_id,
-            model=self.config.llm_model,
+            model=self._normalize_model_name(self.config.llm_model),
         )
 
         # Build WebSocket URL with API key
@@ -543,6 +550,16 @@ class GoogleLiveProvider(AIProviderInterface):
             await self.stop_session()
             raise
 
+    @staticmethod
+    def _normalize_model_name(model: Optional[str]) -> str:
+        """
+        Normalize model identifiers for compatibility with older UI/config options.
+        """
+        m = (model or "").strip()
+        if m == "gemini-2.5-flash-native-audio-latest":
+            return "gemini-2.5-flash-native-audio-preview-12-2025"
+        return m or "gemini-2.5-flash-native-audio-preview-12-2025"
+
     async def _send_setup(self, context: Optional[Dict[str, Any]]) -> None:
         """Send session setup message to Gemini Live API."""
         # Use instructions from config (like OpenAI Realtime pattern)
@@ -600,7 +617,7 @@ class GoogleLiveProvider(AIProviderInterface):
 
         # Setup message
         # Strip any accidental "models/" prefix from config to avoid models/models/...
-        model_name = self.config.llm_model
+        model_name = self._normalize_model_name(self.config.llm_model)
         if model_name.startswith("models/"):
             model_name = model_name[7:]  # Remove "models/" prefix
         

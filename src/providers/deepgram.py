@@ -448,7 +448,7 @@ class DeepgramProvider(AIProviderInterface):
         )
 
         # Get configured agent language (default: "en")
-        agent_language = self._get_config_value("agent_language", "en")
+        agent_language = str(self._get_config_value("agent_language", "en") or "").strip() or "en"
         
         # Build settings with configured audio formats
         settings = {

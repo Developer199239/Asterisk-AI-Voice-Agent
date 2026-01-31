@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import openai  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     openai = None
 
 
@@ -163,8 +163,8 @@ class GenericWebhookTool(PostCallTool):
                         try:
                             body = await response.text()
                             body_preview = body[:200] if body else ""
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to read response body: {e}")
                         logger.warning(f"Webhook returned non-2xx: {self.config.name} status={status} body={body_preview}")
         
         except aiohttp.ClientError as e:

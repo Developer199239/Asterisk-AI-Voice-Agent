@@ -570,7 +570,6 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
     config = service_config[service_name]
     container_name = config["container"]
     safe_container_name = _sanitize_for_log(container_name)
-    safe_service_name = _sanitize_for_log(service_name)
 
     try:
         # First stop and remove the existing container to avoid name conflicts
@@ -2781,7 +2780,7 @@ async def test_ari_connection(request: AriTestRequest):
 
 _UPDATER_IMAGE_REPO = "asterisk-ai-voice-agent-updater"
 _UPDATER_IMAGE_LOCK = None
-_UPDATES_STATUS_CACHE: dict = {"checked_at": 0.0, "data": None}
+_UPDATES_STATUS_CACHE: dict = {"checked_at": 0.0, "data": None, "checked_remote": False}
 _UPDATES_STATUS_CACHE_TTL_SEC = 600  # 10 minutes
 _UPDATES_STATUS_CACHE_LOCK = None
 
@@ -3390,8 +3389,10 @@ async def updates_status(check_remote: bool = False, build_updater: bool = False
         with _updates_status_cache_lock():
             cached = _UPDATES_STATUS_CACHE.get("data")
             checked_at = float(_UPDATES_STATUS_CACHE.get("checked_at") or 0.0)
+            cached_remote = bool(_UPDATES_STATUS_CACHE.get("checked_remote"))
         if not force and cached and (now - checked_at) < _UPDATES_STATUS_CACHE_TTL_SEC:
-            return UpdateStatusResponse(**cached)
+            if not check_remote or cached_remote:
+                return UpdateStatusResponse(**cached)
     except Exception:
         logger.debug("Failed to read updates status cache", exc_info=True)
 
@@ -3471,6 +3472,7 @@ async def updates_status(check_remote: bool = False, build_updater: bool = False
             with _updates_status_cache_lock():
                 _UPDATES_STATUS_CACHE["checked_at"] = time.time()
                 _UPDATES_STATUS_CACHE["data"] = payload
+                _UPDATES_STATUS_CACHE["checked_remote"] = False
         except Exception:
             logger.debug("Failed to write updates status cache", exc_info=True)
         return UpdateStatusResponse(**payload)
@@ -3505,6 +3507,7 @@ async def updates_status(check_remote: bool = False, build_updater: bool = False
             with _updates_status_cache_lock():
                 _UPDATES_STATUS_CACHE["checked_at"] = time.time()
                 _UPDATES_STATUS_CACHE["data"] = payload
+                _UPDATES_STATUS_CACHE["checked_remote"] = True
         except Exception:
             logger.debug("Failed to write updates status cache", exc_info=True)
         return UpdateStatusResponse(**payload)
@@ -3524,6 +3527,7 @@ async def updates_status(check_remote: bool = False, build_updater: bool = False
             with _updates_status_cache_lock():
                 _UPDATES_STATUS_CACHE["checked_at"] = time.time()
                 _UPDATES_STATUS_CACHE["data"] = payload
+                _UPDATES_STATUS_CACHE["checked_remote"] = True
         except Exception:
             logger.debug("Failed to write updates status cache", exc_info=True)
         return UpdateStatusResponse(**payload)
@@ -3604,6 +3608,7 @@ async def updates_status(check_remote: bool = False, build_updater: bool = False
         with _updates_status_cache_lock():
             _UPDATES_STATUS_CACHE["checked_at"] = time.time()
             _UPDATES_STATUS_CACHE["data"] = payload
+            _UPDATES_STATUS_CACHE["checked_remote"] = True
     except Exception:
         logger.debug("Failed to write updates status cache", exc_info=True)
     return UpdateStatusResponse(**payload)

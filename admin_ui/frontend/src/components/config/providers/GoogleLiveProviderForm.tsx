@@ -10,6 +10,14 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
         onChange({ ...config, [field]: value });
     };
 
+    const selectedModel = (() => {
+        const raw = (config.llm_model || '').toString().trim();
+        if (raw === 'gemini-2.5-flash-native-audio-latest') {
+            return 'gemini-2.5-flash-native-audio-preview-12-2025';
+        }
+        return raw || 'gemini-2.5-flash-native-audio-preview-12-2025';
+    })();
+
     return (
         <div className="space-y-6">
             {/* Base URL Section */}
@@ -41,13 +49,14 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                         <label className="text-sm font-medium">LLM Model</label>
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.llm_model || 'gemini-2.5-flash-native-audio-preview-12-2025'}
+                            value={selectedModel}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
                             <optgroup label="Native Audio Models (Live API) - 24 Languages">
-                                <option value="gemini-2.5-flash-native-audio-latest">Gemini 2.5 Flash Native Audio (Latest)</option>
                                 <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
                                 <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
+                                <option value="gemini-2.5-flash-preview-native-audio-dialog">Gemini 2.5 Flash Native Audio Dialog (Preview)</option>
+                                <option value="gemini-2.5-flash-exp-native-audio-thinking-dialog">Gemini 2.5 Flash Native Audio Thinking Dialog (Experimental)</option>
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
@@ -203,7 +212,6 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 onChange={(e) => handleChange('target_encoding', e.target.value)}
                             >
                                 <option value="ulaw">μ-law</option>
-                                <option value="mulaw">μ-law</option>
                                 <option value="pcm16">PCM16</option>
                                 <option value="linear16">Linear16</option>
                             </select>
