@@ -507,6 +507,12 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     {config.request_transcript?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 grid grid-cols-1 md:grid-cols-2 gap-4">
                             <FormInput
+                                label="From Email"
+                                value={config.request_transcript?.from_email || ''}
+                                onChange={(e) => updateNestedConfig('request_transcript', 'from_email', e.target.value)}
+                                placeholder="agent@yourdomain.com"
+                            />
+                            <FormInput
                                 label="Admin Email (BCC)"
                                 value={config.request_transcript?.admin_email || ''}
                                 onChange={(e) => updateNestedConfig('request_transcript', 'admin_email', e.target.value)}
