@@ -18,6 +18,11 @@ from src.tools.context import PostCallContext
 
 logger = logging.getLogger(__name__)
 
+try:
+    import openai  # type: ignore
+except Exception:  # pragma: no cover
+    openai = None
+
 
 @dataclass
 class WebhookConfig:
@@ -259,7 +264,9 @@ class GenericWebhookTool(PostCallTool):
             return ""
         
         try:
-            import openai
+            if openai is None:
+                logger.warning(f"Cannot generate summary - openai package not installed: {self.config.name}")
+                return ""
             
             # Format transcript for summarization
             transcript_text = "\n".join([

@@ -542,6 +542,8 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
         "local-ai-server": "local_ai_server",
     }
     service_name = legacy_to_canonical.get(service_name, service_name)
+    if not _is_safe_container_identifier(service_name):
+        raise HTTPException(status_code=400, detail="Invalid service name")
     
     # Map service names to container names and health URLs
     # NOTE: Use /ready endpoint for ai_engine (returns 503 when degraded, 200 when ready)
@@ -563,22 +565,26 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
             "health_timeout": 60,
         }
     }
-    config = service_config.get(service_name, {"container": service_name, "health_url": None, "health_timeout": 30})
+    if service_name not in service_config:
+        raise HTTPException(status_code=400, detail="Unknown service")
+    config = service_config[service_name]
     container_name = config["container"]
+    safe_container_name = _sanitize_for_log(container_name)
+    safe_service_name = _sanitize_for_log(service_name)
 
     try:
         # First stop and remove the existing container to avoid name conflicts
         try:
             client = docker.from_env()
             container = client.containers.get(container_name)
-            logger.info(f"Stopping container {container_name} before recreate")
+            logger.info("Stopping container %s before recreate", safe_container_name)
             container.stop(timeout=10)
             container.remove()
-            logger.info(f"Container {container_name} stopped and removed")
+            logger.info("Container %s stopped and removed", safe_container_name)
         except docker.errors.NotFound:
-            logger.info(f"Container {container_name} not found, will create fresh")
+            logger.info("Container %s not found, will create fresh", safe_container_name)
         except Exception as e:
-            logger.warning(f"Error stopping container: {e}")
+            logger.warning("Error stopping container %s", safe_container_name, exc_info=True)
         
         # Run compose in updater-runner so relative binds resolve on the host correctly.
         cmd = (
@@ -598,11 +604,10 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
         
         # Health check polling after successful recreate
         health_status = "skipped"
-        if health_check and config["health_url"]:
+        if health_check:
             health_status = await _poll_health(
-                config["health_url"], 
+                service_name,
                 timeout_seconds=config["health_timeout"],
-                service_name=service_name
             )
         
         # Return appropriate status based on health check result
@@ -634,7 +639,7 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
         raise HTTPException(status_code=500, detail="Failed to recreate service") from e
 
 
-async def _poll_health(url: str, timeout_seconds: int = 30, service_name: str = "service") -> str:
+async def _poll_health(service_name: str, timeout_seconds: int = 30) -> str:
     """
     Poll a health endpoint until it returns success or timeout.
     
@@ -642,12 +647,32 @@ async def _poll_health(url: str, timeout_seconds: int = 30, service_name: str = 
     """
     import httpx
     import asyncio
+    from urllib.parse import urlparse
     
     start_time = asyncio.get_event_loop().time()
     poll_interval = 2  # seconds between polls
     last_status_code = None
+
+    health_urls = {
+        "ai_engine": "http://127.0.0.1:15000/ready",
+        "admin_ui": None,
+        "local_ai_server": None,
+    }
+    health_url = health_urls.get(service_name)
+    if not health_url:
+        return "skipped"
+
+    parsed = urlparse(health_url)
+    if parsed.scheme not in ("http", "https") or (parsed.hostname or "") not in {"127.0.0.1", "localhost"}:
+        logger.error("Refusing to poll non-local health URL for %s", _sanitize_for_log(service_name))
+        return "timeout"
     
-    logger.info(f"Polling health for {service_name} at {url} (timeout: {timeout_seconds}s)")
+    logger.info(
+        "Polling health for %s at %s (timeout: %ss)",
+        _sanitize_for_log(service_name),
+        _sanitize_for_log(health_url),
+        timeout_seconds,
+    )
     
     async with httpx.AsyncClient(timeout=5.0) as client:
         while True:
@@ -656,16 +681,28 @@ async def _poll_health(url: str, timeout_seconds: int = 30, service_name: str = 
                 # If we got responses but they were non-200, return unhealthy
                 # If we never connected, return timeout
                 if last_status_code is not None and last_status_code != 200:
-                    logger.warning(f"Health check unhealthy for {service_name}: last status {last_status_code}")
+                    logger.warning(
+                        "Health check unhealthy for %s: last status %s",
+                        _sanitize_for_log(service_name),
+                        last_status_code,
+                    )
                     return "unhealthy"
-                logger.warning(f"Health check timeout for {service_name} after {timeout_seconds}s")
+                logger.warning(
+                    "Health check timeout for %s after %ss",
+                    _sanitize_for_log(service_name),
+                    timeout_seconds,
+                )
                 return "timeout"
             
             try:
-                resp = await client.get(url)
+                resp = await client.get(health_url)
                 last_status_code = resp.status_code
                 if resp.status_code == 200:
-                    logger.info(f"Health check passed for {service_name} after {elapsed:.1f}s")
+                    logger.info(
+                        "Health check passed for %s after %.1fs",
+                        _sanitize_for_log(service_name),
+                        elapsed,
+                    )
                     return "healthy"
                 else:
                     logger.debug(f"Health check returned {resp.status_code}, retrying...")

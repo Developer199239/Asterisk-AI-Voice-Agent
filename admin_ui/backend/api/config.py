@@ -391,10 +391,11 @@ async def get_yaml_config():
         _safe_load_no_duplicates(config_content)  # Validate YAML and reject duplicate keys
         return {"content": config_content}
     except yaml.YAMLError as e:
+        logger.info("YAML parse error while reading config YAML", exc_info=True)
         # Extract detailed error information for user-friendly display
         error_info = {
             "type": "yaml_error",
-            "message": str(e),
+            "message": "Invalid YAML",
             "line": None,
             "column": None,
             "context": None,
@@ -408,10 +409,6 @@ async def get_yaml_config():
         if hasattr(e, 'context_mark') and e.context_mark:
             ctx_mark = e.context_mark
             error_info["context"] = f"Line {ctx_mark.line + 1}, column {ctx_mark.column + 1}"
-        if hasattr(e, 'problem') and e.problem:
-            error_info["problem"] = e.problem
-        if hasattr(e, 'context') and e.context:
-            error_info["context_msg"] = e.context
         # Try to extract a snippet around the error line
         if error_info["line"]:
             try:
@@ -432,7 +429,8 @@ async def get_yaml_config():
             "yaml_error": error_info
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+        logger.error("Unexpected error while reading config YAML", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read config YAML") from e
 
 @router.get("/env")
 async def get_env_config():
