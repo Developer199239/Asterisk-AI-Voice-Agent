@@ -226,10 +226,13 @@ class GenericHTTPLookupTool(PreCallTool):
                 else:
                     results[var_name] = str(value)
             except Exception as e:
-                logger.debug("Failed to extract variable",
-                           variable=var_name,
-                           path=path,
-                           error=str(e))
+                logger.debug(
+                    "Failed to extract output variable '%s' (path=%s): %s",
+                    var_name,
+                    path,
+                    str(e),
+                    exc_info=True,
+                )
                 results[var_name] = ""
         
         return results
