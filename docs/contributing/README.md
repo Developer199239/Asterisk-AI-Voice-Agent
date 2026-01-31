@@ -18,6 +18,7 @@ Welcome to Asterisk AI Voice Agent development! This directory contains everythi
 - **[Provider Development](provider-development.md)** - Add STT/LLM/TTS providers (Azure, Google, etc.)
 - **[Pipeline Development](pipeline-development.md)** - Build custom audio processing pipelines
 - **[Testing Guide](testing-guide.md)** - Test your changes with real calls
+- **[Testing Develop Branch](testing-develop-branch.md)** - Try new features while preserving your configs
 - **[Debugging Guide](debugging-guide.md)** - Debug with logs, RCA scripts, and agent CLI
 - **[Code Style](code-style.md)** - Project conventions and best practices
 

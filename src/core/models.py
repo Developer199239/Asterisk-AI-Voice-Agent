@@ -55,6 +55,7 @@ class CallSession:
     caller_channel_id: str
     caller_name: Optional[str] = None     # CALLERID(name) for personalized greetings
     caller_number: Optional[str] = None   # CALLERID(num) for context
+    called_number: Optional[str] = None   # DIALED_NUMBER or __FROM_DID - the number that was dialed
     local_channel_id: Optional[str] = None
     external_media_id: Optional[str] = None
     external_media_call_id: Optional[str] = None
@@ -156,6 +157,9 @@ class CallSession:
     barge_in_count: int = 0                                          # Total barge-in attempts
     error_message: Optional[str] = None                              # Error if call failed
     transfer_destination: Optional[str] = None                       # Transfer target if transferred
+    
+    # Pre-call tool results (Milestone 24) - CRM lookup data injected into prompts
+    pre_call_results: Dict[str, str] = field(default_factory=dict)  # {variable_name: value}
 
     # Outbound campaign dialer (Milestone 22)
     is_outbound: bool = False

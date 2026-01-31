@@ -18,7 +18,8 @@ const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => 
         'hangup_call',
         'leave_voicemail',
         'send_email_summary',
-        'request_transcript'
+        'request_transcript',
+        'check_extension_status',
     ];
 
     const availableProfiles = [

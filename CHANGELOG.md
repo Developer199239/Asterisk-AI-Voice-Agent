@@ -12,6 +12,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [5.3.1] - 2026-02-01
+
+### Added
+
+- **Deepgram Language Configuration**: Voice Agent language is now configurable via Admin UI and YAML (`agent_language` field). Supports 30+ languages including English variants, Spanish, French, German, Japanese, Chinese, and more.
+- **Phase Tools (Milestone 24)**: Pre-call HTTP lookups (enrichment), in-call HTTP tools (AI-invoked during conversation), and post-call webhooks (fire-and-forget automation).
+- **Extension Availability Tool (AAVA-53)**: New `check_extension_status` tool to query Asterisk device state (e.g., `PJSIP/2765`) so the AI can decide whether to transfer or continue.
+- **Hangup Policy Controls**: `hangup_call` now supports a configurable policy (markers and guardrails) via `tools.hangup_call.policy`.
+- **Admin UI YAML Error Recovery**: YAML parse errors now show a banner with line/column and the Raw YAML page can still load content for quick fixes.
+- **Agent CLI RCA Enhancements**: `agent rca [call_id]` support, optional `--llm` forcing, and tool call extraction to improve post-call debugging.
+
+### Fixed
+
+- **RTP Greeting Cutoff on External Trunk Calls**: Fixed issue where greeting audio was cut off on calls from external trunks. Root cause: Asterisk ExternalMedia requires audio to flow through the mixing bridge before it sends RTP. Added "RTP kick" that plays brief silence through the bridge immediately after ExternalMedia setup, triggering RTP flow in ~40-50ms instead of waiting 5-7 seconds for caller audio.
+- **Admin UI Setup Wizard (AAVA-164)**: ElevenLabs Agent ID field now auto-populates from `.env` file when re-running the wizard.
+- **Admin UI Log Export (AAVA-162)**: Exported debug logs now redact email addresses (`[EMAIL_REDACTED]`) to protect user privacy.
+- **Admin UI Environment Changes (AAVA-161)**: "Apply Changes" after modifying `.env` variables now uses `docker compose --force-recreate` instead of container restart, ensuring environment variable changes are actually applied (e.g., `LOG_TO_FILE`, `LOG_FILE_PATH`).
+- **In-Call HTTP Tools Config Wiring**: Align tool schema across engine/Admin UI/docs and support context allowlisting of in-call HTTP tools.
+- **Google Live Transcription Stability**: Reduce duplicate transcript fragments and improve output PCM rate detection from provider mimeType.
+
+### Security
+
+- Admin UI HTTP tool **Test** now blocks localhost/private targets by default (SSRF mitigation); can be overridden for trusted networks via environment variables.
+
+## [5.2.5] - 2026-01-28
+
+### Added
+
+- Updates: publish the `asterisk-ai-voice-agent-updater` image to GHCR on release tags (aligned with other containers).
+- Admin UI: Stable/Main/Advanced update targets + render the latest release notes (from `CHANGELOG.md`) after **Check updates**.
+- Agent CLI: `agent update` supports semver tag refs like `v5.2.5` (in addition to branches).
+
+### Changed
+
+- Config: fresh installs now default to **AudioSocket** (`audio_transport: audiosocket`).
+
+### Fixed
+
+- Admin UI Updates: prefer pulling the published updater image and fall back to a local build using host networking in restricted DNS/egress environments.
+
+## [5.2.4] - 2026-01-26
+
+### Fixed
+
+- Admin UI: Dashboard no longer performs update checks that can trigger building the updater image; updates are checked only from **System → Updates** on explicit user action.
+- Admin UI: Docker Services “Restart” uses Docker SDK restart (avoids compose recreate failures on hosts where repo paths like `/root/...` are not accessible inside the `admin_ui` container).
+- Admin UI: compose-based start/recreate/build operations are executed via the detached updater runner to ensure host-path resolution is correct.
+
 ## [5.2.3] - 2026-01-26
 
 ### Fixed
@@ -1173,6 +1221,11 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 
 ## Version History
 
+- **v5.3.1** (2026-02-01) - Phase Tools (HTTP + webhooks) + Deepgram language + Admin UI + RCA enhancements + stability fixes
+- **v5.2.5** (2026-01-28) - Stable Updates improvements + updater image publishing + AudioSocket default
+- **v5.2.4** (2026-01-26) - Admin UI Docker Services hardening + remove background update checks
+- **v5.2.3** (2026-01-26) - Agent update targets only impacted services on compose changes
+- **v5.2.2** (2026-01-26) - Agent update explicit fetch refspec to avoid stale origin branches
 - **v5.2.1** (2026-01-25) - Admin UI Updates page (branch preview/run), job history + rollback, safer updater runner
 - **v5.1.7** (2026-01-24) - ExternalMedia greeting reliability, upstream squelch, hangup/transcript robustness
 - **v5.1.6** (2026-01-20) - Admin UI + RCA improvements, CLI surface alignment, setup wizard fixes
@@ -1184,7 +1237,12 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v5.2.1...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v5.3.1...HEAD
+[5.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.3.1
+[5.2.5]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.5
+[5.2.4]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.4
+[5.2.3]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.3
+[5.2.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.2
 [5.2.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.1
 [5.1.7]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.1.7
 [5.1.6]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.1.6

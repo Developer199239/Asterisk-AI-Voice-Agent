@@ -130,7 +130,11 @@ class OpenAIToolAdapter:
             logger.error(f"Failed to parse function arguments: {e}", arguments=arguments_str)
             parameters = {}
         
-        logger.info(f"🔧 OpenAI tool call: {function_name}({parameters})", call_id=function_call_id)
+        logger.info(
+            f"🔧 OpenAI tool call: {function_name}({parameters})",
+            call_id=context.get("call_id"),
+            function_call_id=function_call_id,
+        )
         
         # Get tool from registry
         tool = self.registry.get(function_name)
@@ -149,6 +153,7 @@ class OpenAIToolAdapter:
             call_id=context['call_id'],
             caller_channel_id=context.get('caller_channel_id'),
             bridge_id=context.get('bridge_id'),
+            called_number=context.get('called_number'),
             session_store=context['session_store'],
             ari_client=context['ari_client'],
             config=context.get('config'),
@@ -159,8 +164,12 @@ class OpenAIToolAdapter:
         # Execute tool
         try:
             result = await tool.execute(parameters, exec_context)
-            logger.info(f"✅ Tool {function_name} executed: {result.get('status')}", 
-                       call_id=function_call_id)
+            logger.info(
+                f"✅ Tool {function_name} executed: {result.get('status')}",
+                call_id=context.get("call_id"),
+                function_call_id=function_call_id,
+                message=result.get("message"),
+            )
             result['call_id'] = function_call_id
             result['function_name'] = function_name
             return result
@@ -227,8 +236,11 @@ class OpenAIToolAdapter:
                 }
             }
             await websocket.send(json.dumps(output_event))
-            logger.info(f"✅ Sent function output to OpenAI: {safe_result.get('status')}", 
-                       call_id=call_id)
+            logger.info(
+                f"✅ Sent function output to OpenAI: {safe_result.get('status')}",
+                call_id=context.get("call_id"),
+                function_call_id=call_id,
+            )
 
             # Special-case hangup flow: the provider will create the farewell response with tools disabled
             # to prevent recursive tool calls (e.g., model calls hangup_call again instead of speaking).

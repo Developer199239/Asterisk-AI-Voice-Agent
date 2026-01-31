@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
 import { Plus, Save, Play, RefreshCw, AlertCircle, Settings2, Trash2 } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
@@ -53,6 +54,7 @@ const _parseArgLine = (raw: string): string[] => {
 const MCPPage = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
     const [reloadingEngine, setReloadingEngine] = useState(false);
     const [status, setStatus] = useState<MCPStatus | null>(null);
@@ -70,10 +72,17 @@ const MCPPage = () => {
         setLoading(true);
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -277,6 +286,7 @@ const MCPPage = () => {
 
     return (
         <div className="space-y-6">
+            {yamlError && <YamlErrorBanner error={yamlError} />}
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">MCP Servers</h1>

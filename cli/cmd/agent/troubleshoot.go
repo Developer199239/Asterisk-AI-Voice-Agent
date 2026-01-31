@@ -13,6 +13,7 @@ var (
 	troubleshootInteractive bool
 	troubleshootCollectOnly bool
 	troubleshootNoLLM       bool
+	troubleshootForceLLM    bool
 	troubleshootList        bool
 	troubleshootJSON        bool
 )
@@ -61,6 +62,7 @@ Features:
 			troubleshootInteractive,
 			troubleshootCollectOnly,
 			troubleshootNoLLM,
+			troubleshootForceLLM,
 			troubleshootList,
 			troubleshootJSON,
 			verbose,
@@ -81,6 +83,7 @@ func init() {
 	troubleshootCmd.Flags().BoolVarP(&troubleshootInteractive, "interactive", "i", false, "interactive mode")
 	troubleshootCmd.Flags().BoolVar(&troubleshootCollectOnly, "collect-only", false, "only collect logs, no analysis")
 	troubleshootCmd.Flags().BoolVar(&troubleshootNoLLM, "no-llm", false, "skip LLM analysis")
+	troubleshootCmd.Flags().BoolVar(&troubleshootForceLLM, "llm", false, "force LLM analysis (even for healthy calls)")
 	troubleshootCmd.Flags().BoolVar(&troubleshootJSON, "json", false, "output as JSON (JSON only)")
 
 	rootCmd.AddCommand(troubleshootCmd)

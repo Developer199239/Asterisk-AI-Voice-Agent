@@ -18,7 +18,7 @@ The orchestrator produces a TransportProfile that specifies:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from structlog import get_logger
 
 from ..providers.base import ProviderCapabilities
@@ -45,8 +45,22 @@ class ContextConfig:
     profile: Optional[str] = None
     provider: Optional[str] = None
     pipeline: Optional[str] = None  # Pipeline name for modular STT/LLM/TTS (e.g., local_hybrid)
-    tools: Optional[list] = None  # Tool names for function calling
+    tools: Optional[list] = None  # In-call tool names for function calling
     background_music: Optional[str] = None  # MOH class name for background music during calls
+    
+    # Phase tool configuration (Milestone 24)
+    pre_call_tools: Optional[List[str]] = None  # Tool names to run after answer, before AI speaks
+    post_call_tools: Optional[List[str]] = None  # Tool names to run after call ends
+    
+    # In-call HTTP tool configurations (defined inline in context)
+    # NOTE: Admin UI stores `contexts.<name>.in_call_http_tools` as a list of enabled tool names.
+    # Inline per-context tool definitions may also be supported as a dict (name -> config).
+    in_call_http_tools: Optional[Union[List[str], Dict[str, Any]]] = None  # names or {name: config}
+    
+    # Global tool opt-out per context (Milestone 24)
+    disable_global_pre_call_tools: Optional[List[str]] = None  # Global pre-call tools to disable
+    disable_global_in_call_tools: Optional[List[str]] = None  # Global in-call tools to disable
+    disable_global_post_call_tools: Optional[List[str]] = None  # Global post-call tools to disable
 
 
 @dataclass
@@ -136,8 +150,19 @@ class TransportOrchestrator:
                     profile=context_dict.get('profile'),
                     provider=context_dict.get('provider'),
                     pipeline=context_dict.get('pipeline'),  # Modular pipeline name (e.g., local_hybrid)
-                    tools=context_dict.get('tools'),  # Extract tools for function calling
+                    tools=context_dict.get('tools'),  # In-call tools for function calling
                     background_music=context_dict.get('background_music'),  # MOH class for background music
+                    # Phase tool configuration (Milestone 24)
+                    pre_call_tools=context_dict.get('pre_call_tools'),
+                    post_call_tools=context_dict.get('post_call_tools'),
+                    # In-call HTTP tool configurations
+                    in_call_http_tools=context_dict.get('in_call_http_tools'),
+                    disable_global_pre_call_tools=context_dict.get('disable_global_pre_call_tools'),
+                    disable_global_in_call_tools=(
+                        context_dict.get('disable_global_in_call_tools')
+                        or context_dict.get('disable_global_in_call_http_tools')  # legacy Admin UI key
+                    ),
+                    disable_global_post_call_tools=context_dict.get('disable_global_post_call_tools'),
                 )
                 logger.debug("Loaded context mapping", name=name, context=contexts[name])
             except Exception as exc:

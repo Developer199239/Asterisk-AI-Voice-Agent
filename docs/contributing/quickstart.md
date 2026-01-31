@@ -123,7 +123,7 @@ At minimum, you will add a context like:
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v5.1.7)
+exten => s,1,NoOp(Asterisk AI Voice Agent v5.3.1)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -160,7 +160,7 @@ Once Docker services are up and ARI is configured:
 1. Check container status:
 
    ```bash
-   docker compose ps
+   docker compose -p asterisk-ai-voice-agent ps
    ```
 
 2. Check health:
@@ -175,7 +175,7 @@ Once Docker services are up and ARI is configured:
    - Watch logs:
 
    ```bash
-   docker compose logs -f ai_engine
+   docker compose -p asterisk-ai-voice-agent logs -f ai_engine
    ```
 
 If the call behaves as expected, you are ready to start developing.

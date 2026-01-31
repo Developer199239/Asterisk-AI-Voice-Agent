@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
 import { Save, Zap, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
@@ -10,6 +11,7 @@ import { sanitizeConfigForSave } from '../../utils/configSanitizers';
 const StreamingPage = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
     const [pendingRestart, setPendingRestart] = useState(false);
     const [restartingEngine, setRestartingEngine] = useState(false);
@@ -21,10 +23,17 @@ const StreamingPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -89,6 +98,12 @@ const StreamingPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+
+    if (yamlError) return (
+        <div className="space-y-6">
+            <YamlErrorBanner error={yamlError} />
+        </div>
+    );
 
     const streamingConfig = config.streaming || {};
 
@@ -224,6 +239,13 @@ const StreamingPage = () => {
                                 tooltip="Reduced min start for greetings - faster initial response (default: 40ms)."
                             />
                             <FormInput
+                                label="Greeting RTP Wait (ms)"
+                                type="number"
+                                value={streamingConfig.greeting_rtp_wait_ms || 250}
+                                onChange={(e) => updateStreamingConfig('greeting_rtp_wait_ms', parseInt(e.target.value))}
+                                tooltip="ExternalMedia only: How long to wait for RTP endpoint before falling back to file playback for greeting (default: 250ms). Increase if greetings are cut off."
+                            />
+                            <FormInput
                                 label="Empty Backoff Ticks Max"
                                 type="number"
                                 value={streamingConfig.empty_backoff_ticks_max || 5}
@@ -269,6 +291,31 @@ const StreamingPage = () => {
                                 tooltip="Target audio level for normalization - higher = louder output (default: 1400)."
                             />
                         </div>
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            <ConfigSection title="Egress Format" description="Control audio byte ordering and format for downstream playback.">
+                <ConfigCard>
+                    <div className="space-y-6">
+                        <FormSelect
+                            label="Egress Swap Mode"
+                            value={streamingConfig.egress_swap_mode || 'auto'}
+                            onChange={(e) => updateStreamingConfig('egress_swap_mode', e.target.value)}
+                            options={[
+                                { value: 'auto', label: 'Auto (detect from system)' },
+                                { value: 'swap', label: 'Swap (force byte swap)' },
+                                { value: 'none', label: 'None (no byte swap)' }
+                            ]}
+                            tooltip="Controls PCM16 byte ordering for downstream playback. 'auto' detects system endianness. Use 'swap' if audio sounds garbled/static, 'none' if already correct."
+                        />
+                        <FormSwitch
+                            label="Force μ-law Encoding"
+                            description="Always encode egress audio as μ-law regardless of profile."
+                            checked={streamingConfig.egress_force_mulaw ?? false}
+                            onChange={(e) => updateStreamingConfig('egress_force_mulaw', e.target.checked)}
+                            tooltip="Force μ-law (G.711) encoding for all downstream audio. Enable if Asterisk expects μ-law but provider sends PCM16. Typically needed for telephony compatibility."
+                        />
                     </div>
                 </ConfigCard>
             </ConfigSection>

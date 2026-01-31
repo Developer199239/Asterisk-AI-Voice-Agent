@@ -164,7 +164,8 @@ const EnvPage = () => {
                 if (!step) continue;
 
                 if (service === 'ai_engine') {
-                    const response = await axios.post(`${step.endpoint}?force=${force}`, {}, {
+                    // AAVA-161: Use recreate=true for env changes to ensure .env is re-read
+                    const response = await axios.post(`${step.endpoint}?force=${force}&recreate=true`, {}, {
                         headers: { Authorization: `Bearer ${token}` }
                     });
 
@@ -183,6 +184,11 @@ const EnvPage = () => {
                         alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
                         return;
                     }
+                } else if (service === 'local_ai_server') {
+                    // AAVA-161: Use recreate=true for env changes to ensure .env is re-read
+                    await axios.post(`${step.endpoint}?recreate=true`, {}, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
                 } else {
                     await axios.post(step.endpoint, {}, {
                         headers: { Authorization: `Bearer ${token}` }

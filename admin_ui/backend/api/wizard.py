@@ -601,6 +601,7 @@ async def load_existing_config():
             "deepgram_key": env_values.get("DEEPGRAM_API_KEY", ""),
             "google_key": env_values.get("GOOGLE_API_KEY", ""),
             "elevenlabs_key": env_values.get("ELEVENLABS_API_KEY", ""),
+            "elevenlabs_agent_id": env_values.get("ELEVENLABS_AGENT_ID", ""),
         }
     
     # Load AI config from YAML if it exists
