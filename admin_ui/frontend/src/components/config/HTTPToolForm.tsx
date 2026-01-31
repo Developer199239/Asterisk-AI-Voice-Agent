@@ -661,10 +661,10 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                                                 onClick={() => handleAddMapping(mapping.path)}
                                                                 className="flex items-center justify-between w-full text-left px-2 py-1.5 text-xs bg-accent/30 hover:bg-accent rounded group"
                                                             >
-                                                                <div className="flex items-center gap-2">
-                                                                    <code className="font-mono text-blue-600">{mapping.path}</code>
+                                                                <div className="grid grid-cols-[auto_auto_1fr] items-start gap-2 min-w-0">
+                                                                    <code className="font-mono text-blue-600 break-all">{mapping.path}</code>
                                                                     <span className="text-muted-foreground">→</span>
-                                                                    <span className="truncate max-w-[150px]">{String(mapping.value ?? 'null')}</span>
+                                                                    <span className="min-w-0 whitespace-pre-wrap break-words">{String(mapping.value ?? 'null')}</span>
                                                                 </div>
                                                                 <Plus className="w-3 h-3 opacity-0 group-hover:opacity-100 text-green-600" />
                                                             </button>
@@ -1013,10 +1013,10 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                                                 onClick={() => handleAddMapping(mapping.path)}
                                                                 className="flex items-center justify-between w-full text-left px-2 py-1.5 text-xs bg-accent/30 hover:bg-accent rounded group"
                                                             >
-                                                                <div className="flex items-center gap-2">
-                                                                    <code className="font-mono text-blue-600">{mapping.path}</code>
+                                                                <div className="grid grid-cols-[auto_auto_1fr] items-start gap-2 min-w-0">
+                                                                    <code className="font-mono text-blue-600 break-all">{mapping.path}</code>
                                                                     <span className="text-muted-foreground">→</span>
-                                                                    <span className="truncate max-w-[150px]">{String(mapping.value ?? 'null')}</span>
+                                                                    <span className="min-w-0 whitespace-pre-wrap break-words">{String(mapping.value ?? 'null')}</span>
                                                                 </div>
                                                                 <Plus className="w-3 h-3 opacity-0 group-hover:opacity-100 text-green-600" />
                                                             </button>
