@@ -8,6 +8,7 @@ import os
 import re
 import json
 import logging
+import time
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 
@@ -15,6 +16,13 @@ import aiohttp
 
 from src.tools.base import PostCallTool, ToolDefinition, ToolCategory, ToolPhase
 from src.tools.context import PostCallContext
+from src.tools.http.debug_trace import (
+    build_var_snapshot,
+    debug_enabled,
+    extract_used_brace_vars,
+    extract_used_env_vars,
+    preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +127,7 @@ class GenericWebhookTool(PostCallTool):
             return
         
         try:
+            started = time.monotonic()
             # Generate summary if requested and not already present
             if self.config.generate_summary and not context.summary:
                 context.summary = await self._generate_summary(context)
@@ -141,6 +150,34 @@ class GenericWebhookTool(PostCallTool):
             else:
                 # Default payload using context's to_payload_dict
                 payload = json.dumps(context.to_payload_dict())
+
+            if debug_enabled(logger):
+                used_brace = extract_used_brace_vars(
+                    self.config.url,
+                    *(self.config.headers or {}).values(),
+                    self.config.payload_template,
+                )
+                used_env = extract_used_env_vars(
+                    self.config.url,
+                    *(self.config.headers or {}).values(),
+                    self.config.payload_template,
+                )
+                values = context.to_payload_dict()
+                logger.debug(
+                    "[HTTP_TOOL_TRACE] request_resolved post_call tool=%s method=%s url=%s headers=%s payload=%s vars=%s call_id=%s",
+                    self.config.name,
+                    self.config.method,
+                    url,
+                    headers,
+                    preview(payload),
+                    build_var_snapshot(
+                        used_brace_vars=used_brace,
+                        used_env_vars=used_env,
+                        values=values,
+                        env=os.environ,
+                    ),
+                    getattr(context, "call_id", None),
+                )
             
             logger.info(f"Sending webhook: {self.config.name} {self.config.method} {self._redact_url(url)}")
             
@@ -154,18 +191,40 @@ class GenericWebhookTool(PostCallTool):
                     data=payload,
                 ) as response:
                     status = response.status
+                    body_text = ""
+                    try:
+                        body_text = await response.text()
+                    except Exception as e:
+                        logger.debug(f"Failed to read response body: {e}")
                     
                     if 200 <= status < 300:
                         logger.info(f"Webhook sent successfully: {self.config.name} status={status}")
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_ok post_call tool=%s status=%s elapsed_ms=%s body_preview=%s call_id=%s",
+                                self.config.name,
+                                status,
+                                elapsed_ms,
+                                preview(body_text),
+                                getattr(context, "call_id", None),
+                            )
                     else:
                         # Log but don't fail (fire-and-forget)
-                        body_preview = ""
-                        try:
-                            body = await response.text()
-                            body_preview = body[:200] if body else ""
-                        except Exception as e:
-                            logger.debug(f"Failed to read response body: {e}")
-                        logger.warning(f"Webhook returned non-2xx: {self.config.name} status={status} body={body_preview}")
+                        body_preview = (body_text[:200] if body_text else "")
+                        logger.warning(
+                            f"Webhook returned non-2xx: {self.config.name} status={status} body={body_preview}"
+                        )
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_non_2xx post_call tool=%s status=%s elapsed_ms=%s body_preview=%s call_id=%s",
+                                self.config.name,
+                                status,
+                                elapsed_ms,
+                                preview(body_text),
+                                getattr(context, "call_id", None),
+                            )
         
         except aiohttp.ClientError as e:
             logger.warning(f"Webhook request failed: {self.config.name} error={e}")

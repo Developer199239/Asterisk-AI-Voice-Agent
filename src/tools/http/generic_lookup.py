@@ -9,6 +9,7 @@ import os
 import re
 import json
 import logging
+import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
@@ -16,6 +17,13 @@ import aiohttp
 
 from src.tools.base import PreCallTool, ToolDefinition, ToolCategory, ToolPhase
 from src.tools.context import PreCallContext
+from src.tools.http.debug_trace import (
+    build_var_snapshot,
+    debug_enabled,
+    extract_used_brace_vars,
+    extract_used_env_vars,
+    preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +119,7 @@ class GenericHTTPLookupTool(PreCallTool):
             return results
         
         try:
+            started = time.monotonic()
             # Build request
             url = self._substitute_variables(self.config.url, context)
             headers = {
@@ -125,7 +134,45 @@ class GenericHTTPLookupTool(PreCallTool):
             body = None
             if self.config.body_template:
                 body = self._substitute_variables(self.config.body_template, context)
-            
+
+            if debug_enabled(logger):
+                used_brace = extract_used_brace_vars(
+                    self.config.url,
+                    *(self.config.headers or {}).values(),
+                    *(self.config.query_params or {}).values(),
+                    self.config.body_template,
+                )
+                used_env = extract_used_env_vars(
+                    self.config.url,
+                    *(self.config.headers or {}).values(),
+                    *(self.config.query_params or {}).values(),
+                    self.config.body_template,
+                )
+                ctx_values = {
+                    "caller_number": getattr(context, "caller_number", None),
+                    "called_number": getattr(context, "called_number", None),
+                    "caller_name": getattr(context, "caller_name", None),
+                    "context_name": getattr(context, "context_name", None),
+                    "call_id": getattr(context, "call_id", None),
+                    "campaign_id": getattr(context, "campaign_id", None),
+                    "lead_id": getattr(context, "lead_id", None),
+                }
+                logger.debug(
+                    "[HTTP_TOOL_TRACE] request_resolved pre_call tool=%s method=%s url=%s headers=%s params=%s body=%s vars=%s",
+                    self.config.name,
+                    self.config.method,
+                    url,
+                    headers,
+                    params,
+                    preview(body),
+                    build_var_snapshot(
+                        used_brace_vars=used_brace,
+                        used_env_vars=used_env,
+                        values=ctx_values,
+                        env=os.environ,
+                    ),
+                )
+
             logger.info(f"Executing HTTP lookup: {self.config.name} {self.config.method} {self._redact_url(url)}")
             
             # Make request
@@ -140,6 +187,20 @@ class GenericHTTPLookupTool(PreCallTool):
                 ) as response:
                     if response.status != 200:
                         logger.warning(f"HTTP lookup returned non-200: {self.config.name} status={response.status}")
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            body_preview = ""
+                            try:
+                                body_preview = preview(await response.content.read(4096))
+                            except Exception as e:
+                                body_preview = f"<failed to read body: {e}>"
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_non_200 pre_call tool=%s status=%s elapsed_ms=%s body_preview=%s",
+                                self.config.name,
+                                response.status,
+                                elapsed_ms,
+                                body_preview,
+                            )
                         return results
 
                     # Check declared response size (best-effort) but always enforce actual size below.
@@ -158,6 +219,7 @@ class GenericHTTPLookupTool(PreCallTool):
                             pass
 
                     # Read body with enforced size limit (do not trust Content-Length header).
+                    body_bytes = b""
                     try:
                         max_bytes = int(self.config.max_response_size_bytes or 0)
                         if max_bytes <= 0:
@@ -188,13 +250,46 @@ class GenericHTTPLookupTool(PreCallTool):
                         data = json.loads(body_bytes.decode(charset, errors="replace"))
                     except json.JSONDecodeError as e:
                         logger.warning(f"Failed to parse JSON response: {self.config.name} error={e}")
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_invalid_json pre_call tool=%s status=%s elapsed_ms=%s body_len=%s body_preview=%s",
+                                self.config.name,
+                                response.status,
+                                elapsed_ms,
+                                len(body_bytes or b""),
+                                preview(body_bytes),
+                            )
                         return results
                     except Exception as e:
                         logger.warning(f"Failed to read response: {self.config.name} error={e}")
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_read_failed pre_call tool=%s status=%s elapsed_ms=%s error=%s body_len=%s body_preview=%s",
+                                self.config.name,
+                                getattr(response, "status", None),
+                                elapsed_ms,
+                                str(e),
+                                len(body_bytes or b""),
+                                preview(body_bytes),
+                            )
                         return results
                     
                     # Extract output variables
                     results = self._extract_output_variables(data)
+
+                    if debug_enabled(logger):
+                        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                        logger.debug(
+                            "[HTTP_TOOL_TRACE] response_ok pre_call tool=%s status=%s elapsed_ms=%s body_len=%s body_preview=%s outputs=%s",
+                            self.config.name,
+                            response.status,
+                            elapsed_ms,
+                            len(body_bytes or b""),
+                            preview(body_bytes),
+                            results,
+                        )
                     
                     logger.info(f"HTTP lookup completed: {self.config.name} status={response.status} keys={list(results.keys())}")
         
