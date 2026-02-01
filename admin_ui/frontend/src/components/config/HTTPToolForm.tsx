@@ -9,6 +9,7 @@ interface HTTPToolFormProps {
     config: any;
     onChange: (newConfig: any) => void;
     phase: 'pre_call' | 'in_call' | 'post_call';
+    contexts?: Record<string, any>;  // P1: For in-use check on delete
 }
 
 interface ToolParameter {
@@ -80,7 +81,7 @@ const DEFAULT_TEST_VALUES: Record<string, string> = {
     lead_id: 'test-lead-123',
 };
 
-const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
+const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) => {
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
     const [toolForm, setToolForm] = useState<any>({});
@@ -169,7 +170,25 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     };
 
     const handleDeleteTool = (key: string) => {
-        if (!confirm(`Delete ${key}?`)) return;
+        // P1: Check if tool is used by any context (for in_call tools)
+        if (phase === 'in_call' && contexts) {
+            const usingContexts = Object.entries(contexts)
+                .filter(([_, ctx]) => {
+                    const httpTools = (ctx as any).in_call_http_tools || [];
+                    return httpTools.includes(key);
+                })
+                .map(([ctxName]) => ctxName);
+            
+            if (usingContexts.length > 0) {
+                const warningMsg = `HTTP tool "${key}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nDeleting will remove it from those contexts. Continue?`;
+                if (!confirm(warningMsg)) return;
+            } else {
+                if (!confirm(`Delete ${key}?`)) return;
+            }
+        } else {
+            if (!confirm(`Delete ${key}?`)) return;
+        }
+
         const updated = { ...config };
         delete updated[key];
         onChange(updated);
