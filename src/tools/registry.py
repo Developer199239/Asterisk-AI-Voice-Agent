@@ -527,8 +527,10 @@ After outputting a tool call, provide a brief spoken response.
             if not isinstance(tool_config, dict):
                 continue
             
-            kind = tool_config.get('kind', 'in_call_http_lookup')
-            
+            kind = tool_config.get('kind')
+            if not kind:
+                continue
+
             if kind == 'in_call_http_lookup':
                 try:
                     from src.tools.http.in_call_lookup import create_in_call_http_tool
