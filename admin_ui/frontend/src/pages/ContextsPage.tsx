@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, MessageSquare, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { YamlErrorBanner } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
@@ -12,6 +13,14 @@ const ContextsPage = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [yamlError, setYamlError] = useState<{
+        type?: string;
+        message?: string;
+        line?: number;
+        column?: number;
+        problem?: string;
+        snippet?: string;
+    } | null>(null);
     const [availableTools, setAvailableTools] = useState<string[]>([]);
     const [toolEnabledMap, setToolEnabledMap] = useState<Record<string, boolean>>({});
     const [editingContext, setEditingContext] = useState<string | null>(null);
@@ -28,17 +37,28 @@ const ContextsPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
-            await fetchMcpTools(parsed || {});
-            setError(null);
+            // Check if there's a YAML error in the response (content still provided for Raw YAML editing)
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+                setError(null);
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                await fetchMcpTools(parsed || {});
+                setError(null);
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             const status = (err as any)?.response?.status;
+            
             if (status === 401) {
                 setError('Not authenticated. Please refresh and log in again.');
+                setYamlError(null);
             } else {
                 setError('Failed to load configuration. Check backend logs and try again.');
+                setYamlError(null);
             }
         } finally {
             setLoading(false);
@@ -51,6 +71,20 @@ const ContextsPage = () => {
             const routes = res.data?.tool_routes || {};
             const mcpTools = Object.keys(routes).filter((t) => typeof t === 'string' && t.startsWith('mcp_'));
 
+            // Built-in (Python) in-call tools that may not appear under `tools:` in YAML unless
+            // explicitly configured/disabled. Keep this list broad so users can enable tools
+            // per-context from the UI.
+            const builtinInCallTools = [
+                'transfer',
+                'attended_transfer',
+                'cancel_transfer',
+                'hangup_call',
+                'leave_voicemail',
+                'send_email_summary',
+                'request_transcript',
+                'check_extension_status',
+            ];
+
             const toolsBlock = parsedConfig?.tools || {};
             const yamlToolEntries = Object.entries(toolsBlock)
                 .filter(([k, v]) => {
@@ -58,32 +92,26 @@ const ContextsPage = () => {
                     if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
                     // Tool configs are dict-like and typically include an `enabled` flag.
                     // Exclude tool-system settings like ai_identity/extensions/default_action_timeout.
-                    return Object.prototype.hasOwnProperty.call(v, 'enabled');
+                    if (!Object.prototype.hasOwnProperty.call(v, 'enabled')) return false;
+                    // Exclude HTTP phase tools (pre_call/post_call) - these are shown in separate sections
+                    const kind = (v as any)?.kind;
+                    if (kind === 'generic_http_lookup' || kind === 'generic_webhook') return false;
+                    return true;
                 })
                 .map(([k, v]) => ({ name: k, enabled: (v as any)?.enabled !== false }));
             const toolsFromYaml = yamlToolEntries.map((t) => t.name);
-            const fallbackBuiltin = [
-                'transfer',
-                'attended_transfer',
-                'cancel_transfer',
-                'hangup_call',
-                'leave_voicemail',
-                'send_email_summary',
-                'request_transcript'
-            ];
 
             const merged = Array.from(new Set([
-                ...(toolsFromYaml.length > 0 ? toolsFromYaml : fallbackBuiltin),
+                ...builtinInCallTools,
+                ...toolsFromYaml,
                 ...mcpTools
             ])).sort();
             setAvailableTools(merged);
             const nextMap: Record<string, boolean> = {};
             yamlToolEntries.forEach((t) => { nextMap[t.name] = t.enabled; });
             mcpTools.forEach((t) => { nextMap[t] = true; });
-            // If we are falling back (no tools in YAML), assume enabled unless selected otherwise.
-            if (toolsFromYaml.length === 0) {
-                fallbackBuiltin.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
-            }
+            // Assume built-in tools are enabled unless configured otherwise in YAML.
+            builtinInCallTools.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
             setToolEnabledMap(nextMap);
         } catch (err) {
             // Non-fatal: MCP may be disabled or ai-engine down. Fall back to YAML tools.
@@ -92,25 +120,28 @@ const ContextsPage = () => {
                 .filter(([k, v]) => {
                     if (typeof k !== 'string' || !k) return false;
                     if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
-                    return Object.prototype.hasOwnProperty.call(v, 'enabled');
+                    if (!Object.prototype.hasOwnProperty.call(v, 'enabled')) return false;
+                    // Exclude HTTP phase tools - they have separate UI sections
+                    const kind = (v as any)?.kind;
+                    if (kind === 'generic_http_lookup' || kind === 'generic_webhook') return false;
+                    return true;
                 })
                 .map(([k, v]) => ({ name: k, enabled: (v as any)?.enabled !== false }));
             const toolsFromYaml = yamlToolEntries.map((t) => t.name);
-            const fallbackBuiltin = [
+            const builtinInCallTools = [
                 'transfer',
                 'attended_transfer',
                 'cancel_transfer',
                 'hangup_call',
                 'leave_voicemail',
                 'send_email_summary',
-                'request_transcript'
+                'request_transcript',
+                'check_extension_status',
             ];
-            setAvailableTools((toolsFromYaml.length > 0 ? toolsFromYaml : fallbackBuiltin).slice().sort());
+            setAvailableTools(Array.from(new Set([...builtinInCallTools, ...toolsFromYaml])).slice().sort());
             const nextMap: Record<string, boolean> = {};
             yamlToolEntries.forEach((t) => { nextMap[t.name] = t.enabled; });
-            if (toolsFromYaml.length === 0) {
-                fallbackBuiltin.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
-            }
+            builtinInCallTools.forEach((t) => { if (nextMap[t] == null) nextMap[t] = true; });
             setToolEnabledMap(nextMap);
         }
     };
@@ -263,6 +294,25 @@ const ContextsPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (yamlError) {
+        return (
+            <div className="space-y-4 p-6">
+                <YamlErrorBanner error={yamlError} />
+                <div className="flex items-center justify-between rounded-md border border-red-500/30 bg-red-500/10 p-4 text-red-700 dark:text-red-400">
+                    <div className="flex items-center">
+                        <AlertCircle className="mr-2 h-5 w-5" />
+                        Context editing is disabled while `config/ai-agent.yaml` has YAML errors. Fix the YAML and reload.
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                    >
+                        Reload
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     const profilesBlock = config.profiles || {};
     const defaultProfileName = (typeof profilesBlock.default === 'string' && profilesBlock.default) ? profilesBlock.default : '';
@@ -440,6 +490,7 @@ const ContextsPage = () => {
                     toolEnabledMap={toolEnabledMap}
                     availableProfiles={availableProfiles}
                     defaultProfileName={defaultProfileName}
+                    httpTools={{...config.tools, ...config.in_call_tools}}
                     onChange={setContextForm}
                     isNew={isNewContext}
                 />

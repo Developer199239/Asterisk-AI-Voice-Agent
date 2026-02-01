@@ -7,59 +7,15 @@ Allows full AI agents to end calls when appropriate (e.g., after goodbye).
 from typing import Dict, Any
 from src.tools.base import Tool, ToolDefinition, ToolParameter, ToolCategory
 from src.tools.context import ToolExecutionContext
+from src.tools.telephony.hangup_policy import (
+    normalize_hangup_policy,
+    text_contains_marker,
+)
 import structlog
 import re
 import time
 
 logger = structlog.get_logger(__name__)
-
-_AFFIRMATIVE_MARKERS = (
-    "yes",
-    "yeah",
-    "yep",
-    "correct",
-    "that's correct",
-    "thats correct",
-    "that's right",
-    "thats right",
-    "right",
-    "exactly",
-	"affirmative",
-)
-
-_NEGATIVE_MARKERS = (
-    "no",
-    "nope",
-    "nah",
-    "negative",
-    "don't",
-    "dont",
-    "do not",
-    "not",
-    "not needed",
-    "no need",
-    "no thanks",
-    "no thank you",
-    "decline",
-    "skip",
-)
-
-_END_CALL_MARKERS = (
-    "bye",
-    "goodbye",
-    "hang up",
-    "hangup",
-    "end the call",
-    "end call",
-    "that's all",
-    "thats all",
-    "nothing else",
-    "no thanks",
-    "no thank you",
-    "i'm done",
-    "im done",
-    "all set",
-)
 
 
 def _norm(text: str) -> str:
@@ -78,13 +34,13 @@ def _looks_like_emailish(text: str) -> bool:
     return False
 
 
-def _is_affirmative(text: str) -> bool:
+def _is_affirmative(text: str, markers) -> bool:
     t = _norm(text)
     if not t:
         return False
-    return any(m in t for m in _AFFIRMATIVE_MARKERS)
+    return any(m in t for m in markers)
 
-def _is_negative(text: str) -> bool:
+def _is_negative(text: str, markers) -> bool:
     t = _norm(text)
     if not t:
         return False
@@ -94,14 +50,11 @@ def _is_negative(text: str) -> bool:
         return True
     if t in ("no", "nope", "nah", "negative"):
         return True
-    return any(m in t for m in _NEGATIVE_MARKERS)
+    return any(m in t for m in markers)
 
 
-def _is_end_call_intent(text: str) -> bool:
-    t = _norm(text)
-    if not t:
-        return False
-    return any(m in t for m in _END_CALL_MARKERS)
+def _is_end_call_intent(text: str, markers) -> bool:
+    return text_contains_marker(text, markers)
 
 
 def _assistant_is_confirming_contact(text: str) -> bool:
@@ -180,6 +133,18 @@ class HangupCallTool(Tool):
             }
         """
         farewell = parameters.get('farewell_message')
+
+        try:
+            policy_raw = context.get_config_value("tools.hangup_call.policy", {}) or {}
+        except Exception:
+            policy_raw = {}
+        policy = normalize_hangup_policy(policy_raw)
+        markers = policy.get("markers") or {}
+        affirmative_markers = markers.get("affirmative", [])
+        negative_markers = markers.get("negative", [])
+        end_call_markers = markers.get("end_call", [])
+        enforce_transcript_offer = bool(policy.get("enforce_transcript_offer", True))
+        block_during_contact_capture = bool(policy.get("block_during_contact_capture", True))
         
         if not farewell:
             # Use default from config or hardcoded
@@ -226,7 +191,7 @@ class HangupCallTool(Tool):
                 except Exception:
                     request_transcript_allowed = True
 
-                if transcript_enabled and request_transcript_allowed:
+                if enforce_transcript_offer and transcript_enabled and request_transcript_allowed:
                     # Provider-agnostic transcript offer state:
                     # Some providers do not reliably persist assistant transcripts into conversation_history
                     # before the model triggers the next tool call. Rely on an explicit per-call flag
@@ -263,10 +228,10 @@ class HangupCallTool(Tool):
 
                     if offered and pending:
                         # Interpret the most recent user utterance as the transcript decision when possible.
-                        if _is_affirmative(last_user_text):
+                        if _is_affirmative(last_user_text, affirmative_markers):
                             accepted = True
                             pending = False
-                        elif _is_negative(last_user_text):
+                        elif _is_negative(last_user_text, negative_markers):
                             declined = True
                             pending = False
 
@@ -351,12 +316,14 @@ class HangupCallTool(Tool):
                             "ai_should_speak": True,
                         }
 
-                pending_contact_confirmation = (
-                    _looks_like_emailish(last_user_text)
-                    and not _is_affirmative(last_user_text)
-                    and _assistant_is_confirming_contact(last_assistant_text)
-                    and not _is_end_call_intent(last_user_text)
-                )
+                pending_contact_confirmation = False
+                if block_during_contact_capture:
+                    pending_contact_confirmation = (
+                        _looks_like_emailish(last_user_text)
+                        and not _is_affirmative(last_user_text, affirmative_markers)
+                        and _assistant_is_confirming_contact(last_assistant_text)
+                        and not _is_end_call_intent(last_user_text, end_call_markers)
+                    )
                 if pending_contact_confirmation:
                     logger.info(
                         "📞 Hangup blocked: pending contact confirmation",

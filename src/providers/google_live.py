@@ -25,7 +25,7 @@ import time
 import struct
 import audioop
 import re
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 from collections import deque
 
 import websockets
@@ -42,12 +42,39 @@ from ..audio import (
     resample_audio,
 )
 from ..config import GoogleProviderConfig
+from src.tools.telephony.hangup_policy import normalize_hangup_policy
 
 # Tool calling support
 from src.tools.registry import tool_registry
 from src.tools.adapters.google import GoogleToolAdapter
 
 logger = get_logger(__name__)
+
+
+def _merge_transcription_fragment(buffer: str, fragment: str, last_fragment: str) -> Tuple[str, str]:
+    """
+    Merge a transcription fragment into an existing buffer.
+
+    Some providers repeat the same fragment or send cumulative text. This helper keeps the
+    resulting transcript stable (prevents duplicated phrases like "Goodbye!Goodbye!").
+    """
+    fragment = str(fragment or "")
+    if not fragment:
+        return buffer, last_fragment
+
+    # Drop exact duplicate fragment repeats.
+    if fragment == last_fragment:
+        return buffer, last_fragment
+
+    # If the provider sends cumulative text (new fragment contains the full buffer), replace.
+    if buffer and fragment.startswith(buffer):
+        return fragment, fragment
+
+    # If we somehow receive a fragment that is already fully present as the suffix, ignore.
+    if buffer and buffer.endswith(fragment):
+        return buffer, fragment
+
+    return f"{buffer}{fragment}", fragment
 
 # Constants
 _GEMINI_INPUT_RATE = 16000  # Gemini requires 16kHz input
@@ -90,9 +117,11 @@ class GoogleLiveProvider(AIProviderInterface):
         config: GoogleProviderConfig,
         on_event,
         gating_manager=None,
+        hangup_policy: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(on_event)
         self.config = config
+        self._hangup_policy = normalize_hangup_policy(hangup_policy or {})
         self.websocket: Optional[ClientConnection] = None
         self._receive_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
@@ -137,6 +166,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._model_text_buffer: str = ""
         self._last_final_user_text: str = ""
         self._last_final_assistant_text: str = ""
+        self._last_input_transcription_fragment: str = ""
+        self._last_output_transcription_fragment: str = ""
         
         # Turn latency tracking (Milestone 21 - Call History)
         self._turn_start_time: Optional[float] = None
@@ -152,6 +183,62 @@ class GoogleLiveProvider(AIProviderInterface):
         self._session_gauge_incremented: bool = False
         self._ws_unavailable_logged: bool = False
         self._ws_send_close_logged: bool = False
+        # Diagnostics: keep a small ring buffer of outbound message summaries
+        # to help explain server-initiated closes (e.g., 1008 policy violations).
+        self._outbound_summaries: deque[Dict[str, Any]] = deque(maxlen=12)
+
+    def _summarize_outbound(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a compact, PII-safe summary of an outbound message.
+
+        Never include raw text content or tool response payloads; only include
+        message type, key presence, and basic sizing/shape.
+        """
+        try:
+            top_keys = list(message.keys()) if isinstance(message, dict) else []
+            msg_type = top_keys[0] if top_keys else "unknown"
+            summary: Dict[str, Any] = {"type": msg_type, "keys": top_keys}
+
+            if msg_type == "setup":
+                setup = message.get("setup") or {}
+                summary["setup_keys"] = list((setup or {}).keys())[:24]
+                summary["model"] = (setup or {}).get("model")
+                summary["has_tools"] = bool((setup or {}).get("tools"))
+                summary["has_input_transcription"] = "inputAudioTranscription" in (setup or {})
+                summary["has_output_transcription"] = "outputAudioTranscription" in (setup or {})
+            elif msg_type == "realtimeInput":
+                rt = message.get("realtimeInput") or {}
+                audio = (rt or {}).get("audio") or {}
+                # data is base64; include only length.
+                summary["mimeType"] = audio.get("mimeType")
+                data = audio.get("data")
+                if isinstance(data, str):
+                    summary["data_len"] = len(data)
+            elif msg_type == "clientContent":
+                cc = message.get("clientContent") or {}
+                summary["turnComplete"] = bool(cc.get("turnComplete"))
+                turns = cc.get("turns") or []
+                if isinstance(turns, list) and turns:
+                    first = turns[0] if isinstance(turns[0], dict) else {}
+                    summary["role"] = first.get("role")
+                    # Only include the number of parts; do not include text.
+                    parts = first.get("parts") or []
+                    if isinstance(parts, list):
+                        summary["parts"] = len(parts)
+            elif msg_type == "toolResponse":
+                tr = message.get("toolResponse") or {}
+                fr = tr.get("functionResponses") or []
+                summary["functionResponses"] = len(fr) if isinstance(fr, list) else 0
+                if isinstance(fr, list) and fr:
+                    names = []
+                    for item in fr[:4]:
+                        if isinstance(item, dict) and item.get("name"):
+                            names.append(str(item.get("name")))
+                    if names:
+                        summary["functions"] = names
+            return summary
+        except Exception:
+            return {"type": "unknown"}
 
     def _mark_ws_disconnected(self) -> None:
         self._setup_complete = False
@@ -167,54 +254,21 @@ class GoogleLiveProvider(AIProviderInterface):
     def _norm_text(value: str) -> str:
         return re.sub(r"\s+", " ", (value or "").strip().lower())
 
-    @classmethod
-    def _detect_user_end_intent(cls, text: str) -> Optional[str]:
-        t = cls._norm_text(text)
+    def _detect_user_end_intent(self, text: str) -> Optional[str]:
+        t = self._norm_text(text)
         if not t:
             return None
-        markers = (
-            "no transcript",
-            "no transcript needed",
-            "don't send a transcript",
-            "do not send a transcript",
-            "no need for a transcript",
-            "no thanks",
-            "no thank you",
-            "that's all",
-            "that is all",
-            "that's it",
-            "that is it",
-            "nothing else",
-            "all set",
-            "all good",
-            "end the call",
-            "end call",
-            "hang up",
-            "hangup",
-            "goodbye",
-            "bye",
-        )
+        markers = (self._hangup_policy.get("markers") or {}).get("end_call", [])
         for m in markers:
             if m in t:
                 return m
         return None
 
-    @classmethod
-    def _detect_assistant_farewell(cls, text: str) -> Optional[str]:
-        t = cls._norm_text(text)
+    def _detect_assistant_farewell(self, text: str) -> Optional[str]:
+        t = self._norm_text(text)
         if not t:
             return None
-        markers = (
-            "goodbye",
-            "bye",
-            "thank you for calling",
-            "thanks for calling",
-            "have a great day",
-            "have a good day",
-            "take care",
-            "ending the call",
-            "i'll let you go",
-        )
+        markers = (self._hangup_policy.get("markers") or {}).get("assistant_farewell", [])
         for m in markers:
             if m in t:
                 return m
@@ -450,6 +504,13 @@ class GoogleLiveProvider(AIProviderInterface):
         self._ws_unavailable_logged = False
         self._ws_send_close_logged = False
         self._hangup_ready_emitted = False
+        self._input_transcription_buffer = ""
+        self._output_transcription_buffer = ""
+        self._model_text_buffer = ""
+        self._last_final_user_text = ""
+        self._last_final_assistant_text = ""
+        self._last_input_transcription_fragment = ""
+        self._last_output_transcription_fragment = ""
         # Per-call tool allowlist (contexts are the source of truth).
         # Missing/None is treated as [] for safety.
         if context and "tools" in context:
@@ -460,7 +521,7 @@ class GoogleLiveProvider(AIProviderInterface):
         logger.info(
             "Starting Google Live session",
             call_id=call_id,
-            model=self.config.llm_model,
+            model=self._normalize_model_name(self.config.llm_model),
         )
 
         # Build WebSocket URL with API key
@@ -545,6 +606,16 @@ class GoogleLiveProvider(AIProviderInterface):
             await self.stop_session()
             raise
 
+    @staticmethod
+    def _normalize_model_name(model: Optional[str]) -> str:
+        """
+        Normalize model identifiers for compatibility with older UI/config options.
+        """
+        m = (model or "").strip()
+        if m == "gemini-2.5-flash-native-audio-latest":
+            return "gemini-2.5-flash-native-audio-preview-12-2025"
+        return m or "gemini-2.5-flash-native-audio-preview-12-2025"
+
     async def _send_setup(self, context: Optional[Dict[str, Any]]) -> None:
         """Send session setup message to Gemini Live API."""
         # Use instructions from config (like OpenAI Realtime pattern)
@@ -602,7 +673,7 @@ class GoogleLiveProvider(AIProviderInterface):
 
         # Setup message
         # Strip any accidental "models/" prefix from config to avoid models/models/...
-        model_name = self.config.llm_model
+        model_name = self._normalize_model_name(self.config.llm_model)
         if model_name.startswith("models/"):
             model_name = model_name[7:]  # Remove "models/" prefix
         
@@ -657,11 +728,21 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _send_message(self, message: Dict[str, Any]) -> None:
         """Send a message to Google Live API."""
+        summary = self._summarize_outbound(message)
+        try:
+            summary_with_ts = dict(summary)
+            summary_with_ts["ts_monotonic"] = round(time.monotonic(), 3)
+            self._outbound_summaries.append(summary_with_ts)
+        except Exception:
+            pass
+
         if not self._ws_is_open():
             if not self._ws_unavailable_logged:
                 logger.warning(
                     "Google Live websocket not open; dropping outbound message",
                     call_id=self._call_id,
+                    message_type=summary.get("type"),
+                    message_keys=summary.get("keys"),
                 )
                 self._ws_unavailable_logged = True
             return
@@ -680,6 +761,7 @@ class GoogleLiveProvider(AIProviderInterface):
                             call_id=self._call_id,
                             code=close_code,
                             reason=close_reason,
+                            last_outbound=summary,
                         )
                         self._ws_send_close_logged = True
                     self._mark_ws_disconnected()
@@ -688,6 +770,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     "Failed to send message to Google Live",
                     call_id=self._call_id,
                     error=str(e),
+                    last_outbound=summary,
                 )
                 # Prevent log storms when the socket is already closed.
                 if not self._ws_is_open():
@@ -895,6 +978,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 code=close_code,
                 meaning=close_meaning,
                 reason=close_reason,
+                outbound_tail=list(self._outbound_summaries),
             )
             
             # Specific guidance for common errors
@@ -908,6 +992,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     "Policy violation (1008)",
                     call_id=self._call_id,
                     hint=hint,
+                    outbound_tail=list(self._outbound_summaries),
                 )
             self._mark_ws_disconnected()
         except Exception as e:
@@ -1003,8 +1088,9 @@ class GoogleLiveProvider(AIProviderInterface):
                 # Measures: last user speech → first AI audio response
                 self._turn_start_time = time.time()
                 self._turn_first_audio_received = False
-                # Concatenate fragments (not replace!)
-                self._input_transcription_buffer += text
+                self._input_transcription_buffer, self._last_input_transcription_fragment = _merge_transcription_fragment(
+                    self._input_transcription_buffer, text, self._last_input_transcription_fragment
+                )
                 logger.debug(
                     "Google Live input transcription fragment",
                     call_id=self._call_id,
@@ -1028,8 +1114,9 @@ class GoogleLiveProvider(AIProviderInterface):
             text = output_transcription.get("text", "")
             if text:
                 self._turn_has_assistant_output = True
-                # Concatenate AI speech fragments
-                self._output_transcription_buffer += text
+                self._output_transcription_buffer, self._last_output_transcription_fragment = _merge_transcription_fragment(
+                    self._output_transcription_buffer, text, self._last_output_transcription_fragment
+                )
                 logger.debug(
                     "Google Live output transcription fragment",
                     call_id=self._call_id,
@@ -1065,6 +1152,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
                 await self._track_conversation_message("user", self._input_transcription_buffer)
                 self._input_transcription_buffer = ""
+                self._last_input_transcription_fragment = ""
 
             # Save AI speech if buffered (prefer outputTranscription, fall back to modelTurn.text)
             assistant_final_text = (self._output_transcription_buffer or self._model_text_buffer or "").strip()
@@ -1083,6 +1171,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     assistant_text=self._last_final_assistant_text,
                 )
                 self._output_transcription_buffer = ""
+                self._last_output_transcription_fragment = ""
                 self._model_text_buffer = ""
             
             # Reset turn tracking for next turn (Milestone 21)
@@ -1098,8 +1187,9 @@ class GoogleLiveProvider(AIProviderInterface):
             # Handle audio output
             if "inlineData" in part:
                 inline_data = part["inlineData"]
-                if inline_data.get("mimeType", "").startswith("audio/pcm"):
-                    await self._handle_audio_output(inline_data["data"])
+                mime_type = inline_data.get("mimeType", "") or ""
+                if mime_type.startswith("audio/pcm"):
+                    await self._handle_audio_output(inline_data["data"], mime_type=mime_type)
             
             # Handle text output (for debugging/logging only)
             # Note: We now get cleaner AI transcriptions from outputTranscription field
@@ -1189,12 +1279,30 @@ class GoogleLiveProvider(AIProviderInterface):
                 exc_info=True,
             )
 
-    async def _handle_audio_output(self, audio_b64: str) -> None:
+    @staticmethod
+    def _extract_pcm_rate_from_mime_type(mime_type: str) -> Optional[int]:
+        """
+        Parse an inlineData mimeType like:
+          - "audio/pcm;rate=24000"
+          - "audio/pcm; rate=24000"
+        """
+        if not mime_type:
+            return None
+        m = re.search(r"(?:^|;)\s*rate\s*=\s*(\d+)\s*(?:;|$)", mime_type, flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    async def _handle_audio_output(self, audio_b64: str, *, mime_type: str = "") -> None:
         """
         Handle audio output from Gemini.
 
         Args:
-            audio_b64: Base64-encoded PCM16 audio (at output_sample_rate_hz from config)
+            audio_b64: Base64-encoded PCM16 audio
+            mime_type: inlineData mimeType (may include `rate=...`)
         """
         try:
             self._last_audio_out_monotonic = time.monotonic()
@@ -1225,8 +1333,35 @@ class GoogleLiveProvider(AIProviderInterface):
             _GOOGLE_LIVE_AUDIO_RECEIVED.inc(len(pcm16_provider))
 
             # Resample from provider output rate to target wire rate (from config)
-            provider_output_rate = self.config.output_sample_rate_hz
+            configured_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+            provider_reported_output_rate = int(self._extract_pcm_rate_from_mime_type(mime_type) or 0)
+            provider_output_rate = provider_reported_output_rate or configured_output_rate
             target_rate = self.config.target_sample_rate_hz
+
+            # Log output rate negotiation once per call for RCA/debug (INFO-level).
+            try:
+                if not getattr(self, "_logged_output_rate_mismatch", False):
+                    self._logged_output_rate_mismatch = True
+                    if provider_reported_output_rate and configured_output_rate and provider_reported_output_rate != configured_output_rate:
+                        logger.warning(
+                            "Google Live output PCM rate differs from configured output_sample_rate_hz; using provider rate",
+                            call_id=self._call_id,
+                            provider="google_live",
+                            configured_output_sample_rate_hz=configured_output_rate,
+                            provider_reported_output_sample_rate_hz=provider_reported_output_rate,
+                            used_output_sample_rate_hz=provider_output_rate,
+                        )
+                    else:
+                        logger.info(
+                            "Google Live output PCM rate",
+                            call_id=self._call_id,
+                            provider="google_live",
+                            configured_output_sample_rate_hz=configured_output_rate,
+                            provider_reported_output_sample_rate_hz=(provider_reported_output_rate or None),
+                            used_output_sample_rate_hz=provider_output_rate,
+                        )
+            except Exception:
+                logger.debug("Failed to emit Google Live output PCM rate log", call_id=self._call_id, exc_info=True)
             
             if provider_output_rate != target_rate:
                 pcm16_target, _ = resample_audio(

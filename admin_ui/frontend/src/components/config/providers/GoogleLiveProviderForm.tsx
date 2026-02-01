@@ -10,6 +10,14 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
         onChange({ ...config, [field]: value });
     };
 
+    const selectedModel = (() => {
+        const raw = (config.llm_model || '').toString().trim();
+        if (raw === 'gemini-2.5-flash-native-audio-latest') {
+            return 'gemini-2.5-flash-native-audio-preview-12-2025';
+        }
+        return raw || 'gemini-2.5-flash-native-audio-preview-12-2025';
+    })();
+
     return (
         <div className="space-y-6">
             {/* Base URL Section */}
@@ -17,14 +25,14 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                 <h4 className="font-semibold mb-3">API Endpoint</h4>
                 <div className="space-y-2">
                     <label className="text-sm font-medium">
-                        WebSocket Base URL
-                        <span className="text-xs text-muted-foreground ml-2">(base_url)</span>
+                        WebSocket Endpoint
+                        <span className="text-xs text-muted-foreground ml-2">(websocket_endpoint)</span>
                     </label>
                     <input
                         type="text"
                         className="w-full p-2 rounded border border-input bg-background"
-                        value={config.base_url || 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'}
-                        onChange={(e) => handleChange('base_url', e.target.value)}
+                        value={config.websocket_endpoint || 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'}
+                        onChange={(e) => handleChange('websocket_endpoint', e.target.value)}
                         placeholder="wss://generativelanguage.googleapis.com/ws/..."
                     />
                     <p className="text-xs text-muted-foreground">
@@ -41,24 +49,20 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                         <label className="text-sm font-medium">LLM Model</label>
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.llm_model || 'gemini-2.0-flash-exp'}
+                            value={selectedModel}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
-                            <optgroup label="Gemini 2.5 (Latest)">
-                                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                                <option value="gemini-2.5-flash-exp">Gemini 2.5 Flash (Experimental)</option>
-                                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                            </optgroup>
-                            <optgroup label="Gemini 2.0">
-                                <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Experimental)</option>
-                                <option value="gemini-2.0-flash-thinking-exp">Gemini 2.0 Flash Thinking (Experimental)</option>
-                            </optgroup>
-                            <optgroup label="Gemini 1.5">
-                                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                                <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash-8B</option>
-                                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                            <optgroup label="Native Audio Models (Live API) - 24 Languages">
+                                <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
+                                <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
+                                <option value="gemini-2.5-flash-preview-native-audio-dialog">Gemini 2.5 Flash Native Audio Dialog (Preview)</option>
+                                <option value="gemini-2.5-flash-exp-native-audio-thinking-dialog">Gemini 2.5 Flash Native Audio Thinking Dialog (Experimental)</option>
                             </optgroup>
                         </select>
+                        <p className="text-xs text-muted-foreground">
+                            Supports 24 languages with seamless multilingual switching. 30 HD voices available.
+                            <a href="https://ai.google.dev/gemini-api/docs/live-guide" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">TTS Voice Name</label>
@@ -80,6 +84,10 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 <option value="Zephyr">Zephyr</option>
                             </optgroup>
                         </select>
+                        <p className="text-xs text-muted-foreground">
+                            Multilingual voices - auto-switches between 24 languages without configuration.
+                            <a href="https://firebase.google.com/docs/ai-logic/live-api/configuration" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Voice Docs ↗</a>
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Temperature</label>
@@ -90,6 +98,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             value={config.llm_temperature || 0.7}
                             onChange={(e) => handleChange('llm_temperature', parseFloat(e.target.value))}
                         />
+                        <p className="text-xs text-muted-foreground">
+                            Controls randomness (0.0-2.0). Lower = more focused, higher = more creative.
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Max Output Tokens</label>
@@ -99,6 +110,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             value={config.llm_max_output_tokens || 8192}
                             onChange={(e) => handleChange('llm_max_output_tokens', parseInt(e.target.value))}
                         />
+                        <p className="text-xs text-muted-foreground">
+                            Maximum tokens in response. Higher allows longer answers but increases latency.
+                        </p>
                     </div>
                 </div>
 
@@ -114,6 +128,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 value={config.llm_top_p || 0.95}
                                 onChange={(e) => handleChange('llm_top_p', parseFloat(e.target.value))}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Nucleus sampling (0.0-1.0). Considers tokens comprising top P probability mass.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Top K</label>
@@ -123,6 +140,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 value={config.llm_top_k || 40}
                                 onChange={(e) => handleChange('llm_top_k', parseInt(e.target.value))}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Limits to top K most likely tokens. Lower = more focused responses.
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -141,6 +161,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 <option value="pcm16">PCM16</option>
                                 <option value="linear16">Linear16</option>
                             </select>
+                            <p className="text-xs text-muted-foreground">
+                                Audio format from Asterisk. Use μ-law for standard telephony.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Input Sample Rate (Hz)</label>
@@ -150,6 +173,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 value={config.input_sample_rate_hz || 8000}
                                 onChange={(e) => handleChange('input_sample_rate_hz', parseInt(e.target.value))}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Sample rate from Asterisk. Standard telephony uses 8000 Hz.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Output Encoding</label>
@@ -162,6 +188,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 <option value="pcm16">PCM16</option>
                                 <option value="ulaw">μ-law</option>
                             </select>
+                            <p className="text-xs text-muted-foreground">
+                                Audio format from Google API. Linear16 provides best quality.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Output Sample Rate (Hz)</label>
@@ -171,6 +200,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 value={config.output_sample_rate_hz || 24000}
                                 onChange={(e) => handleChange('output_sample_rate_hz', parseInt(e.target.value))}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Sample rate from Google. 24000 Hz is native for Gemini audio.
+                            </p>
                         </div>
                         <div className="space-y-2">
                         <label className="text-sm font-medium">Target Encoding</label>
@@ -180,10 +212,12 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 onChange={(e) => handleChange('target_encoding', e.target.value)}
                             >
                                 <option value="ulaw">μ-law</option>
-                                <option value="mulaw">μ-law</option>
                                 <option value="pcm16">PCM16</option>
                                 <option value="linear16">Linear16</option>
                             </select>
+                            <p className="text-xs text-muted-foreground">
+                                Final format for playback to caller. Match your Asterisk codec.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Target Sample Rate (Hz)</label>
@@ -193,6 +227,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 value={config.target_sample_rate_hz || 8000}
                                 onChange={(e) => handleChange('target_sample_rate_hz', parseInt(e.target.value))}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Final sample rate for playback. 8000 Hz for standard telephony.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Provider Input Encoding</label>
@@ -204,6 +241,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 <option value="linear16">Linear16</option>
                                 <option value="pcm16">PCM16</option>
                             </select>
+                            <p className="text-xs text-muted-foreground">
+                                Format sent to Google API. Linear16 is required by Gemini.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Provider Input Sample Rate (Hz)</label>
@@ -213,6 +253,9 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 value={config.provider_input_sample_rate_hz || 16000}
                                 onChange={(e) => handleChange('provider_input_sample_rate_hz', parseInt(e.target.value))}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Sample rate for Google API input. 16000 Hz is optimal for Gemini STT.
+                            </p>
                         </div>
                     </div>
                 </div>

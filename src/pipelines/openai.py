@@ -453,18 +453,25 @@ class OpenAILLMAdapter(LLMComponent):
         # Tool support: tool allowlists are resolved per-context by the engine and passed in via `merged["tools"]`.
         # Do not gate tools by provider-level flags; contexts are the source of truth for tool availability.
         tools_list = merged.get("tools")
+        tool_schemas = []
         if tools_list and isinstance(tools_list, list):
-            tool_schemas = []
             for tool_name in tools_list:
                 tool = tool_registry.get(tool_name)
                 if tool:
+                    try:
+                        from src.tools.base import ToolPhase
+                        if getattr(tool.definition, "phase", ToolPhase.IN_CALL) != ToolPhase.IN_CALL:
+                            logger.warning("Skipping non-in-call tool in pipeline schema", tool=tool_name)
+                            continue
+                    except Exception:
+                        pass
                     tool_schemas.append(tool.definition.to_openai_schema())
                 else:
                     logger.warning("Tool not found in registry", tool=tool_name)
             
-            if tool_schemas:
-                payload["tools"] = tool_schemas
-                payload["tool_choice"] = "auto"
+        if tool_schemas:
+            payload["tools"] = tool_schemas
+            payload["tool_choice"] = "auto"
 
         headers = _make_http_headers(merged)
         url = merged["chat_base_url"].rstrip("/") + "/chat/completions"

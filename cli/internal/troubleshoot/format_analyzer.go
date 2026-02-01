@@ -2,36 +2,30 @@ package troubleshoot
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
-// AnalyzeFormatAlignment checks config vs runtime format/sampling alignment
-func AnalyzeFormatAlignment(metrics *CallMetrics) *FormatAlignment {
+// AnalyzeFormatAlignment checks config vs runtime format/sampling alignment.
+//
+// IMPORTANT: RCA is log-driven. We do not shell out to read config files here.
+// Config-side values should come from an explicit log header (RCA_CALL_START).
+func AnalyzeFormatAlignment(metrics *CallMetrics, header *RCAHeader) *FormatAlignment {
 	alignment := &FormatAlignment{
 		Issues: []string{},
 	}
 
-	// Load config from server
-	config := loadConfigFromServer()
-	if config != nil {
-		alignment.ConfigAudioTransport = strings.ToLower(strings.TrimSpace(getTopString(config, "audio_transport")))
-		alignment.ConfigAudioSocketFormat = getString(config, "audiosocket", "format")
-		alignment.ConfigSampleRate = getInt(config, "streaming", "sample_rate")
-
-		// Try to get provider settings (depends on active pipeline)
-		// This is a simplified version - production would need pipeline detection
-		if providers, ok := config["providers"].(map[string]interface{}); ok {
-			if deepgram, ok := providers["deepgram"].(map[string]interface{}); ok {
-				alignment.ConfigProviderInputFormat = getStringDirect(deepgram, "input_encoding")
-				alignment.ConfigProviderOutputFormat = getStringDirect(deepgram, "output_encoding")
-			}
-			if openai, ok := providers["openai_realtime"].(map[string]interface{}); ok {
-				alignment.ConfigProviderInputFormat = getStringDirect(openai, "input_encoding")
-				alignment.ConfigProviderOutputFormat = getStringDirect(openai, "output_encoding")
-			}
+	// Prefer config-side values from the log-emitted RCA header.
+	if header != nil {
+		alignment.ConfigAudioTransport = strings.ToLower(strings.TrimSpace(header.AudioTransport))
+		alignment.ConfigAudioSocketFormat = strings.TrimSpace(header.AudioSocketFormat)
+		alignment.ConfigSampleRate = header.StreamingSampleRate
+		if header.ProviderInputEncoding != "" {
+			alignment.ConfigProviderInputFormat = header.ProviderInputEncoding
+		} else if header.ProviderProviderInputEncoding != "" {
+			alignment.ConfigProviderInputFormat = header.ProviderProviderInputEncoding
+		}
+		if header.ProviderOutputEncoding != "" {
+			alignment.ConfigProviderOutputFormat = header.ProviderOutputEncoding
 		}
 	}
 
@@ -131,58 +125,6 @@ func normalizeFormat(format string) string {
 	default:
 		return format
 	}
-}
-
-func loadConfigFromServer() map[string]interface{} {
-	// Try to fetch config from Docker container
-	cmd := exec.Command("docker", "exec", "ai_engine", "cat", "/app/config/ai-agent.yaml")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil
-	}
-
-	var config map[string]interface{}
-	if err := yaml.Unmarshal(output, &config); err != nil {
-		return nil
-	}
-
-	return config
-}
-
-func getString(config map[string]interface{}, section, key string) string {
-	if sec, ok := config[section].(map[string]interface{}); ok {
-		if val, ok := sec[key].(string); ok {
-			return val
-		}
-	}
-	return ""
-}
-
-func getTopString(config map[string]interface{}, key string) string {
-	if val, ok := config[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-func getStringDirect(section map[string]interface{}, key string) string {
-	if val, ok := section[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-func getInt(config map[string]interface{}, section, key string) int {
-	if sec, ok := config[section].(map[string]interface{}); ok {
-		if val, ok := sec[key].(int); ok {
-			return val
-		}
-		// Try float64 (YAML numbers default to float64)
-		if val, ok := sec[key].(float64); ok {
-			return int(val)
-		}
-	}
-	return 0
 }
 
 // FormatMetricsForLLM formats format alignment info for LLM

@@ -3,6 +3,7 @@ import axios from 'axios';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, ArrowRight, Workflow, AlertTriangle, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
@@ -13,6 +14,7 @@ const PipelinesPage = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [editingPipeline, setEditingPipeline] = useState<string | null>(null);
     const [pipelineForm, setPipelineForm] = useState<any>({});
     const [isNewPipeline, setIsNewPipeline] = useState(false);
@@ -103,9 +105,16 @@ const PipelinesPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
-            setError(null);
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+                setError(null);
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setError(null);
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             const status = (err as any)?.response?.status;
@@ -114,6 +123,7 @@ const PipelinesPage = () => {
             } else {
                 setError('Failed to load configuration. Check backend logs and try again.');
             }
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -341,6 +351,25 @@ const PipelinesPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (yamlError) {
+        return (
+            <div className="space-y-4 p-6">
+                <YamlErrorBanner error={yamlError} />
+                <div className="flex items-center justify-between rounded-md border border-red-500/30 bg-red-500/10 p-4 text-red-700 dark:text-red-400">
+                    <div className="flex items-center">
+                        <AlertTriangle className="mr-2 h-5 w-5" />
+                        Pipeline editing is disabled while `config/ai-agent.yaml` has YAML errors. Fix the YAML and reload.
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                    >
+                        Reload
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6">

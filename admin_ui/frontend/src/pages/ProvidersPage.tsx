@@ -3,6 +3,7 @@ import axios from 'axios';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, Server, AlertCircle, CheckCircle2, Loader2, RefreshCw, Wand2, Star } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
@@ -24,6 +25,7 @@ const ProvidersPage: React.FC = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [editingProvider, setEditingProvider] = useState<string | null>(null);
     const [providerForm, setProviderForm] = useState<any>({});
     const [isNewProvider, setIsNewProvider] = useState(false);
@@ -41,9 +43,16 @@ const ProvidersPage: React.FC = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
-            setError(null);
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+                setError(null);
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setError(null);
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             const status = (err as any)?.response?.status;
@@ -52,6 +61,7 @@ const ProvidersPage: React.FC = () => {
             } else {
                 setError('Failed to load configuration. Check backend logs and try again.');
             }
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -159,7 +169,7 @@ const ProvidersPage: React.FC = () => {
         const templates: Record<string, any> = {
             openai_realtime: {
                 enabled: false,
-                model: 'gpt-4o-realtime-preview-2024-12-17',
+                model: 'gpt-realtime',
                 voice: 'alloy',
                 input_encoding: 'ulaw',
                 input_sample_rate_hz: 8000,
@@ -171,8 +181,8 @@ const ProvidersPage: React.FC = () => {
             },
             deepgram: {
                 enabled: false,
-                model: 'nova-2-general',
-                tts_model: 'aura-asteria-en',
+                model: 'nova-2-phonecall',
+                tts_model: 'aura-2-thalia-en',
                 input_encoding: 'mulaw',
                 input_sample_rate_hz: 8000,
                 output_encoding: 'mulaw',
@@ -185,7 +195,7 @@ const ProvidersPage: React.FC = () => {
                 type: 'full',
                 capabilities: ['stt', 'llm', 'tts'],
                 api_key: '${GOOGLE_API_KEY}',
-                llm_model: 'gemini-2.0-flash-exp',
+                llm_model: 'gemini-2.5-flash-native-audio-preview-12-2025',
                 input_encoding: 'ulaw',
                 input_sample_rate_hz: 8000,
                 target_encoding: 'ulaw',
@@ -460,6 +470,25 @@ const ProvidersPage: React.FC = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (yamlError) {
+        return (
+            <div className="space-y-4 p-6">
+                <YamlErrorBanner error={yamlError} />
+                <div className="flex items-center justify-between rounded-md border border-red-500/30 bg-red-500/10 p-4 text-red-700 dark:text-red-400">
+                    <div className="flex items-center">
+                        <AlertCircle className="mr-2 h-5 w-5" />
+                        Provider editing is disabled while `config/ai-agent.yaml` has YAML errors. Fix the YAML and reload.
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                    >
+                        Reload
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6">

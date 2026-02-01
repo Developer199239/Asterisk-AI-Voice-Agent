@@ -62,6 +62,7 @@ from .core.models import CallSession
 from .core.outbound_store import get_outbound_store
 from .utils.audio_capture import AudioCaptureManager
 from src.pipelines.base import LLMResponse
+from src.tools.telephony.hangup_policy import resolve_hangup_policy, text_contains_marker_word
 
 logger = get_logger(__name__)
 
@@ -184,6 +185,7 @@ _call_start_times = {}  # call_id -> timestamp
 # In-memory set to prevent duplicate cleanup (race condition guard)
 _cleanup_in_progress: set = set()  # call_ids currently being cleaned up
 _cleanup_completed_at: dict = {}  # call_id -> epoch seconds (best-effort dedupe for repeated StasisEnd/Destroyed)
+_cleanup_lock = asyncio.Lock()  # Lock to make cleanup guard atomic (AAVA-148)
 
 
 class Engine:
@@ -269,7 +271,7 @@ class Engine:
                 'low_watermark_ms': config.streaming.low_watermark_ms,
                 'provider_grace_ms': config.streaming.provider_grace_ms,
                 'logging_level': config.streaming.logging_level,
-                'greeting_rtp_wait_ms': int(getattr(config.streaming, 'greeting_rtp_wait_ms', 250)),
+                'greeting_rtp_wait_ms': int(getattr(config.streaming, 'greeting_rtp_wait_ms', 1000)),
                 'egress_swap_mode': getattr(config.streaming, 'egress_swap_mode', 'auto'),
                 'egress_force_mulaw': self._should_force_mulaw(
                     getattr(config.streaming, 'egress_force_mulaw', False),
@@ -475,6 +477,9 @@ class Engine:
         self._pipeline_tasks: Dict[str, asyncio.Task] = {}
         # Track calls where a pipeline was explicitly requested via AI_PROVIDER
         self._pipeline_forced: Dict[str, bool] = {}
+        # Cache for called_number variables (DIALED_NUMBER, __FROM_DID) from ChannelVarSet events
+        # These are set early in dialplan but may not be available via GET when StasisStart fires
+        self._called_number_cache: Dict[str, str] = {}  # channel_id -> called_number
         # Health server runner
         self._health_runner: Optional[web.AppRunner] = None
         # MCP client manager (experimental)
@@ -526,6 +531,14 @@ class Engine:
         try:
             from src.tools.registry import tool_registry
             tool_registry.initialize_default_tools()
+            # Initialize HTTP tools from config (Milestone 24)
+            tools_config = getattr(self.config, 'tools', None)
+            if tools_config:
+                tool_registry.initialize_http_tools_from_config(tools_config)
+            # Initialize in-call HTTP tools from config
+            in_call_tools_config = getattr(self.config, 'in_call_tools', None)
+            if in_call_tools_config:
+                tool_registry.initialize_in_call_http_tools_from_config(in_call_tools_config, cache_key="global")
             logger.info("✅ Tool calling system initialized", tool_count=len(tool_registry.list_tools()))
         except Exception as e:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
@@ -1941,17 +1954,24 @@ class Engine:
                         logger.error(f"Failed to build GoogleProviderConfig for google_live: {e}", exc_info=True)
                         continue
 
+                    hangup_policy = resolve_hangup_policy(getattr(self.config, "tools", None))
                     provider = GoogleLiveProvider(
                         google_cfg,
                         self.on_provider_event,
-                        gating_manager=self.audio_gating_manager
+                        gating_manager=self.audio_gating_manager,
+                        hangup_policy=hangup_policy,
                     )
                     # Set session store for turn latency tracking (Milestone 21)
                     provider._session_store = self.session_store
                     self.providers[name] = provider
                     # Per-call factory (supports concurrent calls).
                     self.provider_factories[name] = (
-                        lambda cfg=google_cfg: GoogleLiveProvider(self._clone_config(cfg), self.on_provider_event, gating_manager=self.audio_gating_manager)
+                        lambda cfg=google_cfg, policy=hangup_policy: GoogleLiveProvider(
+                            self._clone_config(cfg),
+                            self.on_provider_event,
+                            gating_manager=self.audio_gating_manager,
+                            hangup_policy=policy,
+                        )
                     )
                     logger.info(
                         "Provider 'google_live' loaded successfully",
@@ -2287,6 +2307,12 @@ class Engine:
                                bridge_id=bridge_id,
                                caller_channel_id=caller_channel_id)
                     
+                    # CRITICAL: Play brief silence to "kick" RTP flow from Asterisk
+                    # Without this, Asterisk won't send RTP to ExternalMedia until audio
+                    # flows through the bridge (which may not happen for external trunk calls
+                    # until the caller starts speaking). This fixes greeting cutoff issues.
+                    asyncio.create_task(self._kick_rtp_flow(bridge_id, caller_channel_id))
+                    
                     # Start the provider session now that media path is connected
                     if not session.provider_session_active:
                         await self._ensure_provider_session_started(caller_channel_id)
@@ -2304,6 +2330,53 @@ class Engine:
                         external_media_id=external_media_id, 
                         error=str(e), 
                         exc_info=True)
+
+    async def _kick_rtp_flow(self, bridge_id: str, caller_channel_id: str) -> None:
+        """
+        Play brief silence through the bridge to trigger Asterisk RTP flow.
+        
+        Without this, Asterisk won't send RTP to ExternalMedia until audio flows
+        through the bridge. For external trunk calls, this can take 5+ seconds
+        (until the caller starts speaking), causing greeting audio to be cut off.
+        
+        Playing a short silence (or any audio) through the bridge triggers Asterisk
+        to start sending RTP to all channels in the bridge, including ExternalMedia.
+        """
+        try:
+            # Play very short silence to kick RTP flow
+            # Using Asterisk's built-in silence sound - "silence/1" is 1 second
+            # We use a shorter one if available, but any audio will trigger the flow
+            response = await self.ari_client.send_command(
+                "POST",
+                f"bridges/{bridge_id}/play",
+                data={"media": "sound:silence/1"}
+            )
+            if response and response.get("id"):
+                logger.info(
+                    "🎯 RTP KICK - Played silence to trigger RTP flow",
+                    bridge_id=bridge_id,
+                    caller_channel_id=caller_channel_id,
+                    playback_id=response.get("id"),
+                )
+                # Stop the playback immediately - we just needed to kick the flow
+                await asyncio.sleep(0.1)  # Brief delay to ensure RTP starts
+                try:
+                    await self.ari_client.stop_playback(response["id"])
+                except Exception:
+                    pass  # Playback may have finished or been interrupted
+            else:
+                logger.warning(
+                    "🎯 RTP KICK - Failed to play silence for RTP flow kick",
+                    bridge_id=bridge_id,
+                    caller_channel_id=caller_channel_id,
+                )
+        except Exception as e:
+            logger.debug(
+                "RTP kick failed (non-fatal)",
+                bridge_id=bridge_id,
+                caller_channel_id=caller_channel_id,
+                error=str(e),
+            )
 
     async def _retry_attach_external_media_channel(
         self,
@@ -2341,6 +2414,8 @@ class Engine:
                             caller_channel_id=session.caller_channel_id,
                             attempt=attempt,
                         )
+                        # Kick RTP flow for retry path as well
+                        asyncio.create_task(self._kick_rtp_flow(session.bridge_id, session.caller_channel_id))
                         if not session.provider_session_active:
                             await self._ensure_provider_session_started(session.caller_channel_id)
                         return
@@ -2432,6 +2507,41 @@ class Engine:
             session.is_outbound = bool(is_outbound)
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
+
+            # Read called_number: cache (from ChannelVarSet events) > GET request > "unknown"
+            # The cache is populated from DIALED_NUMBER and __FROM_DID ChannelVarSet events
+            # which fire early in dialplan, before StasisStart. GET requests may fail due to timing.
+            called_number = self._called_number_cache.pop(caller_channel_id, None)
+            if called_number:
+                logger.debug("Called number resolved from cache",
+                            call_id=caller_channel_id,
+                            called_number=called_number)
+            else:
+                # Fallback: try GET request (may work for variables set just before Stasis)
+                for var_name in ["DIALED_NUMBER", "__FROM_DID"]:
+                    try:
+                        resp = await self.ari_client.send_command(
+                            "GET",
+                            f"channels/{caller_channel_id}/variable",
+                            params={"variable": var_name},
+                            tolerate_statuses=[404],
+                        )
+                        if isinstance(resp, dict):
+                            value = (resp.get("value") or "").strip()
+                            if value:
+                                called_number = value
+                                logger.debug("Called number resolved from channel variable GET",
+                                            call_id=caller_channel_id,
+                                            variable=var_name,
+                                            called_number=called_number)
+                                break
+                    except Exception:
+                        pass
+            session.called_number = called_number or "unknown"
+            await self._save_session(session)
+            logger.info("Called number captured",
+                       call_id=caller_channel_id,
+                       called_number=session.called_number)
 
             # If outbound, pull outbound metadata from channel vars (set during origination).
             if is_outbound:
@@ -2644,6 +2754,84 @@ class Engine:
                             call_id=caller_channel_id,
                             provider=session.provider_name,
                         )
+
+            # RCA: emit a deterministic per-call header snapshot for log-driven `agent rca`.
+            # This MUST be INFO-level so it is available even when debug logging is disabled.
+            try:
+                tp = getattr(session, "transport_profile", None)
+                tp_fmt = (
+                    getattr(tp, "wire_encoding", None)
+                    or getattr(tp, "format", None)
+                    or ""
+                )
+                tp_rate = int(
+                    getattr(tp, "wire_sample_rate", 0)
+                    or getattr(tp, "sample_rate", 0)
+                    or 0
+                )
+                tp_source = getattr(tp, "source", "") or ""
+                # TransportProfile from the TransportOrchestrator does not carry a `.source` field.
+                # Emit a stable source string so log-driven RCA can explain where the profile came from.
+                if not tp_source and tp is not None:
+                    if hasattr(tp, "wire_encoding") and hasattr(tp, "profile_name"):
+                        tp_source = "orchestrator"
+                    elif hasattr(tp, "format") and hasattr(tp, "sample_rate"):
+                        tp_source = "legacy"
+
+                streaming_cfg = getattr(self.config, "streaming", None)
+                vad_cfg = getattr(self.config, "vad", None)
+                barge_cfg = getattr(self.config, "barge_in", None)
+                audiosocket_cfg = getattr(self.config, "audiosocket", None)
+                external_media_cfg = getattr(self.config, "external_media", None)
+                provider_cfg = None
+                try:
+                    providers_map = getattr(self.config, "providers", {}) or {}
+                    if isinstance(providers_map, dict):
+                        provider_cfg = providers_map.get(getattr(session, "provider_name", "") or "")
+                except Exception:
+                    provider_cfg = None
+
+                logger.info(
+                    "RCA_CALL_START",
+                    call_id=caller_channel_id,
+                    caller_number=getattr(session, "caller_number", None) or "unknown",
+                    called_number=getattr(session, "called_number", None) or "unknown",
+                    caller_name=getattr(session, "caller_name", None) or "",
+                    context_name=getattr(session, "context_name", None) or "",
+                    provider_name=getattr(session, "provider_name", None) or "",
+                    pipeline_name=getattr(session, "pipeline_name", None) or "",
+                    audio_transport=getattr(self.config, "audio_transport", "") or "",
+                    downstream_mode=getattr(self.config, "downstream_mode", "") or "",
+                    tp_encoding=tp_fmt,
+                    tp_sample_rate=tp_rate,
+                    tp_source=tp_source,
+                    audiosocket_format=getattr(audiosocket_cfg, "format", "") if audiosocket_cfg else "",
+                    audiosocket_host=getattr(audiosocket_cfg, "host", "") if audiosocket_cfg else "",
+                    audiosocket_port=int(getattr(audiosocket_cfg, "port", 0) or 0) if audiosocket_cfg else 0,
+                    external_media_codec=getattr(external_media_cfg, "codec", "") if external_media_cfg else "",
+                    external_media_rtp_host=getattr(external_media_cfg, "rtp_host", "") if external_media_cfg else "",
+                    external_media_rtp_port=int(getattr(external_media_cfg, "rtp_port", 0) or 0) if external_media_cfg else 0,
+                    external_media_advertise_host=getattr(external_media_cfg, "advertise_host", "") if external_media_cfg else "",
+                    streaming_sample_rate=int(getattr(streaming_cfg, "sample_rate", 0) or 0) if streaming_cfg else 0,
+                    streaming_jitter_buffer_ms=int(getattr(streaming_cfg, "jitter_buffer_ms", 0) or 0) if streaming_cfg else 0,
+                    streaming_min_start_ms=int(getattr(streaming_cfg, "min_start_ms", 0) or 0) if streaming_cfg else 0,
+                    streaming_low_watermark_ms=int(getattr(streaming_cfg, "low_watermark_ms", 0) or 0) if streaming_cfg else 0,
+                    vad_webrtc_aggressiveness=int(getattr(vad_cfg, "webrtc_aggressiveness", 0) or 0) if vad_cfg else 0,
+                    vad_confidence_threshold=float(getattr(vad_cfg, "confidence_threshold", 0.0) or 0.0) if vad_cfg else 0.0,
+                    vad_energy_threshold=int(getattr(vad_cfg, "energy_threshold", 0) or 0) if vad_cfg else 0,
+                    vad_enhanced_enabled=bool(getattr(vad_cfg, "enhanced_enabled", False)) if vad_cfg else False,
+                    barge_in_post_tts_end_protection_ms=int(getattr(barge_cfg, "post_tts_end_protection_ms", 0) or 0) if barge_cfg else 0,
+                    provider_input_encoding=(provider_cfg.get("input_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_input_sample_rate_hz=int(provider_cfg.get("input_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                    provider_provider_input_encoding=(provider_cfg.get("provider_input_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_provider_input_sample_rate_hz=int(provider_cfg.get("provider_input_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                    provider_output_encoding=(provider_cfg.get("output_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_output_sample_rate_hz=int(provider_cfg.get("output_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                    provider_target_encoding=(provider_cfg.get("target_encoding", "") if isinstance(provider_cfg, dict) else ""),
+                    provider_target_sample_rate_hz=int(provider_cfg.get("target_sample_rate_hz", 0) or 0) if isinstance(provider_cfg, dict) else 0,
+                )
+            except Exception:
+                logger.debug("Failed to emit RCA_CALL_START", call_id=caller_channel_id, exc_info=True)
             
             # Step 5: Create ExternalMedia channel or originate Local channel
             if self.config.audio_transport == "externalmedia":
@@ -3164,6 +3352,7 @@ class Engine:
         Available variables (with defaults if not available):
         - {caller_name}: Caller ID name (default: "there")
         - {caller_number}: Caller phone number/ANI (default: "unknown")
+        - {caller_id}: Alias for {caller_number} (default: "unknown")
         - {call_id}: Unique call identifier (always available)
         - {context_name}: AI_CONTEXT from dialplan (default: "")
         - {call_direction}: "inbound" or "outbound" (default: "inbound")
@@ -3181,6 +3370,7 @@ class Engine:
         substitutions = {
             "caller_name": getattr(session, 'caller_name', None) or "there",
             "caller_number": getattr(session, 'caller_number', None) or "unknown",
+            "caller_id": getattr(session, 'caller_number', None) or "unknown",
             "call_id": session.call_id,
             "context_name": getattr(session, 'context_name', None) or "",
             "call_direction": "outbound" if getattr(session, 'is_outbound', False) else "inbound",
@@ -3188,12 +3378,27 @@ class Engine:
             "lead_id": getattr(session, 'outbound_lead_id', None) or "",
         }
         
+        # Add pre-call tool results (Milestone 24 - CRM enrichment variables)
+        pre_call_results = getattr(session, 'pre_call_results', None) or {}
+        for key, value in pre_call_results.items():
+            # Don't override built-in variables
+            if key not in substitutions:
+                substitutions[key] = str(value) if value else ""
+        
         def replace_match(match):
             key = match.group(1)
-            return substitutions.get(key, match.group(0))  # Leave unknown as-is
+            # Try exact match first
+            if key in substitutions:
+                return substitutions[key]
+            # Convert dot notation to underscore (e.g., patient.name -> patient_name)
+            underscore_key = key.replace('.', '_')
+            if underscore_key in substitutions:
+                return substitutions[underscore_key]
+            return match.group(0)  # Leave unknown as-is
         
         try:
-            return re.sub(r'\{(\w+)\}', replace_match, text)
+            # Match both {word} and {word.subword} patterns
+            return re.sub(r'\{([\w.]+)\}', replace_match, text)
         except Exception as e:
             logger.debug(
                 "Prompt template substitution failed, leaving unchanged",
@@ -3864,6 +4069,25 @@ class Engine:
                 variable=variable,
                 value=value,
             )
+            
+            # Cache called_number variables - these are set early in dialplan
+            # but may not be available via GET when StasisStart fires (timing race)
+            # Priority: DIALED_NUMBER > __FROM_DID (only cache if not already set)
+            if channel_id and value:
+                if variable == "DIALED_NUMBER":
+                    self._called_number_cache[channel_id] = value
+                    logger.debug(
+                        "Cached called_number from DIALED_NUMBER",
+                        channel_id=channel_id,
+                        called_number=value,
+                    )
+                elif variable == "__FROM_DID" and channel_id not in self._called_number_cache:
+                    self._called_number_cache[channel_id] = value
+                    logger.debug(
+                        "Cached called_number from __FROM_DID",
+                        channel_id=channel_id,
+                        called_number=value,
+                    )
         except Exception as exc:
             logger.error("Error handling ChannelVarset", error=str(exc), exc_info=True)
 
@@ -4059,37 +4283,50 @@ class Engine:
             except Exception:
                 pass
             
-            # In-memory re-entrancy guard (atomic, no race condition)
-            if call_id in _cleanup_in_progress:
-                logger.debug("Cleanup already in progress (in-memory guard)", call_id=call_id)
-                return
-            _cleanup_in_progress.add(call_id)
+            # In-memory re-entrancy guard - use lock for atomicity (AAVA-148)
+            async with _cleanup_lock:
+                if call_id in _cleanup_in_progress:
+                    logger.debug("Cleanup already in progress (in-memory guard)", call_id=call_id)
+                    return
+                _cleanup_in_progress.add(call_id)
+                # Set TTL guard IMMEDIATELY to block late events (AAVA-148 fix)
+                import time as _time
+                _cleanup_completed_at[call_id] = _time.time()
             
             logger.info("Cleaning up call", call_id=call_id)
             
-            # Record call duration if we have start time
+            # Calculate call duration early (keep _call_start_times entry until after post-call tools)
+            call_duration_seconds = 0
             try:
                 import time
                 if call_id in _call_start_times:
-                    duration = time.time() - _call_start_times[call_id]
+                    call_duration_seconds = int(time.time() - _call_start_times[call_id])
                     pipeline_name = getattr(session, 'pipeline_name', None) or "default"
                     provider_name = getattr(session, 'provider_name', None) or "unknown"
                     
                     _CALL_DURATION.labels(
                         pipeline=pipeline_name,
                         provider=provider_name,
-                    ).observe(duration)
-                    
-                    # Clean up start time
-                    del _call_start_times[call_id]
+                    ).observe(call_duration_seconds)
                     
                     logger.info("Recorded call duration", 
                                call_id=call_id,
-                               duration_seconds=round(duration, 2),
+                               duration_seconds=call_duration_seconds,
                                pipeline=pipeline_name,
                                provider=provider_name)
             except Exception as e:
                 logger.debug("Failed to record call duration", call_id=call_id, error=str(e))
+            
+            # Determine call outcome based on session state
+            call_outcome = "caller_hangup"  # Default: caller hung up
+            try:
+                # Check transfer state - UnifiedTransferTool sets transfer_active/transfer_state
+                if getattr(session, 'transfer_active', False) or getattr(session, 'transfer_state', None):
+                    call_outcome = "transferred"
+                elif getattr(session, 'cleanup_after_tts', False):
+                    call_outcome = "agent_hangup"  # AI agent initiated hangup via hangup_call tool
+            except Exception:
+                pass
 
             # Stop any active streaming playback.
             try:
@@ -4243,6 +4480,10 @@ class Engine:
                                 call_id=call_id,
                                 caller_channel_id=session.caller_channel_id,
                                 bridge_id=session.bridge_id,
+                                caller_number=getattr(session, 'caller_number', None),
+                                called_number=getattr(session, 'called_number', None),
+                                caller_name=getattr(session, 'caller_name', None),
+                                context_name=getattr(session, 'context_name', None),
                                 session_store=self.session_store,
                                 ari_client=self.ari_client,
                                 config=self.config.dict()
@@ -4280,6 +4521,10 @@ class Engine:
                                         call_id=call_id,
                                         caller_channel_id=session.caller_channel_id,
                                         bridge_id=session.bridge_id,
+                                        caller_number=getattr(session, 'caller_number', None),
+                                        called_number=getattr(session, 'called_number', None),
+                                        caller_name=getattr(session, 'caller_name', None),
+                                        context_name=getattr(session, 'context_name', None),
                                         session_store=self.session_store,
                                         ari_client=self.ari_client,
                                         config=self.config.dict()
@@ -4311,6 +4556,20 @@ class Engine:
                                     )
             except Exception as e:
                 logger.warning("Failed to process transcript emails", call_id=call_id, error=str(e), exc_info=True)
+
+            # Execute post-call tools (webhooks, CRM updates) - Milestone 24
+            # These run fire-and-forget and do not block cleanup
+            try:
+                await self._execute_post_call_tools(
+                    call_id, session,
+                    call_duration_seconds=call_duration_seconds,
+                    call_outcome=call_outcome
+                )
+            except Exception as e:
+                logger.debug("Post-call tool execution failed", call_id=call_id, error=str(e), exc_info=True)
+            
+            # Clean up call start time after post-call tools have used it
+            _call_start_times.pop(call_id, None)
 
             # Persist call to history before removing session (Milestone 21)
             try:
@@ -4373,6 +4632,26 @@ class Engine:
                 _cleanup_completed_at[call_id] = _time.time()
             except Exception:
                 pass
+
+            # RCA: emit teardown summary for log-driven `agent rca`.
+            try:
+                logger.info(
+                    "RCA_CALL_END",
+                    call_id=call_id,
+                    call_outcome=call_outcome,
+                    duration_seconds=int(call_duration_seconds or 0),
+                    caller_number=getattr(session, "caller_number", None) or "unknown",
+                    called_number=getattr(session, "called_number", None) or "unknown",
+                    context_name=getattr(session, "context_name", None) or "",
+                    provider_name=getattr(session, "provider_name", None) or "",
+                    pipeline_name=getattr(session, "pipeline_name", None) or "",
+                    audio_transport=getattr(self.config, "audio_transport", "") or "",
+                    transferred=bool(getattr(session, "transfer_active", False) or getattr(session, "transfer_state", None)),
+                    transfer_destination=getattr(session, "transfer_destination", None) or getattr(session, "transfer_target", None) or "",
+                    media_rx_confirmed=bool(getattr(session, "media_rx_confirmed", False)),
+                )
+            except Exception:
+                logger.debug("Failed to emit RCA_CALL_END", call_id=call_id, exc_info=True)
 
             logger.info("Call cleanup completed", call_id=call_id)
         except Exception as exc:
@@ -8165,19 +8444,19 @@ class Engine:
                 if context_name:
                     context_config = self.transport_orchestrator.get_context_config(context_name)
                     if context_config and context_config.prompt:
-                            # Create a copy to avoid mutating the pipeline's original options
-                            llm_options = dict(llm_options)
-                            # Apply template substitution for caller context variables
-                            llm_options['system_prompt'] = self._apply_prompt_template_substitution(context_config.prompt, session)
-                            prompt_source = "context_injection"
-                            context_prompt_injected = True
-                            logger.info(
-                                "Pipeline LLM prompt resolved from context",
-                                call_id=call_id,
-                                context=context_name,
-                                prompt_length=len(context_config.prompt),
-                                prompt_preview=context_config.prompt[:80] + "..." if len(context_config.prompt) > 80 else context_config.prompt,
-                            )
+                        # Create a copy to avoid mutating the pipeline's original options
+                        llm_options = dict(llm_options)
+                        # Apply template substitution for caller context variables
+                        llm_options['system_prompt'] = self._apply_prompt_template_substitution(context_config.prompt, session)
+                        prompt_source = "context_injection"
+                        context_prompt_injected = True
+                        logger.info(
+                            "Pipeline LLM prompt resolved from context",
+                            call_id=call_id,
+                            context=context_name,
+                            prompt_length=len(context_config.prompt),
+                            prompt_preview=context_config.prompt[:80] + "..." if len(context_config.prompt) > 80 else context_config.prompt,
+                        )
                 
                 # Priority 2: If no context prompt, check if pipeline has default or use global
                 if not context_prompt_injected:
@@ -8211,15 +8490,40 @@ class Engine:
                 )
                 prompt_source = "error"
 
-            # Inject context tools allowlist into pipeline LLM options.
-            # Contexts are the single source of truth for tool allowlisting.
+                # Inject context tools allowlist into pipeline LLM options.
+            # Contexts are the single source of truth for allowlisting, but global tools can be
+            # enabled by default and selectively disabled per context (Milestone 24).
             try:
                 context_name = getattr(session, "context_name", None)
                 allowed_tools: List[str] = []
                 if context_name:
                     context_config = self.transport_orchestrator.get_context_config(context_name)
-                    if context_config and hasattr(context_config, "tools"):
-                        allowed_tools = list(getattr(context_config, "tools") or [])
+                    if context_config:
+                        from src.tools.base import ToolPhase
+                        from src.tools.registry import tool_registry
+
+                        context_tools = list(getattr(context_config, "tools") or [])
+                        disabled_global = list(getattr(context_config, "disable_global_in_call_tools") or [])
+                        tools = tool_registry.get_tools_for_context(
+                            ToolPhase.IN_CALL,
+                            context_tool_names=context_tools,
+                            disabled_global_tools=disabled_global,
+                        )
+                        allowed_tools = [t.definition.name for t in tools]
+                # Defense-in-depth: never expose pre-call/post-call tools as in-call tools (YAML edits).
+                if allowed_tools:
+                    try:
+                        from src.tools.base import ToolPhase
+                        from src.tools.registry import tool_registry
+
+                        filtered: List[str] = []
+                        for name in allowed_tools:
+                            t = tool_registry.get(name) if tool_registry else None
+                            if t and getattr(t.definition, "phase", ToolPhase.IN_CALL) == ToolPhase.IN_CALL:
+                                filtered.append(t.definition.name)
+                        allowed_tools = filtered
+                    except Exception:
+                        pass
 
                 # Always override any legacy pipeline/provider tool settings.
                 llm_options = dict(llm_options)
@@ -8281,7 +8585,7 @@ class Engine:
                 if context_name:
                     context_config = self.transport_orchestrator.get_context_config(context_name)
                     if context_config and context_config.greeting:
-                        greeting = context_config.greeting.strip()
+                        greeting = self._apply_prompt_template_substitution(context_config.greeting.strip(), session)
                         greeting_source = "context_injection"
                         logger.info(
                             "Pipeline greeting resolved from context",
@@ -8294,7 +8598,7 @@ class Engine:
                 if not greeting:
                     global_greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
                     if global_greeting:
-                        greeting = global_greeting
+                        greeting = self._apply_prompt_template_substitution(global_greeting, session)
                         greeting_source = "global_llm_config"
                         logger.info(
                             "Pipeline greeting resolved from global config",
@@ -8318,33 +8622,9 @@ class Engine:
                 greeting = ""
                 greeting_source = "error"
             
-            # Apply template substitution for personalized greetings
+            # Final pass: ensure greeting can safely reference template variables.
             if greeting:
-                try:
-                    caller_name = getattr(session, 'caller_name', None) or "there"
-                    caller_number = getattr(session, 'caller_number', None) or "unknown"
-                    greeting = greeting.format(
-                        caller_name=caller_name,
-                        caller_number=caller_number
-                    )
-                    logger.debug(
-                        "Applied greeting template substitution",
-                        call_id=call_id,
-                        caller_name=caller_name,
-                        greeting_length=len(greeting)
-                    )
-                except KeyError as e:
-                    logger.warning(
-                        "Greeting template has invalid placeholder",
-                        call_id=call_id,
-                        error=str(e)
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to apply greeting template substitution",
-                        call_id=call_id,
-                        error=str(e)
-                    )
+                greeting = self._apply_prompt_template_substitution(greeting, session)
             
             if greeting:
                 max_attempts = 2
@@ -8759,32 +9039,22 @@ class Engine:
                     #   (set `hangup_call_guardrail: true` in pipeline llm options).
                     llm_adapter_key = getattr(getattr(pipeline, "llm_adapter", None), "component_key", None)
                     guardrail_cfg = (llm_options or {}).get("hangup_call_guardrail")
-                    if guardrail_cfg is None:
-                        hangup_guardrail_enabled = llm_adapter_key == "ollama_llm"
+                    hangup_policy = resolve_hangup_policy(getattr(self.config, "tools", None))
+                    policy_mode = str(hangup_policy.get("mode") or "normal").strip().lower()
+                    if policy_mode == "relaxed":
+                        hangup_guardrail_enabled = False
+                    elif policy_mode == "strict":
+                        hangup_guardrail_enabled = True
                     else:
-                        hangup_guardrail_enabled = bool(guardrail_cfg)
+                        if guardrail_cfg is None:
+                            hangup_guardrail_enabled = llm_adapter_key == "ollama_llm"
+                        else:
+                            hangup_guardrail_enabled = bool(guardrail_cfg)
 
                     if hangup_guardrail_enabled and tool_calls and any(tc.get("name") == "hangup_call" for tc in tool_calls):
                         normalized_user_text = re.sub(r"\s+", " ", (transcript_text or "").strip().lower())
-                        end_markers = (
-                            "that's all",
-                            "that is all",
-                            "that's it",
-                            "that is it",
-                            "nothing else",
-                            "all set",
-                            "all good",
-                            "end the call",
-                            "end call",
-                            "hang up",
-                            "hangup",
-                            "goodbye",
-                            "bye",
-                        )
-                        has_end_intent = any(
-                            re.search(rf"(?:^|\\b){re.escape(m)}(?:\\b|$)", normalized_user_text)
-                            for m in end_markers
-                        )
+                        end_markers = (hangup_policy.get("markers") or {}).get("end_call", [])
+                        has_end_intent = text_contains_marker_word(normalized_user_text, end_markers)
                         if not has_end_intent:
                             before_count = len(tool_calls)
                             tool_calls = [tc for tc in tool_calls if tc.get("name") != "hangup_call"]
@@ -9010,6 +9280,10 @@ class Engine:
                             call_id=call_id,
                             caller_channel_id=getattr(session, "caller_channel_id", None) or call_id,
                             bridge_id=getattr(session, "bridge_id", None),
+                            caller_number=getattr(session, "caller_number", None),
+                            called_number=getattr(session, "called_number", None),
+                            caller_name=getattr(session, "caller_name", None),
+                            context_name=getattr(session, "context_name", None),
                             session_store=self.session_store,
                             ari_client=self.ari_client,
                             config=self.config.dict(),
@@ -10772,6 +11046,49 @@ class Engine:
             if getattr(session, "provider_session_active", False) and call_id in self._call_providers:
                 return
 
+            # Execute pre-call tools before provider starts (Milestone 24)
+            # This runs CRM lookups etc. and injects results into session for prompt templating
+            try:
+                pre_call_results = await self._execute_pre_call_tools(call_id, session)
+                if pre_call_results:
+                    # Refresh session after pre-call tools updated it
+                    session = await self.session_store.get_by_call_id(call_id)
+                    # Recompute per-call provider overrides now that pre-call enrichment is available.
+                    # This is required for full-agent providers because prompt/greeting overrides are composed
+                    # earlier during audio profile resolution, before pre-call tools run.
+                    try:
+                        if session and getattr(session, "context_name", None):
+                            ctx_cfg = self.transport_orchestrator.get_context_config(session.context_name)
+                            if ctx_cfg:
+                                session.provider_overrides = dict(getattr(session, "provider_overrides", {}) or {})
+                                greeting_tpl = getattr(ctx_cfg, "greeting", None)
+                                if greeting_tpl:
+                                    session.provider_overrides["greeting"] = self._apply_prompt_template_substitution(
+                                        str(greeting_tpl), session
+                                    )
+                                prompt_tpl = getattr(ctx_cfg, "prompt", None)
+                                if prompt_tpl:
+                                    prompt_to_apply = self._apply_prompt_template_substitution(str(prompt_tpl), session)
+                                    if getattr(session, "is_outbound", False) and getattr(session, "outbound_custom_vars", None):
+                                        prompt_to_apply = self._append_outbound_custom_vars_to_prompt(
+                                            prompt_to_apply, getattr(session, "outbound_custom_vars", {}) or {}
+                                        )
+                                    session.provider_overrides["prompt"] = prompt_to_apply
+                                await self._save_session(session)
+                    except Exception:
+                        logger.debug(
+                            "Failed to refresh provider overrides after pre-call enrichment",
+                            call_id=call_id,
+                            exc_info=True,
+                        )
+                    logger.info(
+                        "Pre-call enrichment complete",
+                        call_id=call_id,
+                        variables=list(pre_call_results.keys()),
+                    )
+            except Exception:
+                logger.debug("Pre-call tool execution failed", call_id=call_id, exc_info=True)
+
             # Preserve any per-call override previously applied. Only assign a pipeline
             # here if one has already been selected (e.g., via AI_PROVIDER or active_pipeline)
             pipeline_resolution = None
@@ -10901,8 +11218,49 @@ class Engine:
                         has_tools_attr=hasattr(context_config, 'tools') if context_config else False,
                     )
                     if context_config:
-                        # Contexts are the source of truth for tool allowlisting.
-                        provider_context["tools"] = list(getattr(context_config, "tools", None) or [])
+                        # Register per-context in-call HTTP tools if defined
+                        in_call_http_tools_cfg = getattr(context_config, "in_call_http_tools", None)
+                        allowed_in_call_http_tool_names: list[str] = []
+
+                        if isinstance(in_call_http_tools_cfg, dict) and in_call_http_tools_cfg:
+                            try:
+                                from src.tools.registry import tool_registry
+                                tool_registry.initialize_in_call_http_tools_from_config(
+                                    in_call_http_tools_cfg,
+                                    cache_key=f"context:{session.context_name}",
+                                )
+                                logger.debug(
+                                    "Registered per-context in-call HTTP tools",
+                                    call_id=call_id,
+                                    context=session.context_name,
+                                    tool_count=len(in_call_http_tools_cfg),
+                                )
+                                allowed_in_call_http_tool_names = list(in_call_http_tools_cfg.keys())
+                            except Exception as e:
+                                logger.warning(f"Failed to register context in-call HTTP tools: {e}", call_id=call_id)
+                        elif isinstance(in_call_http_tools_cfg, (list, tuple)) and in_call_http_tools_cfg:
+                            allowed_in_call_http_tool_names = [str(x) for x in in_call_http_tools_cfg if str(x).strip()]
+                        
+                        # Context tool allowlisting:
+                        # - Combine global tools with context-specific tools (Milestone 24),
+                        #   respecting context opt-outs.
+                        # - Also include per-context in-call HTTP tool wrappers.
+                        allowed = list(getattr(context_config, "tools", None) or [])
+                        if allowed_in_call_http_tool_names:
+                            allowed.extend(allowed_in_call_http_tool_names)
+                        try:
+                            from src.tools.base import ToolPhase
+                            from src.tools.registry import tool_registry
+
+                            disabled_global = list(getattr(context_config, "disable_global_in_call_tools") or [])
+                            tools = tool_registry.get_tools_for_context(
+                                ToolPhase.IN_CALL,
+                                context_tool_names=allowed,
+                                disabled_global_tools=disabled_global,
+                            )
+                            provider_context["tools"] = [t.definition.name for t in tools]
+                        except Exception:
+                            provider_context["tools"] = allowed
                         try:
                             # Persist tool allowlist on session so provider-agnostic tools (e.g., hangup_call)
                             # can decide whether follow-up tools like request_transcript are actually available.
@@ -10916,12 +11274,21 @@ class Engine:
                             tools=provider_context["tools"],
                             tools_count=len(provider_context["tools"]),
                         )
-                        # Include prompt for reference (though config.instructions should already be set)
-                        if hasattr(context_config, 'prompt') and context_config.prompt:
+                        # Prefer per-call provider overrides (includes pre-call enrichment variables).
+                        overrides = dict(getattr(session, "provider_overrides", {}) or {})
+                        prompt_override = overrides.get("prompt")
+                        greeting_override = overrides.get("greeting")
+
+                        if isinstance(prompt_override, str) and prompt_override.strip():
+                            provider_context["prompt"] = prompt_override
+                            provider_context["instructions"] = prompt_override  # Alias for ElevenLabs
+                        elif hasattr(context_config, 'prompt') and context_config.prompt:
                             provider_context['prompt'] = context_config.prompt
                             provider_context['instructions'] = context_config.prompt  # Alias for ElevenLabs
-                        # Include greeting for ElevenLabs first message override
-                        if hasattr(context_config, 'greeting') and context_config.greeting:
+
+                        if isinstance(greeting_override, str) and greeting_override.strip():
+                            provider_context["greeting"] = greeting_override
+                        elif hasattr(context_config, 'greeting') and context_config.greeting:
                             provider_context['greeting'] = context_config.greeting
             except Exception as e:
                 logger.warning(f"Failed to build provider context: {e}", call_id=call_id, exc_info=True)
@@ -10936,6 +11303,7 @@ class Engine:
                 try:
                     provider._caller_channel_id = session.caller_channel_id
                     provider._bridge_id = session.bridge_id
+                    provider._called_number = getattr(session, 'called_number', None)
                     provider._session_store = self.session_store
                     provider._ari_client = self.ari_client
                     provider._full_config = self.config.dict()  # Convert Pydantic model to dict
@@ -11160,11 +11528,38 @@ class Engine:
             # Determine allowlisted tools for this call (contexts are the source of truth).
             allowed_tools: list[str] = []
             try:
-                if getattr(session, "context_name", None):
-                    ctx_cfg = self.transport_orchestrator.get_context_config(session.context_name)
-                    allowed_tools = list(getattr(ctx_cfg, "tools", None) or []) if ctx_cfg else []
+                # Prefer persisted allowlist (computed when provider session starts).
+                allowed_tools = list(getattr(session, "allowed_tools", None) or [])
             except Exception:
-                logger.debug("Failed resolving context tool allowlist", call_id=call_id, exc_info=True)
+                allowed_tools = []
+
+            if not allowed_tools:
+                try:
+                    if getattr(session, "context_name", None):
+                        ctx_cfg = self.transport_orchestrator.get_context_config(session.context_name)
+                        if ctx_cfg:
+                            allowed = list(getattr(ctx_cfg, "tools", None) or [])
+                            in_call_http_tools_cfg = getattr(ctx_cfg, "in_call_http_tools", None)
+                            if isinstance(in_call_http_tools_cfg, dict):
+                                allowed.extend(list(in_call_http_tools_cfg.keys()))
+                            elif isinstance(in_call_http_tools_cfg, (list, tuple)):
+                                allowed.extend([str(x) for x in in_call_http_tools_cfg if str(x).strip()])
+
+                            # Resolve global tools + opt-outs (Milestone 24)
+                            try:
+                                from src.tools.base import ToolPhase
+
+                                disabled_global = list(getattr(ctx_cfg, "disable_global_in_call_tools") or [])
+                                tools = tool_registry.get_tools_for_context(
+                                    ToolPhase.IN_CALL,
+                                    context_tool_names=allowed,
+                                    disabled_global_tools=disabled_global,
+                                )
+                                allowed_tools = [t.definition.name for t in tools]
+                            except Exception:
+                                allowed_tools = allowed
+                except Exception:
+                    logger.debug("Failed resolving context tool allowlist", call_id=call_id, exc_info=True)
 
             if function_name not in allowed_tools:
                 result = {"status": "error", "message": f"Tool '{function_name}' not allowed for this call"}
@@ -11174,6 +11569,10 @@ class Engine:
                     call_id=call_id,
                     caller_channel_id=session.caller_channel_id,
                     bridge_id=session.bridge_id,
+                    caller_number=getattr(session, 'caller_number', None),
+                    called_number=getattr(session, 'called_number', None),
+                    caller_name=getattr(session, 'caller_name', None),
+                    context_name=getattr(session, 'context_name', None),
                     session_store=self.session_store,
                     ari_client=self.ari_client,
                     config=self.config.dict() if hasattr(self.config, 'dict') else {},
@@ -11182,6 +11581,18 @@ class Engine:
 
                 # Execute tool via registry (tool_registry is a module-level singleton)
                 tool = tool_registry.get(function_name) if tool_registry else None
+                if tool:
+                    # Defense-in-depth: prevent pre-call/post-call tools from being executed during the call.
+                    try:
+                        from src.tools.base import ToolPhase
+                        if getattr(tool.definition, "phase", ToolPhase.IN_CALL) != ToolPhase.IN_CALL:
+                            result = {
+                                "status": "error",
+                                "message": f"Tool '{function_name}' is not callable during the conversation",
+                            }
+                            tool = None
+                    except Exception:
+                        pass
                 if tool:
                     result = await tool.execute(parameters, context)
 
@@ -11262,6 +11673,282 @@ class Engine:
                 )
         
         return result
+
+    async def _execute_pre_call_tools(
+        self,
+        call_id: str,
+        session: "CallSession",
+    ) -> Dict[str, str]:
+        """
+        Execute pre-call tools in parallel after call is answered, before AI speaks.
+        
+        Pre-call tools fetch enrichment data (CRM lookup) and return output variables
+        that are injected into the system prompt.
+        
+        Args:
+            call_id: Call identifier
+            session: Call session with context info
+        
+        Returns:
+            Dictionary of output_variable_name -> value (strings only)
+        """
+        from src.tools.base import ToolPhase
+        from src.tools.context import PreCallContext
+        from src.tools.registry import tool_registry
+        
+        results: Dict[str, str] = {}
+        
+        try:
+            # Get context config for this call
+            ctx_config = None
+            if session.context_name:
+                ctx_config = self.transport_orchestrator.get_context_config(session.context_name)
+            
+            if not ctx_config:
+                logger.debug("No context config for pre-call tools", call_id=call_id)
+                return results
+            
+            # Get pre-call tools for this context (context-specific + global minus opt-outs)
+            pre_call_tool_names = list(getattr(ctx_config, 'pre_call_tools', None) or [])
+            disabled_global = list(getattr(ctx_config, 'disable_global_pre_call_tools', None) or [])
+            
+            tools_to_run = tool_registry.get_tools_for_context(
+                phase=ToolPhase.PRE_CALL,
+                context_tool_names=pre_call_tool_names,
+                disabled_global_tools=disabled_global,
+            )
+            
+            if not tools_to_run:
+                logger.debug("No pre-call tools configured for context", 
+                           call_id=call_id, context=session.context_name)
+                return results
+            
+            logger.info("Executing pre-call tools",
+                       call_id=call_id,
+                       context=session.context_name,
+                       tool_count=len(tools_to_run),
+                       tools=[t.definition.name for t in tools_to_run])
+            
+            # Build pre-call context
+            pre_call_ctx = PreCallContext(
+                call_id=call_id,
+                caller_number=session.caller_number or "",
+                called_number=getattr(session, 'called_number', None),
+                caller_name=session.caller_name,
+                context_name=session.context_name or "",
+                call_direction="outbound" if getattr(session, 'is_outbound', False) else "inbound",
+                campaign_id=getattr(session, 'outbound_campaign_id', None),
+                lead_id=getattr(session, 'outbound_lead_id', None),
+                config=self.config.dict() if hasattr(self.config, 'dict') else {},
+                ari_client=self.ari_client,
+            )
+            
+            # Track if we need to play hold audio
+            hold_audio_tasks: Dict[str, asyncio.Task] = {}
+            
+            async def run_tool_with_timeout(tool) -> Dict[str, str]:
+                """Execute a single pre-call tool with timeout and hold audio."""
+                tool_name = tool.definition.name
+                timeout_ms = tool.definition.timeout_ms or 2000
+                hold_file = tool.definition.hold_audio_file
+                hold_threshold_ms = tool.definition.hold_audio_threshold_ms or 500
+                
+                tool_start = time.time()
+                tool_results: Dict[str, str] = {}
+                
+                # Schedule hold audio if configured
+                if hold_file and self.ari_client:
+                    async def play_hold_audio():
+                        await asyncio.sleep(hold_threshold_ms / 1000.0)
+                        try:
+                            # Play the configured hold audio file via ARI
+                            await self.ari_client.play_sound(session.caller_channel_id, hold_file)
+                            logger.debug("Playing hold audio for pre-call tool",
+                                       call_id=call_id, tool=tool_name, file=hold_file)
+                        except Exception as e:
+                            logger.debug("Failed to play hold audio", 
+                                       call_id=call_id, tool=tool_name, error=str(e))
+                    
+                    hold_task = asyncio.create_task(play_hold_audio())
+                    hold_audio_tasks[tool_name] = hold_task
+                
+                try:
+                    # Execute tool with timeout
+                    tool_results = await asyncio.wait_for(
+                        tool.execute(pre_call_ctx),
+                        timeout=timeout_ms / 1000.0
+                    )
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.info("Pre-call tool completed",
+                               call_id=call_id,
+                               tool=tool_name,
+                               duration_ms=round(duration_ms, 2),
+                               output_keys=list(tool_results.keys()))
+                except asyncio.TimeoutError:
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.warning("Pre-call tool timed out",
+                                  call_id=call_id,
+                                  tool=tool_name,
+                                  timeout_ms=timeout_ms,
+                                  duration_ms=round(duration_ms, 2))
+                    # Return empty strings for all expected output variables
+                    for var in tool.definition.output_variables:
+                        tool_results[var] = ""
+                except Exception as e:
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.error("Pre-call tool failed",
+                                call_id=call_id,
+                                tool=tool_name,
+                                error=str(e),
+                                duration_ms=round(duration_ms, 2))
+                    # Return empty strings on error
+                    for var in tool.definition.output_variables:
+                        tool_results[var] = ""
+                finally:
+                    # Cancel hold audio if still pending
+                    if tool_name in hold_audio_tasks:
+                        hold_audio_tasks[tool_name].cancel()
+                
+                return tool_results
+            
+            # Run all pre-call tools in parallel
+            tool_tasks = [run_tool_with_timeout(tool) for tool in tools_to_run]
+            tool_outputs = await asyncio.gather(*tool_tasks, return_exceptions=True)
+            
+            # Merge results
+            for i, output in enumerate(tool_outputs):
+                if isinstance(output, Exception):
+                    logger.error("Pre-call tool raised exception",
+                               call_id=call_id,
+                               tool=tools_to_run[i].definition.name,
+                               error=str(output))
+                    continue
+                if isinstance(output, dict):
+                    results.update(output)
+            
+            # Store pre-call results in session for debugging and in-call access
+            session.pre_call_results = results
+            await self._save_session(session)
+            
+            logger.info("Pre-call tools completed",
+                       call_id=call_id,
+                       total_tools=len(tools_to_run),
+                       output_variables=list(results.keys()))
+            
+        except Exception as e:
+            logger.error("Pre-call tool execution failed",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True)
+        
+        return results
+
+    async def _execute_post_call_tools(
+        self,
+        call_id: str,
+        session: "CallSession",
+        *,
+        call_duration_seconds: int = 0,
+        call_outcome: str = "caller_hangup",
+    ) -> None:
+        """
+        Execute post-call tools after the call ends (fire-and-forget).
+        
+        Post-call tools send data to external systems (webhooks, CRM updates).
+        They run asynchronously and do not block call cleanup.
+        
+        Args:
+            call_id: Call identifier
+            session: Call session with comprehensive data
+            call_duration_seconds: Pre-calculated call duration in seconds
+            call_outcome: How the call ended (caller_hangup, agent_hangup, transferred)
+        """
+        from src.tools.base import ToolPhase
+        from src.tools.context import PostCallContext
+        from src.tools.registry import tool_registry
+        
+        try:
+            # Get context config for this call
+            ctx_config = None
+            if session.context_name:
+                ctx_config = self.transport_orchestrator.get_context_config(session.context_name)
+            
+            # Get post-call tools for this context (context-specific + global minus opt-outs)
+            post_call_tool_names = list(getattr(ctx_config, 'post_call_tools', None) or []) if ctx_config else []
+            disabled_global = list(getattr(ctx_config, 'disable_global_post_call_tools', None) or []) if ctx_config else []
+            
+            tools_to_run = tool_registry.get_tools_for_context(
+                phase=ToolPhase.POST_CALL,
+                context_tool_names=post_call_tool_names,
+                disabled_global_tools=disabled_global,
+            )
+            
+            if not tools_to_run:
+                logger.debug("No post-call tools configured", call_id=call_id)
+                return
+            
+            logger.info("Executing post-call tools",
+                       call_id=call_id,
+                       context=session.context_name,
+                       tool_count=len(tools_to_run),
+                       tools=[t.definition.name for t in tools_to_run],
+                       call_duration=call_duration_seconds,
+                       call_outcome=call_outcome)
+            
+            # Build post-call context
+            post_call_ctx = PostCallContext(
+                call_id=call_id,
+                caller_number=session.caller_number or "",
+                called_number=getattr(session, 'called_number', None),
+                caller_name=session.caller_name,
+                context_name=session.context_name or "",
+                provider=session.provider_name or self.config.default_provider,
+                call_direction="outbound" if getattr(session, 'is_outbound', False) else "inbound",
+                call_duration_seconds=call_duration_seconds,
+                call_outcome=call_outcome,
+                call_start_time=session.start_time.isoformat() if session.start_time else None,
+                call_end_time=datetime.now(timezone.utc).isoformat(),
+                conversation_history=list(getattr(session, 'conversation_history', []) or []),
+                summary=getattr(session, 'summary', None),
+                tool_calls=list(getattr(session, 'tool_calls', []) or []),
+                pre_call_results=dict(getattr(session, 'pre_call_results', {}) or {}),
+                campaign_id=getattr(session, 'outbound_campaign_id', None),
+                lead_id=getattr(session, 'outbound_lead_id', None),
+                config=self.config.dict() if hasattr(self.config, 'dict') else {},
+            )
+            
+            # Fire-and-forget execution for each tool
+            async def run_post_call_tool(tool):
+                tool_name = tool.definition.name
+                try:
+                    tool_start = time.time()
+                    await tool.execute(post_call_ctx)
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.info("Post-call tool completed",
+                               call_id=call_id,
+                               tool=tool_name,
+                               duration_ms=round(duration_ms, 2))
+                except Exception as e:
+                    logger.error("Post-call tool failed",
+                                call_id=call_id,
+                                tool=tool_name,
+                                error=str(e),
+                                exc_info=True)
+            
+            # Create fire-and-forget tasks for all post-call tools
+            for tool in tools_to_run:
+                asyncio.create_task(
+                    run_post_call_tool(tool),
+                    name=f"post-call-{tool.definition.name}-{call_id}"
+                )
+            
+            logger.info("Post-call tools fired", call_id=call_id, count=len(tools_to_run))
+            
+        except Exception as e:
+            logger.error("Post-call tool execution setup failed",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True)
 
     def _compute_nat_warnings(self) -> list:
         """Compute NAT/network configuration warnings for /health endpoint."""

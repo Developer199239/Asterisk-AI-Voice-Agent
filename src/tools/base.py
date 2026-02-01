@@ -14,6 +14,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class ToolPhase(Enum):
+    """Phase of tool execution in the call lifecycle."""
+    PRE_CALL = "pre_call"    # Runs after answer, before AI speaks (CRM lookup, enrichment)
+    IN_CALL = "in_call"      # Runs during AI conversation (existing tools)
+    POST_CALL = "post_call"  # Runs after call ends (webhooks, CRM updates)
+
+
 class ToolCategory(Enum):
     """Category of tool for execution routing."""
     TELEPHONY = "telephony"  # Executes via ARI (transfers, voicemail, etc.)
@@ -66,6 +73,16 @@ class ToolDefinition:
     input_schema: Optional[Dict[str, Any]] = None
     requires_channel: bool = False  # Needs active call channel
     max_execution_time: int = 30    # Timeout in seconds
+    
+    # Phase system fields (Milestone 24)
+    phase: ToolPhase = ToolPhase.IN_CALL  # Default to in-call for backward compatibility
+    is_global: bool = False  # If True, available in all contexts by default
+    output_variables: List[str] = field(default_factory=list)  # Pre-call: variables to inject into prompt
+    timeout_ms: Optional[int] = None  # Per-tool timeout in milliseconds (phase tools)
+    
+    # Pre-call hold audio (played via ARI if tool exceeds threshold)
+    hold_audio_file: Optional[str] = None  # Asterisk sound filename (e.g., "custom/please-wait")
+    hold_audio_threshold_ms: int = 500  # Play audio if tool takes longer than this (ms)
 
     def _strip_defaults(self, schema: Any) -> Any:
         """Deepgram does not support 'default' fields in parameter schema."""
@@ -342,3 +359,98 @@ class Tool(ABC):
         except Exception as e:
             logger.warning(f"Failed to load config for {self.definition.name}: {e}")
             return {}
+
+
+class PreCallTool(ABC):
+    """
+    Abstract base class for pre-call tools.
+    
+    Pre-call tools run after the call is answered but before the AI speaks.
+    They fetch enrichment data (e.g., CRM lookup) and return output variables
+    that are injected into the system prompt.
+    
+    All pre-call tools must inherit from this class and implement:
+    - definition property: Returns ToolDefinition with phase=PRE_CALL
+    - execute method: Fetches data and returns output variables
+    """
+    
+    @property
+    @abstractmethod
+    def definition(self) -> ToolDefinition:
+        """
+        Return tool definition with metadata.
+        
+        Must have phase=ToolPhase.PRE_CALL and define output_variables.
+        """
+        pass
+    
+    @abstractmethod
+    async def execute(
+        self,
+        context: 'PreCallContext'
+    ) -> Dict[str, str]:
+        """
+        Execute the pre-call tool to fetch enrichment data.
+        
+        Args:
+            context: PreCallContext with caller info and system access
+        
+        Returns:
+            Dictionary mapping output_variable names to string values.
+            Missing/null values should be returned as empty string "".
+            
+        Example:
+            return {
+                "customer_name": "John Smith",
+                "customer_email": "john@example.com",
+                "last_call_notes": "",  # Not found
+            }
+        
+        Raises:
+            Exception: On failure (will be caught; empty values used)
+        """
+        pass
+
+
+class PostCallTool(ABC):
+    """
+    Abstract base class for post-call tools.
+    
+    Post-call tools run after the call ends (fire-and-forget).
+    They send data to external systems (webhooks, CRM updates).
+    
+    All post-call tools must inherit from this class and implement:
+    - definition property: Returns ToolDefinition with phase=POST_CALL
+    - execute method: Sends data to external system (fire-and-forget)
+    """
+    
+    @property
+    @abstractmethod
+    def definition(self) -> ToolDefinition:
+        """
+        Return tool definition with metadata.
+        
+        Must have phase=ToolPhase.POST_CALL.
+        """
+        pass
+    
+    @abstractmethod
+    async def execute(
+        self,
+        context: 'PostCallContext'
+    ) -> None:
+        """
+        Execute the post-call tool (fire-and-forget).
+        
+        Args:
+            context: PostCallContext with comprehensive session data
+        
+        Returns:
+            None (fire-and-forget; return value ignored)
+        
+        Note:
+            - Exceptions are logged but do not affect call cleanup
+            - No retry mechanism (receiving systems handle retries)
+            - Should complete quickly; long operations should be async
+        """
+        pass

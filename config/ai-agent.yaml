@@ -27,6 +27,28 @@ contexts:
     provider: local
     tools:
       - hangup_call
+  Tool_Example:
+    greeting: Hello! I'm Ava. This context demonstrates pre-call, in-call, and post-call HTTP tools (disabled by default).
+    profile: telephony_ulaw_8k
+    prompt: >-
+      You are Ava. This context demonstrates Phase Tools:
+
+      - A pre-call CRM lookup runs after answer, before you speak (pre_call_tools).
+      - An in-call HTTP tool can be invoked mid-conversation (tools allowlist).
+      - A post-call webhook runs after the call ends (post_call_tools).
+
+      If a tool is disabled in the config, explain that it must be enabled before it can run.
+
+      CALL ENDING:
+      - When the caller indicates they are done, say a brief farewell and use the hangup_call tool to end the call.
+    provider: local
+    tools:
+      - hangup_call
+      - sample_n8n_in_call_tool
+    pre_call_tools:
+      - sample_gohighlevel_pre_call_lookup
+    post_call_tools:
+      - sample_discord_post_call_webhook
   demo_deepgram:
     greeting: >-
       Hi {caller_name}, I'm Ava with the Deepgram voice demo. Ask me anything
@@ -1116,7 +1138,7 @@ providers:
     input_sample_rate_hz: 8000
     instructions: You are a voice assistant. Always speak your responses out loud.
     max_response_output_tokens: 4096
-    model: gpt-4o-realtime-preview-2024-12-17
+    model: gpt-realtime
     organization: ''
     output_encoding: mulaw
     output_sample_rate_hz: 8000
@@ -1210,10 +1232,182 @@ streaming:
     target_rms: 1400
   provider_grace_ms: 200
   sample_rate: 8000
+
+# ============================================================================
+# In-Call HTTP Tools (AI-invokable during conversation)
+# ============================================================================
+in_call_tools:
+  # Example: n8n intent router (in-call) - AI sends the user message to an n8n webhook
+  # Disabled by default. Enable and set URL to test.
+  sample_n8n_in_call_tool:
+    kind: in_call_http_lookup
+    enabled: false
+    is_global: false
+    description: "Example in-call tool: send user message to an n8n webhook and return a reply."
+    timeout_ms: 5000
+    url: "https://your-n8n-instance.com/webhook/intent-router"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      # Authorization: "Bearer ${N8N_API_KEY}"
+    body_template: |
+      {
+        "call_id": "{call_id}",
+        "caller_number": "{caller_number}",
+        "context": "{context_name}",
+        "userMessage": "{userMessage}"
+      }
+    parameters:
+      - name: userMessage
+        type: string
+        description: "The user message to send to the webhook."
+        required: true
+    output_variables:
+      reply: "reply"
+      intent: "intent"
+    return_raw_json: false
+    error_message: "I couldn't reach the automation service right now. Please try again."
 tools:
   ai_identity:
     name: AI Agent
     number: '6789'
+  
+  # ============================================================================
+  # Phase Tools (Milestone 24) - Pre-call and Post-call HTTP integrations
+  # ============================================================================
+
+  # Example: GoHighLevel pre-call lookup (context-specific)
+  # Disabled by default. Enable and set URL/headers for your GHL account to test.
+  sample_gohighlevel_pre_call_lookup:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: false
+    is_global: false
+    timeout_ms: 5000
+    hold_audio_file: "custom/please-wait"
+    hold_audio_threshold_ms: 500
+    url: "https://services.leadconnectorhq.com/contacts/search"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      # Authorization: "Bearer ${GHL_API_KEY}"
+      # Version: "2021-07-28"
+    body_template: |
+      {
+        "query": "{caller_number}"
+      }
+    output_variables:
+      ghl_contact_id: "contacts[0].id"
+      ghl_contact_name: "contacts[0].name"
+      ghl_contact_email: "contacts[0].email"
+  
+  # Example: Post-call webhook (global - fires for all calls)
+  # Sends call data to external system after call ends
+  demo_post_call_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: false  # Set to true and configure URL to test
+    is_global: true
+    timeout_ms: 5000
+    url: "https://your-webhook-endpoint.com/call-completed"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      # Authorization: "Bearer ${WEBHOOK_API_KEY}"
+    payload_template: |
+      {
+        "schema_version": 1,
+        "event_type": "call_completed",
+        "call_id": "{call_id}",
+        "caller_number": "{caller_number}",
+        "caller_name": "{caller_name}",
+        "call_duration": {call_duration},
+        "call_outcome": "{call_outcome}",
+        "transcript": {transcript_json},
+        "context": "{context_name}",
+        "provider": "{provider}",
+        "timestamp": "{call_end_time}"
+      }
+
+  # Example: Discord webhook - posts call summary to a Discord channel (context-specific)
+  # Disabled by default. Enable and add your Discord webhook URL to test.
+  sample_discord_post_call_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: false
+    is_global: false
+    timeout_ms: 5000
+    url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "content": "Call completed\\nContext: {context_name}\\nCaller: {caller_number} ({caller_name})\\nDuration: {call_duration}s\\nOutcome: {call_outcome}\\nProvider: {provider}\\n\\nSummary: {summary}"
+      }
+    generate_summary: true
+
+  # Example: Discord webhook - posts call summary to a Discord channel
+  # discord_webhook:
+  #   kind: generic_webhook
+  #   phase: post_call
+  #   enabled: false  # Set to true and add your webhook URL
+  #   is_global: true
+  #   timeout_ms: 5000
+  #   url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+  #   method: POST
+  #   headers:
+  #     Content-Type: "application/json"
+  #   payload_template: |
+  #     {"content": "📞 **Call Completed**\n\n**Duration:** {call_duration}s\n**Outcome:** {call_outcome}\n**Context:** {context_name}\n**Provider:** {provider}\n**Time:** {call_end_time}\n\n**Summary:**\n{summary}"}
+  #   generate_summary: true
+
+  # Example: n8n workflow webhook - triggers n8n automation after calls
+  # n8n_webhook:
+  #   kind: generic_webhook
+  #   phase: post_call
+  #   enabled: false  # Set to true and add your n8n webhook URL
+  #   is_global: true
+  #   timeout_ms: 5000
+  #   url: "https://your-n8n-instance.com/webhook/your-webhook-path"
+  #   method: POST
+  #   headers:
+  #     Content-Type: "application/json"
+  #   payload_template: |
+  #     {
+  #       "event_type": "call_completed",
+  #       "call_id": "{call_id}",
+  #       "caller_number": "{caller_number}",
+  #       "caller_name": "{caller_name}",
+  #       "call_duration": {call_duration},
+  #       "call_outcome": "{call_outcome}",
+  #       "summary": "{summary}",
+  #       "context": "{context_name}",
+  #       "provider": "{provider}",
+  #       "timestamp": "{call_end_time}"
+  #     }
+  #   generate_summary: true
+
+  # Example: Pre-call CRM lookup (context-specific)
+  # Fetches customer data before AI speaks
+  # demo_crm_lookup:
+  #   kind: generic_http_lookup
+  #   phase: pre_call
+  #   enabled: false
+  #   is_global: false
+  #   timeout_ms: 2000
+  #   hold_audio_file: "custom/please-wait"  # Asterisk sound file
+  #   hold_audio_threshold_ms: 500
+  #   url: "https://api.example.com/contacts/lookup"
+  #   method: GET
+  #   headers:
+  #     Authorization: "Bearer ${CRM_API_KEY}"
+  #   query_params:
+  #     phone: "{caller_number}"
+  #   output_variables:
+  #     customer_name: "contact.name"
+  #     customer_email: "contact.email"
+  #     account_status: "contact.status"
   cancel_transfer:
     allow_after_answer: false
     allow_during_ring: true
@@ -1246,6 +1440,69 @@ tools:
     enabled: true
     farewell_message: Thank you for calling. Goodbye!
     require_confirmation: false
+    policy:
+      mode: normal
+      enforce_transcript_offer: true
+      block_during_contact_capture: true
+      markers:
+        end_call:
+          - no transcript
+          - no transcript needed
+          - don't send a transcript
+          - do not send a transcript
+          - no need for a transcript
+          - no thanks
+          - no thank you
+          - that's all
+          - that is all
+          - that's it
+          - that is it
+          - nothing else
+          - all set
+          - all good
+          - end the call
+          - end call
+          - hang up
+          - hangup
+          - goodbye
+          - bye
+        assistant_farewell:
+          - goodbye
+          - bye
+          - thank you for calling
+          - thanks for calling
+          - have a great day
+          - have a good day
+          - take care
+          - ending the call
+          - i'll let you go
+        affirmative:
+          - yes
+          - yeah
+          - yep
+          - correct
+          - that's correct
+          - thats correct
+          - that's right
+          - thats right
+          - right
+          - exactly
+          - affirmative
+        negative:
+          - no
+          - nope
+          - nah
+          - negative
+          - don't
+          - dont
+          - do not
+          - not
+          - not needed
+          - no need
+          - no thanks
+          - no thank you
+          - decline
+          - skip
   leave_voicemail:
     enabled: true
     extension: '2765'

@@ -8,6 +8,14 @@ const RawYamlPage = () => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [yamlError, setYamlError] = useState<{
+        type?: string;
+        message?: string;
+        line?: number;
+        column?: number;
+        problem?: string;
+        snippet?: string;
+    } | null>(null);
     const [dirty, setDirty] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -20,9 +28,18 @@ const RawYamlPage = () => {
             const res = await axios.get('/api/config/yaml');
             setYamlContent(res.data.content);
             setDirty(false);
+            // Check if there's a YAML parsing error (content still loaded for editing)
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setError(null);
+            } else {
+                setYamlError(null);
+                setError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             setError('Failed to load configuration');
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -149,6 +166,26 @@ const RawYamlPage = () => {
                 <div className="p-4 bg-destructive/10 text-destructive rounded-md border border-destructive/20 flex items-center gap-2">
                     <AlertCircle className="w-4 h-4" />
                     {error}
+                </div>
+            )}
+
+            {yamlError && (
+                <div className="p-4 bg-orange-500/15 border border-orange-500/30 text-orange-700 dark:text-orange-400 rounded-md space-y-2">
+                    <div className="flex items-center font-semibold">
+                        <AlertCircle className="w-4 h-4 mr-2" />
+                        YAML Syntax Error - Fix below and save
+                    </div>
+                    {yamlError.line && (
+                        <div className="text-sm">
+                            <span className="font-medium">Location:</span> Line {yamlError.line}
+                            {yamlError.column && <>, Column {yamlError.column}</>}
+                        </div>
+                    )}
+                    {yamlError.problem && (
+                        <div className="text-sm">
+                            <span className="font-medium">Problem:</span> {yamlError.problem}
+                        </div>
+                    )}
                 </div>
             )}
 

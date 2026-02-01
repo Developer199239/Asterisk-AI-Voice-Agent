@@ -1,20 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
-import { Save, Wrench, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { Save, AlertCircle, RefreshCw, Loader2, Phone, Webhook, Search } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import ToolForm from '../components/config/ToolForm';
+import HTTPToolForm from '../components/config/HTTPToolForm';
 import { useAuth } from '../auth/AuthContext';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
+
+type ToolPhase = 'in_call' | 'pre_call' | 'post_call';
 
 const ToolsPage = () => {
     const { token } = useAuth();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
     const [pendingRestart, setPendingRestart] = useState(false);
     const [restartingEngine, setRestartingEngine] = useState(false);
+    const [activePhase, setActivePhase] = useState<ToolPhase>('in_call');
 
     useEffect(() => {
         fetchConfig();
@@ -23,10 +29,17 @@ const ToolsPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -86,9 +99,19 @@ const ToolsPage = () => {
     const updateToolsConfig = (newToolsConfig: any) => {
         // Extract root-level settings that should not be nested under tools
         const { farewell_hangup_delay_sec, ...toolsOnly } = newToolsConfig;
-        
+
+        // Preserve phase-based HTTP tools stored under `config.tools` (generic_http_lookup / generic_webhook).
+        // ToolForm edits built-in tools only and should not delete phase tool entries.
+        const existingTools = config.tools || {};
+        const preservedPhaseTools: Record<string, any> = {};
+        Object.entries(existingTools).forEach(([k, v]) => {
+            if (v && typeof v === 'object' && (v as any).kind && (v as any).phase) {
+                preservedPhaseTools[k] = v;
+            }
+        });
+
         // Update both tools config and root-level farewell_hangup_delay_sec
-        const updatedConfig = { ...config, tools: toolsOnly };
+        const updatedConfig = { ...config, tools: { ...preservedPhaseTools, ...toolsOnly } };
         if (farewell_hangup_delay_sec !== undefined) {
             updatedConfig.farewell_hangup_delay_sec = farewell_hangup_delay_sec;
         }
@@ -96,6 +119,25 @@ const ToolsPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (yamlError) {
+        return (
+            <div className="space-y-4 p-6">
+                <YamlErrorBanner error={yamlError} />
+                <div className="flex items-center justify-between rounded-md border border-red-500/30 bg-red-500/10 p-4 text-red-700 dark:text-red-400">
+                    <div className="flex items-center">
+                        <AlertCircle className="mr-2 h-5 w-5" />
+                        Tools editing is disabled while `config/ai-agent.yaml` has YAML errors. Fix the YAML and reload.
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                    >
+                        Reload
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6">
@@ -138,14 +180,102 @@ const ToolsPage = () => {
                 </button>
             </div>
 
-            <ConfigSection title="Global Tool Settings" description="Configure tools available across all contexts.">
-                <ConfigCard>
-                    <ToolForm
-                        config={{ ...(config.tools || {}), farewell_hangup_delay_sec: config.farewell_hangup_delay_sec }}
-                        onChange={updateToolsConfig}
-                    />
-                </ConfigCard>
-            </ConfigSection>
+            {/* Phase Tabs */}
+            <div className="border-b border-border">
+                <div className="flex space-x-1">
+                    <button
+                        onClick={() => setActivePhase('pre_call')}
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                            activePhase === 'pre_call'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                        }`}
+                    >
+                        <Search className="w-4 h-4" />
+                        Pre-Call
+                    </button>
+                    <button
+                        onClick={() => setActivePhase('in_call')}
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                            activePhase === 'in_call'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                        }`}
+                    >
+                        <Phone className="w-4 h-4" />
+                        In-Call
+                    </button>
+                    <button
+                        onClick={() => setActivePhase('post_call')}
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                            activePhase === 'post_call'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                        }`}
+                    >
+                        <Webhook className="w-4 h-4" />
+                        Post-Call
+                    </button>
+                </div>
+            </div>
+
+            {/* Pre-Call Phase */}
+            {activePhase === 'pre_call' && (
+                <ConfigSection 
+                    title="Pre-Call Tools" 
+                    description="Tools that run before the AI speaks. Use for CRM lookups, caller enrichment, and context injection."
+                >
+                    <ConfigCard>
+                        <HTTPToolForm
+                            config={config.tools || {}}
+                            onChange={(newTools) => setConfig({ ...config, tools: newTools })}
+                            phase="pre_call"
+                        />
+                    </ConfigCard>
+                </ConfigSection>
+            )}
+
+            {/* In-Call Phase (existing tools + HTTP tools) */}
+            {activePhase === 'in_call' && (
+                <>
+                    <ConfigSection title="Built-in Tools" description="Core tools available during the conversation (transfer, hangup, email, etc.)">
+                        <ConfigCard>
+                            <ToolForm
+                                config={{ ...(config.tools || {}), farewell_hangup_delay_sec: config.farewell_hangup_delay_sec }}
+                                onChange={updateToolsConfig}
+                            />
+                        </ConfigCard>
+                    </ConfigSection>
+                    <ConfigSection 
+                        title="In-Call HTTP Tools" 
+                        description="HTTP lookup tools the AI can invoke during conversation to fetch data (e.g., check availability, lookup order status)."
+                    >
+                        <ConfigCard>
+                            <HTTPToolForm
+                                config={config.in_call_tools || {}}
+                                onChange={(newTools) => setConfig({ ...config, in_call_tools: newTools })}
+                                phase="in_call"
+                            />
+                        </ConfigCard>
+                    </ConfigSection>
+                </>
+            )}
+
+            {/* Post-Call Phase */}
+            {activePhase === 'post_call' && (
+                <ConfigSection 
+                    title="Post-Call Tools" 
+                    description="Tools that run after the call ends. Use for webhooks, CRM updates, and integrations."
+                >
+                    <ConfigCard>
+                        <HTTPToolForm
+                            config={config.tools || {}}
+                            onChange={(newTools) => setConfig({ ...config, tools: newTools })}
+                            phase="post_call"
+                        />
+                    </ConfigCard>
+                </ConfigSection>
+            )}
         </div>
     );
 };

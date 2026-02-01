@@ -287,6 +287,24 @@ class ARIClient:
             async with self.http_session.request(method, url, json=data, params=params) as response:
                 if response.status >= 400:
                     reason = await response.text()
+                    # Common benign case: reading a missing channel variable.
+                    # Asterisk returns 404 with: {"message":"Provided variable was not found"}
+                    # This is expected when probing optional vars (e.g., AI_CONTEXT/AAVA_*). Treat as debug.
+                    if (
+                        int(response.status) == 404
+                        and str(method).upper() == "GET"
+                        and "/channels/" in f"/{resource}"
+                        and str(resource).endswith("/variable")
+                        and "Provided variable was not found" in reason
+                    ):
+                        logger.debug(
+                            "ARI channel variable not found (benign)",
+                            method=method,
+                            url=url,
+                            status=response.status,
+                            reason=reason,
+                        )
+                        return {"status": response.status, "reason": reason}
                     if tolerate_statuses and response.status in tolerate_statuses:
                         logger.debug(
                             "ARI command tolerated non-2xx",
@@ -410,6 +428,17 @@ class ARIClient:
         """Play media on a channel."""
         logger.info("Playing media on channel", channel_id=channel_id, media_uri=media_uri)
         return await self.send_command("POST", f"channels/{channel_id}/play", data={"media": media_uri})
+
+    async def play_sound(self, channel_id: str, sound_file: str) -> Optional[Dict[str, Any]]:
+        """
+        Convenience wrapper to play an Asterisk sound file (e.g. "custom/please-wait").
+        """
+        media_uri = (sound_file or "").strip()
+        if not media_uri:
+            return None
+        if not any(media_uri.startswith(prefix) for prefix in ("sound:", "file:", "recording:")):
+            media_uri = f"sound:{media_uri}"
+        return await self.play_media(channel_id, media_uri)
 
     async def play_media_on_channel_with_id(self, channel_id: str, media_uri: str, playback_id: str) -> bool:
         """Play media on a channel with a deterministic playback ID."""

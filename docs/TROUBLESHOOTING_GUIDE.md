@@ -84,12 +84,12 @@ Note: The CLI binary and the Python engine may have different version strings de
 
 ### Available Tools
 
-- **`agent setup`** - Interactive setup wizard (v5.2.5)
-- **`agent check`** - Standard diagnostics report (v5.2.5)
-- **`agent rca`** - Post-call root cause analysis (v5.2.5)
+- **`agent setup`** - Interactive setup wizard (v5.3.1)
+- **`agent check`** - Standard diagnostics report (v5.3.1)
+- **`agent rca`** - Post-call root cause analysis (v5.3.1)
 - **`agent update`** - Pull latest code + rebuild/restart as needed (v5.1+)
 
-Legacy aliases (v5.2.5; hidden from `--help`):
+Legacy aliases (v5.3.1; hidden from `--help`):
 - `agent init` → `agent setup`
 - `agent doctor` → `agent check`
 - `agent troubleshoot` → `agent rca`
@@ -567,6 +567,9 @@ agent rca --json
 
 # Verbose output
 agent rca -v
+
+# Force LLM analysis (even for healthy calls)
+agent rca --llm
 ```
 
 **What it analyzes:**
@@ -643,7 +646,7 @@ agent demo -v
 # Run setup wizard
 agent setup
 
-# Flags below are planned; they may exist but are not implemented in v5.2.5:
+# Flags below are planned; they may exist but are not implemented in v5.3.1:
 # agent setup --non-interactive
 # agent setup --template <name>
 ```
@@ -660,6 +663,19 @@ agent setup
 ## Debugging Tool Execution Issues
 
 **Tool execution** allows AI agents to perform actions like call transfers, hangups, and sending emails. When tools don't work, follow this debugging workflow.
+
+### HTTP Phase Tools (Pre/In/Post Call)
+
+If you are troubleshooting **pre-call HTTP lookups**, **in-call HTTP tools**, or **post-call webhooks**:
+
+- **Template variables** use the *variable name* (e.g., `{patient_id}`), not the JSON extraction path (e.g., `patient.id`).
+- In the Admin UI, the variable names you can reuse elsewhere are highlighted in the HTTP tool editors.
+- With `LOG_LEVEL=debug`, the engine emits `[HTTP_TOOL_TRACE]` logs showing the resolved request (URL/headers/body), referenced variable values, and a bounded response preview.
+
+```bash
+# Show HTTP tool request/response traces (requires LOG_LEVEL=debug)
+docker logs ai_engine 2>&1 | grep "\\[HTTP_TOOL_TRACE\\]"
+```
 
 ### Quick Diagnostics for Tool Issues
 

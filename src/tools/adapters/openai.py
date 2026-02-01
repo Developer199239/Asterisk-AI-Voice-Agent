@@ -130,7 +130,24 @@ class OpenAIToolAdapter:
             logger.error(f"Failed to parse function arguments: {e}", arguments=arguments_str)
             parameters = {}
         
-        logger.info(f"🔧 OpenAI tool call: {function_name}({parameters})", call_id=function_call_id)
+        parameter_keys: List[str] = []
+        if isinstance(parameters, dict):
+            parameter_keys = sorted([str(k) for k in parameters.keys()])
+
+        logger.info(
+            "OpenAI tool call received",
+            call_id=context.get("call_id"),
+            function_call_id=function_call_id,
+            tool=function_name,
+            parameter_keys=parameter_keys,
+        )
+        logger.debug(
+            "OpenAI tool call parameters",
+            call_id=context.get("call_id"),
+            function_call_id=function_call_id,
+            tool=function_name,
+            parameters=parameters,
+        )
         
         # Get tool from registry
         tool = self.registry.get(function_name)
@@ -149,6 +166,7 @@ class OpenAIToolAdapter:
             call_id=context['call_id'],
             caller_channel_id=context.get('caller_channel_id'),
             bridge_id=context.get('bridge_id'),
+            called_number=context.get('called_number'),
             session_store=context['session_store'],
             ari_client=context['ari_client'],
             config=context.get('config'),
@@ -159,8 +177,21 @@ class OpenAIToolAdapter:
         # Execute tool
         try:
             result = await tool.execute(parameters, exec_context)
-            logger.info(f"✅ Tool {function_name} executed: {result.get('status')}", 
-                       call_id=function_call_id)
+            sanitized = sanitize_tool_result_for_json_string(result)
+            logger.info(
+                "Tool executed",
+                call_id=context.get("call_id"),
+                function_call_id=function_call_id,
+                tool=function_name,
+                status=sanitized.get("status"),
+            )
+            logger.debug(
+                "Tool execution result",
+                call_id=context.get("call_id"),
+                function_call_id=function_call_id,
+                tool=function_name,
+                result=sanitized,
+            )
             result['call_id'] = function_call_id
             result['function_name'] = function_name
             return result
@@ -227,8 +258,11 @@ class OpenAIToolAdapter:
                 }
             }
             await websocket.send(json.dumps(output_event))
-            logger.info(f"✅ Sent function output to OpenAI: {safe_result.get('status')}", 
-                       call_id=call_id)
+            logger.info(
+                f"✅ Sent function output to OpenAI: {safe_result.get('status')}",
+                call_id=context.get("call_id"),
+                function_call_id=call_id,
+            )
 
             # Special-case hangup flow: the provider will create the farewell response with tools disabled
             # to prevent recursive tool calls (e.g., model calls hangup_call again instead of speaking).

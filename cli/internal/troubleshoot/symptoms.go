@@ -198,15 +198,36 @@ func (sc *SymptomChecker) analyzeEcho(analysis *Analysis, logData string) {
 	}
 
 	// Check for echo cancellation
-	if strings.Contains(lower, "echo") {
-		count := strings.Count(lower, "echo")
+	if echoEvidenceCount(lower) > 0 {
+		count := echoEvidenceCount(lower)
 		analysis.SymptomAnalysis.Findings = append(analysis.SymptomAnalysis.Findings,
-			fmt.Sprintf("❌ Echo mentions in logs (%d occurrences)", count))
+			fmt.Sprintf("❌ Echo evidence in logs (%d matches)", count))
 		analysis.SymptomAnalysis.Actions = append(analysis.SymptomAnalysis.Actions,
 			"Let provider handle echo cancellation (OpenAI has built-in)")
 		analysis.SymptomAnalysis.Actions = append(analysis.SymptomAnalysis.Actions,
 			"Reduce local VAD sensitivity")
 	}
+}
+
+func echoEvidenceCount(lowerLogData string) int {
+	// Be conservative: "echo" often appears in benign logs (e.g., "echo prevention").
+	// Only count phrases that typically indicate an actual echo problem.
+	evidencePhrases := []string{
+		"echo detected",
+		"acoustic echo",
+		"echo leakage",
+		"hearing itself",
+		"hears itself",
+		"self echo",
+		"self-echo",
+		"echo cancellation failed",
+	}
+
+	count := 0
+	for _, p := range evidencePhrases {
+		count += strings.Count(lowerLogData, p)
+	}
+	return count
 }
 
 // analyzeInterruption checks for self-interruption loops

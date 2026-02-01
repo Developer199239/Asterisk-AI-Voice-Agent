@@ -39,12 +39,13 @@ type Runner struct {
 	interactive bool
 	collectOnly bool
 	noLLM       bool
+	forceLLM    bool
 	list        bool
 	jsonOutput  bool
 }
 
 // NewRunner creates a new troubleshoot runner
-func NewRunner(callID, symptom string, interactive, collectOnly, noLLM, list, jsonOutput, verbose bool) *Runner {
+func NewRunner(callID, symptom string, interactive, collectOnly, noLLM, forceLLM, list, jsonOutput, verbose bool) *Runner {
 	return &Runner{
 		verbose:     verbose,
 		ctx:         context.Background(),
@@ -53,6 +54,7 @@ func NewRunner(callID, symptom string, interactive, collectOnly, noLLM, list, js
 		interactive: interactive,
 		collectOnly: collectOnly,
 		noLLM:       noLLM,
+		forceLLM:    forceLLM,
 		list:        list,
 		jsonOutput:  jsonOutput,
 	}
@@ -117,6 +119,23 @@ func (r *Runner) Run() error {
 	if err != nil {
 		return fmt.Errorf("failed to collect data: %w", err)
 	}
+	if strings.TrimSpace(logData) == "" {
+		if r.jsonOutput {
+			_ = r.outputJSON(&RCAReport{
+				CallID: r.callID,
+				Error:  "no ai_engine logs found for this call_id (enable info/debug logging, make a test call, and re-run)",
+			})
+			return fmt.Errorf("no logs found for call_id: %s", r.callID)
+		}
+		errorColor.Println("❌ No ai_engine log lines found for this call ID")
+		fmt.Println("Tips:")
+		fmt.Println("  • Make a test call, then immediately run: agent rca")
+		fmt.Println("  • Ensure ai_engine logging is enabled (info or debug)")
+		fmt.Println("  • If you only have info logs, enable debug for richer RCA details")
+		return fmt.Errorf("no logs found for call_id: %s", r.callID)
+	}
+
+	header := ExtractRCAHeader(logData)
 
 	if r.collectOnly {
 		if r.jsonOutput {
@@ -132,13 +151,18 @@ func (r *Runner) Run() error {
 
 	// Analyze logs
 	analysis := r.analyzeBasic(logData)
+	analysis.Header = header
+	analysis.ProviderRuntime = ExtractProviderRuntimeAudio(logData)
+	if (analysis.AudioTransport == "" || strings.ToLower(strings.TrimSpace(analysis.AudioTransport)) == "unknown") && header != nil && header.AudioTransport != "" {
+		analysis.AudioTransport = strings.ToLower(strings.TrimSpace(header.AudioTransport))
+	}
 
 	// Extract structured metrics
 	metrics := ExtractMetrics(logData)
 	analysis.Metrics = metrics
 
 	// Analyze format/sampling alignment
-	formatAlignment := AnalyzeFormatAlignment(metrics)
+	formatAlignment := AnalyzeFormatAlignment(metrics, header)
 	metrics.FormatAlignment = formatAlignment
 
 	// Compare to golden baselines
@@ -159,7 +183,11 @@ func (r *Runner) Run() error {
 
 	// LLM analysis
 	var llmDiagnosis *LLMDiagnosis
+	runLLM := false
 	if !r.noLLM {
+		runLLM = r.forceLLM || shouldRunLLM(analysis, metrics, logData)
+	}
+	if runLLM {
 		llmAnalyzer, err := NewLLMAnalyzer()
 		if err != nil {
 			// best-effort; do not fail the report
@@ -180,6 +208,7 @@ func (r *Runner) Run() error {
 	fmt.Println("🔍 Call Troubleshooting & RCA")
 	fmt.Println("═══════════════════════════════════════════")
 	fmt.Println()
+	r.displayHeader(analysis.Header, analysis.ProviderRuntime)
 	infoColor.Println("Collecting call data...")
 	successColor.Println("✅ Data collected")
 	fmt.Println()
@@ -190,8 +219,12 @@ func (r *Runner) Run() error {
 	if r.symptom != "" {
 		infoColor.Printf("Applying symptom analysis: %s\n", r.symptom)
 	}
-	if !r.noLLM {
+	if r.noLLM {
+		infoColor.Println("AI diagnosis: disabled")
+	} else if runLLM {
 		infoColor.Println("Requesting AI diagnosis...")
+	} else {
+		infoColor.Println("AI diagnosis: skipped (call looks healthy; use --llm to force)")
 	}
 	fmt.Println()
 
@@ -203,7 +236,7 @@ func (r *Runner) Run() error {
 		r.displayMetrics(analysis.Metrics)
 
 		// Show overall call quality verdict
-		r.displayCallQuality(analysis.Metrics)
+		r.displayCallQuality(analysis)
 	}
 
 	// Show LLM diagnosis
@@ -222,6 +255,8 @@ func (r *Runner) Run() error {
 type RCAReport struct {
 	CallID string `json:"call_id"`
 	Error  string `json:"error,omitempty"`
+	Header *RCAHeader `json:"header,omitempty"`
+	ProviderRuntime *ProviderRuntimeAudio `json:"provider_runtime,omitempty"`
 
 	AudioTransport string `json:"audio_transport,omitempty"`
 
@@ -236,6 +271,7 @@ type RCAReport struct {
 	Warnings []string `json:"warnings,omitempty"`
 
 	AudioIssues []string `json:"audio_issues,omitempty"`
+	ToolCalls   []ToolCallRecord `json:"tool_calls,omitempty"`
 
 	Symptom         string           `json:"symptom,omitempty"`
 	SymptomAnalysis *SymptomAnalysis `json:"symptom_analysis,omitempty"`
@@ -248,9 +284,12 @@ type RCAReport struct {
 func buildRCAReport(analysis *Analysis, llm *LLMDiagnosis) *RCAReport {
 	rep := &RCAReport{
 		CallID:       analysis.CallID,
+		Header:       analysis.Header,
+		ProviderRuntime: analysis.ProviderRuntime,
 		Errors:       capSlice(analysis.Errors, 20),
 		Warnings:     capSlice(analysis.Warnings, 20),
 		AudioIssues:  capSlice(analysis.AudioIssues, 50),
+		ToolCalls:    analysis.ToolCalls,
 		Symptom:      analysis.Symptom,
 		Metrics:      analysis.Metrics,
 		LLMDiagnosis: llm,
@@ -322,9 +361,9 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 	excludedChannels := make(map[string]bool)
 
 	// First pass: identify AudioSocket channels (internal infrastructure)
-	audioSocketPattern := regexp.MustCompile(`"audiosocket_channel_id":\s*"([0-9]+\.[0-9]+)"`)
-	externalMediaPattern := regexp.MustCompile(`"external_media_id":\s*"([0-9]+\.[0-9]+)"`)
-	pendingExternalMediaPattern := regexp.MustCompile(`"pending_external_media_id":\s*"([0-9]+\.[0-9]+)"`)
+	audioSocketPattern := regexp.MustCompile(`(?i)(?:"audiosocket_channel_id"\s*:\s*"([0-9]+\.[0-9]+)"|audiosocket_channel_id=([0-9]+\.[0-9]+))`)
+	externalMediaPattern := regexp.MustCompile(`(?i)(?:"external_media_id"\s*:\s*"([0-9]+\.[0-9]+)"|external_media_id=([0-9]+\.[0-9]+))`)
+	pendingExternalMediaPattern := regexp.MustCompile(`(?i)(?:"pending_external_media_id"\s*:\s*"([0-9]+\.[0-9]+)"|pending_external_media_id=([0-9]+\.[0-9]+))`)
 	lines := strings.Split(cleanOutput, "\n")
 
 	if r.verbose {
@@ -333,24 +372,24 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 
 	for _, line := range lines {
 		matches := audioSocketPattern.FindStringSubmatch(line)
-		if len(matches) > 1 {
-			excludedChannels[matches[1]] = true
+		if id := firstNonEmpty(matches, 1, 2); id != "" {
+			excludedChannels[id] = true
 			if r.verbose {
-				fmt.Fprintf(os.Stderr, "[DEBUG] Found AudioSocket channel: %s\n", matches[1])
+				fmt.Fprintf(os.Stderr, "[DEBUG] Found AudioSocket channel: %s\n", id)
 			}
 		}
 		matches = externalMediaPattern.FindStringSubmatch(line)
-		if len(matches) > 1 {
-			excludedChannels[matches[1]] = true
+		if id := firstNonEmpty(matches, 1, 2); id != "" {
+			excludedChannels[id] = true
 			if r.verbose {
-				fmt.Fprintf(os.Stderr, "[DEBUG] Found ExternalMedia channel: %s\n", matches[1])
+				fmt.Fprintf(os.Stderr, "[DEBUG] Found ExternalMedia channel: %s\n", id)
 			}
 		}
 		matches = pendingExternalMediaPattern.FindStringSubmatch(line)
-		if len(matches) > 1 {
-			excludedChannels[matches[1]] = true
+		if id := firstNonEmpty(matches, 1, 2); id != "" {
+			excludedChannels[id] = true
 			if r.verbose {
-				fmt.Fprintf(os.Stderr, "[DEBUG] Found pending ExternalMedia channel: %s\n", matches[1])
+				fmt.Fprintf(os.Stderr, "[DEBUG] Found pending ExternalMedia channel: %s\n", id)
 			}
 		}
 	}
@@ -360,6 +399,7 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 		regexp.MustCompile(`"call_id":\s*"([0-9]+\.[0-9]+)"`),                     // JSON: "call_id": "1761518880.2191"
 		regexp.MustCompile(`(?:call_id|channel_id)[=:][\s]*"?([0-9]+\.[0-9]+)"?`), // call_id= or channel_id=
 		regexp.MustCompile(`"caller_channel_id":\s*"([0-9]+\.[0-9]+)"`),           // Explicit caller channel
+		regexp.MustCompile(`caller_channel_id[=:][\s]*"?([0-9]+\.[0-9]+)"?`),      // Console caller channel
 	}
 
 	matchCount := 0
@@ -413,7 +453,13 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 
 // collectCallData collects logs for specific call
 func (r *Runner) collectCallData() (string, error) {
-	cmd := exec.Command("docker", "logs", "--since", "1h", "ai_engine")
+	// Log-driven RCA: collect from all available ai_engine logs (not time-windowed),
+	// then filter down to the requested call_id + any related helper channel ids.
+	since := os.Getenv("RCA_LOG_SINCE")
+	if since == "" {
+		since = "72h"
+	}
+	cmd := exec.Command("docker", "logs", "--since", since, "ai_engine")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -456,6 +502,20 @@ func (r *Runner) collectCallData() (string, error) {
 		}
 	}
 
+	addRelatedFromLine := func(line string) {
+		for _, re := range []*regexp.Regexp{
+			regexp.MustCompile(`audiosocket_channel_id=([0-9]+\.[0-9]+)`),
+			regexp.MustCompile(`external_media_id=([0-9]+\.[0-9]+)`),
+			regexp.MustCompile(`pending_external_media_id=([0-9]+\.[0-9]+)`),
+			regexp.MustCompile(`\bchannel_id=([0-9]+\.[0-9]+)`),
+			regexp.MustCompile(`\bbridge_id=([0-9a-fA-F-]{36})`),
+		} {
+			if m := re.FindStringSubmatch(line); len(m) > 1 {
+				relatedIDs[m[1]] = true
+			}
+		}
+	}
+
 	// First pass: include lines that reference the caller id; capture related channel ids.
 	for _, line := range lines {
 		if !strings.Contains(line, r.callID) {
@@ -466,6 +526,8 @@ func (r *Runner) collectCallData() (string, error) {
 
 		var entry map[string]any
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			// Console logs: still attempt to discover related ids.
+			addRelatedFromLine(line)
 			continue
 		}
 		addRelated(entry["audiosocket_channel_id"])
@@ -473,6 +535,8 @@ func (r *Runner) collectCallData() (string, error) {
 		addRelated(entry["pending_external_media_id"])
 		// Some log lines use "channel_id" to reference the helper channel.
 		addRelated(entry["channel_id"])
+		// Console logs may include related ids without JSON structure.
+		addRelatedFromLine(line)
 	}
 
 	// Second pass: include any log lines that reference a related channel id.
@@ -493,9 +557,12 @@ func (r *Runner) collectCallData() (string, error) {
 // Analysis holds analysis results
 type Analysis struct {
 	CallID             string
+	Header             *RCAHeader
+	ProviderRuntime    *ProviderRuntimeAudio
 	Errors             []string
 	Warnings           []string
 	AudioIssues        []string
+	ToolCalls          []ToolCallRecord
 	MetricsMap         map[string]string
 	Metrics            *CallMetrics
 	BaselineComparison *BaselineComparison
@@ -528,12 +595,12 @@ func (r *Runner) analyzeBasic(logData string) *Analysis {
 		lower := strings.ToLower(line)
 
 		// Check for errors
-		if strings.Contains(lower, "error") && !strings.Contains(lower, "0 error") {
+		if isErrorLine(line) && !isBenignRCAErrorLine(line) {
 			analysis.Errors = append(analysis.Errors, line)
 		}
 
 		// Check for warnings
-		if strings.Contains(lower, "warning") || strings.Contains(lower, "warn") {
+		if isWarningLine(line) {
 			analysis.Warnings = append(analysis.Warnings, line)
 		}
 
@@ -546,7 +613,9 @@ func (r *Runner) analyzeBasic(logData string) *Analysis {
 		if strings.Contains(lower, "🎯 external media") ||
 			strings.Contains(lower, "externalmedia channel") ||
 			strings.Contains(lower, "\"external_media_id\"") ||
+			strings.Contains(lower, "external_media_id=") ||
 			strings.Contains(lower, "\"pending_external_media_id\"") ||
+			strings.Contains(lower, "pending_external_media_id=") ||
 			strings.Contains(lower, "create_external_media_channel") {
 			hasExternalMediaEvidence = true
 		}
@@ -565,14 +634,12 @@ func (r *Runner) analyzeBasic(logData string) *Analysis {
 		if strings.Contains(lower, "garbled") || strings.Contains(lower, "distorted") {
 			analysis.AudioIssues = append(analysis.AudioIssues, "Audio quality issue detected")
 		}
-		if strings.Contains(lower, "echo") {
-			analysis.AudioIssues = append(analysis.AudioIssues, "Echo detected")
-		}
 	}
 
 	analysis.HasAudioSocket = hasAudioSocketEvidence
 	analysis.HasExternalMedia = hasExternalMediaEvidence
 	analysis.AudioTransport = detectTransportBestEffort(logData, hasAudioSocketEvidence, hasExternalMediaEvidence)
+	analysis.ToolCalls = ExtractToolCalls(logData)
 
 	return analysis
 }
@@ -585,34 +652,190 @@ func detectTransportBestEffort(logData string, hasAudioSocketEvidence, hasExtern
 		return "audiosocket"
 	}
 
-	// Ambiguous or unknown from logs: fall back to config.
-	if transport := detectTransportFromConfig(); transport != "" {
-		return transport
-	}
+	// Ambiguous or unknown from logs: return empty and let the RCA header
+	// (RCA_CALL_START) provide the configured transport if available.
 	return ""
 }
 
-func detectTransportFromConfig() string {
-	cmd := exec.Command("docker", "exec", "ai_engine", "cat", "/app/config/ai-agent.yaml")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return ""
+func (r *Runner) displayHeader(h *RCAHeader, pr *ProviderRuntimeAudio) {
+	fmt.Println("RCA Header:")
+	if h == nil {
+		fmt.Printf("  Call ID: %s\n", r.callID)
+		fmt.Println("  Note: RCA header (RCA_CALL_START) not found in logs for this call.")
+		fmt.Println("        Enable info/debug logging and re-run a call for richer RCA context.")
+		fmt.Println()
+		return
 	}
-
-	// Avoid adding a YAML dependency to this file; parse with a tolerant regex
-	// that supports optional quotes and trailing comments.
-	return detectTransportFromConfigText(string(output))
+	if h.CallID != "" {
+		fmt.Printf("  Call ID: %s\n", h.CallID)
+	} else {
+		fmt.Printf("  Call ID: %s\n", r.callID)
+	}
+	if h.CallerNumber != "" {
+		fmt.Printf("  Caller: %s\n", h.CallerNumber)
+	}
+	if h.CalledNumber != "" {
+		fmt.Printf("  Called: %s\n", h.CalledNumber)
+	}
+	if h.ContextName != "" {
+		fmt.Printf("  Context: %s\n", h.ContextName)
+	}
+	if h.ProviderName != "" {
+		fmt.Printf("  Provider: %s\n", h.ProviderName)
+	}
+	if h.PipelineName != "" {
+		fmt.Printf("  Pipeline: %s\n", h.PipelineName)
+	}
+	if h.AudioTransport != "" {
+		fmt.Printf("  Transport: %s\n", h.AudioTransport)
+	}
+	if h.DownstreamMode != "" {
+		fmt.Printf("  Downstream: %s\n", h.DownstreamMode)
+	}
+	if h.TransportProfileEncoding != "" || h.TransportProfileSampleRate > 0 {
+		fmt.Printf("  Transport Profile: %s@%d (%s)\n", emptyTo(h.TransportProfileEncoding, "?"), h.TransportProfileSampleRate, emptyTo(h.TransportProfileSource, "unknown"))
+	}
+	switch strings.ToLower(strings.TrimSpace(h.AudioTransport)) {
+	case "audiosocket":
+		if h.AudioSocketFormat != "" || h.AudioSocketHost != "" || h.AudioSocketPort > 0 {
+			addr := ""
+			if h.AudioSocketHost != "" || h.AudioSocketPort > 0 {
+				addr = fmt.Sprintf("%s:%d", emptyTo(h.AudioSocketHost, "?"), h.AudioSocketPort)
+			}
+			if addr != "" {
+				fmt.Printf("  AudioSocket: format=%s addr=%s\n", emptyTo(h.AudioSocketFormat, "?"), addr)
+			} else {
+				fmt.Printf("  AudioSocket: format=%s\n", emptyTo(h.AudioSocketFormat, "?"))
+			}
+		}
+	case "externalmedia":
+		if h.ExternalMediaCodec != "" || h.ExternalMediaRTPHost != "" || h.ExternalMediaRTPPort > 0 {
+			rtp := ""
+			if h.ExternalMediaRTPHost != "" || h.ExternalMediaRTPPort > 0 {
+				rtp = fmt.Sprintf("%s:%d", emptyTo(h.ExternalMediaRTPHost, "?"), h.ExternalMediaRTPPort)
+			}
+			if h.ExternalMediaAdvertiseHost != "" {
+				fmt.Printf("  ExternalMedia: codec=%s rtp=%s advertise_host=%s\n", emptyTo(h.ExternalMediaCodec, "?"), emptyTo(rtp, "?"), h.ExternalMediaAdvertiseHost)
+			} else {
+				fmt.Printf("  ExternalMedia: codec=%s rtp=%s\n", emptyTo(h.ExternalMediaCodec, "?"), emptyTo(rtp, "?"))
+			}
+		}
+	}
+	if h.ProviderInputEncoding != "" || h.ProviderInputSampleRateHz > 0 ||
+		h.ProviderProviderInputEncoding != "" || h.ProviderProviderInputSampleRateHz > 0 ||
+		h.ProviderOutputEncoding != "" || h.ProviderOutputSampleRateHz > 0 ||
+		h.ProviderTargetEncoding != "" || h.ProviderTargetSampleRateHz > 0 {
+		fmt.Printf(
+			"  Provider Audio: in=%s@%d provider_in=%s@%d out=%s@%d target=%s@%d\n",
+			emptyTo(h.ProviderInputEncoding, "?"),
+			h.ProviderInputSampleRateHz,
+			emptyTo(h.ProviderProviderInputEncoding, "?"),
+			h.ProviderProviderInputSampleRateHz,
+			emptyTo(h.ProviderOutputEncoding, "?"),
+			h.ProviderOutputSampleRateHz,
+			emptyTo(h.ProviderTargetEncoding, "?"),
+			h.ProviderTargetSampleRateHz,
+		)
+	}
+	if pr != nil && (pr.ProviderReportedOutputSampleRateHz > 0 || pr.UsedOutputSampleRateHz > 0 || pr.ConfiguredOutputSampleRateHz > 0) {
+		fmt.Printf(
+			"  Provider Runtime: configured_out=%d reported_out=%d used_out=%d\n",
+			pr.ConfiguredOutputSampleRateHz,
+			pr.ProviderReportedOutputSampleRateHz,
+			pr.UsedOutputSampleRateHz,
+		)
+	}
+	if h.StreamingSampleRate > 0 || h.StreamingJitterBufferMs > 0 {
+		fmt.Printf("  Streaming: sample_rate=%d jitter_buffer_ms=%d min_start_ms=%d low_watermark_ms=%d\n", h.StreamingSampleRate, h.StreamingJitterBufferMs, h.StreamingMinStartMs, h.StreamingLowWatermarkMs)
+	}
+	if h.VADWebRTCAggressiveness > 0 || h.VADConfidenceThreshold > 0 || h.VADEnergyThreshold > 0 || h.VADEnhancedEnabled {
+		fmt.Printf(
+			"  VAD: webrtc_aggressiveness=%d confidence_threshold=%.2f energy_threshold=%d enhanced=%t\n",
+			h.VADWebRTCAggressiveness,
+			h.VADConfidenceThreshold,
+			h.VADEnergyThreshold,
+			h.VADEnhancedEnabled,
+		)
+	}
+	if h.BargeInPostTTSEndProtectionMs > 0 {
+		fmt.Printf("  Barge-in: post_tts_end_protection_ms=%d\n", h.BargeInPostTTSEndProtectionMs)
+	}
+	fmt.Println()
 }
 
-func detectTransportFromConfigText(configText string) string {
-	// Go uses RE2 which does not support backreferences, so tolerate optional
-	// quoting without enforcing matching quote pairs.
-	transportRe := regexp.MustCompile(`(?im)^\s*audio_transport\s*:\s*['"]?(audiosocket|externalmedia)['"]?\s*(?:#.*)?$`)
-	matches := transportRe.FindStringSubmatch(configText)
-	if len(matches) < 2 {
-		return ""
+func emptyTo(s, def string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def
 	}
-	return strings.ToLower(matches[1])
+	return s
+}
+
+func isErrorLine(line string) bool {
+	l := strings.ToLower(line)
+	return strings.Contains(l, "[error") || strings.Contains(l, "\"level\":\"error\"") || strings.Contains(l, " level=error")
+}
+
+func isWarningLine(line string) bool {
+	l := strings.ToLower(line)
+	return strings.Contains(l, "[warning") || strings.Contains(l, "[warn") || strings.Contains(l, "\"level\":\"warning\"") || strings.Contains(l, " level=warning")
+}
+
+func isBenignRCAErrorLine(line string) bool {
+	// Benign: missing channel variable reads in ARI (404 "Provided variable was not found").
+	l := strings.ToLower(line)
+	if !strings.Contains(l, "ari command failed") {
+		return false
+	}
+	if !strings.Contains(l, "status=404") {
+		return false
+	}
+	if !strings.Contains(l, "provided variable was not found") {
+		return false
+	}
+	if strings.Contains(l, "/variable") {
+		return true
+	}
+	return false
+}
+
+func shouldRunLLM(analysis *Analysis, metrics *CallMetrics, logData string) bool {
+	// Avoid hallucinations: only run if we have non-trivial evidence.
+	lines := 0
+	for _, l := range strings.Split(logData, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines++
+		}
+	}
+	if lines < 50 && len(analysis.Errors) == 0 && len(analysis.Warnings) == 0 {
+		return false
+	}
+
+	// Always run when there are explicit errors to interpret.
+	if len(analysis.Errors) > 0 {
+		return true
+	}
+
+	// Only run when we have real RCA metrics and they indicate non-excellent quality.
+	if metrics == nil || !metricsHasEvidence(metrics) {
+		return false
+	}
+	score, issues := evaluateCallQuality(metrics)
+	if score < 90 || len(issues) > 0 {
+		return true
+	}
+
+	// Otherwise, skip (healthy call). Warnings alone are usually too noisy.
+	return false
+}
+
+func firstNonEmpty(matches []string, idxs ...int) string {
+	for _, i := range idxs {
+		if i >= 0 && i < len(matches) && strings.TrimSpace(matches[i]) != "" {
+			return strings.TrimSpace(matches[i])
+		}
+	}
+	return ""
 }
 
 // displayFindings shows analysis results
@@ -704,6 +927,32 @@ func (r *Runner) displayFindings(analysis *Analysis) {
 		fmt.Println()
 	}
 
+	// Tool calls
+	if len(analysis.ToolCalls) > 0 {
+		infoColor.Printf("Tool Calls (%d):\n", len(analysis.ToolCalls))
+		count := len(analysis.ToolCalls)
+		if count > 5 {
+			count = 5
+		}
+		for i := 0; i < count; i++ {
+			tc := analysis.ToolCalls[i]
+			line := fmt.Sprintf("  %d. %s", i+1, tc.Name)
+			if tc.Status != "" {
+				line += fmt.Sprintf(" → %s", tc.Status)
+			}
+			if tc.Message != "" {
+				line += fmt.Sprintf(" (%s)", truncate(tc.Message, 80))
+			} else if tc.Arguments != "" {
+				line += fmt.Sprintf(" args=%s", truncate(tc.Arguments, 80))
+			}
+			fmt.Println(line)
+		}
+		if len(analysis.ToolCalls) > count {
+			fmt.Printf("  ... and %d more\n", len(analysis.ToolCalls)-count)
+		}
+		fmt.Println()
+	}
+
 	// Symptom-specific analysis
 	if analysis.SymptomAnalysis != nil {
 		fmt.Println("═══════════════════════════════════════════")
@@ -766,6 +1015,36 @@ func (r *Runner) displayRecommendations(analysis *Analysis) {
 		fmt.Println("  • Run: agent check (for detailed diagnostics)")
 		fmt.Println("  • Check jitter_buffer_ms settings")
 		fmt.Println("  • Verify network stability")
+	}
+
+	// Drift-focused guidance: most commonly sample-rate / resampling mismatch (not jitter).
+	if analysis.Metrics != nil && metricsHasEvidence(analysis.Metrics) {
+		if absFloat(analysis.Metrics.WorstDriftPct) > 10.0 && analysis.Metrics.UnderflowCount == 0 {
+			fmt.Println("  • High drift with zero underflows usually indicates a sample-rate mismatch or resampling issue")
+			fmt.Println("  • Verify provider output sample rate matches what the provider actually sends (e.g., google_live is typically 24000 Hz)")
+			fmt.Println("  • Confirm provider output is resampled to target/wire rate (e.g., ulaw@8000 for telephony)")
+		}
+	}
+
+	// Provider runtime mismatch guidance (even when the call looks healthy).
+	if analysis.ProviderRuntime != nil && analysis.ProviderRuntime.ProviderReportedOutputSampleRateHz > 0 && analysis.ProviderRuntime.ConfiguredOutputSampleRateHz > 0 {
+		if analysis.ProviderRuntime.ProviderReportedOutputSampleRateHz != analysis.ProviderRuntime.ConfiguredOutputSampleRateHz {
+			providerName := strings.TrimSpace(analysis.ProviderRuntime.ProviderName)
+			if providerName == "" {
+				providerName = "provider"
+			}
+			fmt.Printf(
+				"  • Provider-reported output rate (%d Hz) differs from configured (%d Hz); align the provider setting to reduce confusion\n",
+				analysis.ProviderRuntime.ProviderReportedOutputSampleRateHz,
+				analysis.ProviderRuntime.ConfiguredOutputSampleRateHz,
+			)
+			fmt.Printf(
+				"  • Suggested: set %s Output Sample Rate (Hz) to %d (config key: providers.%s.output_sample_rate_hz)\n",
+				providerName,
+				analysis.ProviderRuntime.ProviderReportedOutputSampleRateHz,
+				providerName,
+			)
+		}
 	}
 
 	if len(analysis.Errors) > 10 {
@@ -934,14 +1213,7 @@ func (r *Runner) displayMetrics(metrics *CallMetrics) {
 	}
 }
 
-// displayCallQuality shows overall call quality verdict
-func (r *Runner) displayCallQuality(metrics *CallMetrics) {
-	fmt.Println("═══════════════════════════════════════════")
-	fmt.Println("🎯 OVERALL CALL QUALITY")
-	fmt.Println("═══════════════════════════════════════════")
-	fmt.Println()
-
-	// Calculate score based on metrics
+func evaluateCallQuality(metrics *CallMetrics) (float64, []string) {
 	issues := []string{}
 	score := 100.0
 
@@ -969,15 +1241,12 @@ func (r *Runner) displayCallQuality(metrics *CallMetrics) {
 		underflowRate := float64(metrics.UnderflowCount) / float64(totalFrames) * 100
 
 		if underflowRate >= 5.0 {
-			// Significant underflows
 			issues = append(issues, fmt.Sprintf("%d underflows (%.1f%% rate - significant)", metrics.UnderflowCount, underflowRate))
 			score -= 20.0
 		} else if underflowRate >= 1.0 {
-			// Minor underflows
 			issues = append(issues, fmt.Sprintf("%d underflows (%.1f%% rate - minor)", metrics.UnderflowCount, underflowRate))
 			score -= 5.0
 		}
-		// < 1% underflow rate is considered acceptable, no score deduction
 	}
 
 	// Check gate flutter
@@ -996,7 +1265,7 @@ func (r *Runner) displayCallQuality(metrics *CallMetrics) {
 	if metrics.FormatAlignment != nil {
 		if metrics.FormatAlignment.AudioSocketMismatch {
 			issues = append(issues, "AudioSocket format mismatch")
-			score -= 30.0 // Critical - causes garbled audio
+			score -= 30.0
 		}
 		if metrics.FormatAlignment.ProviderFormatMismatch {
 			issues = append(issues, "Provider format mismatch")
@@ -1005,6 +1274,45 @@ func (r *Runner) displayCallQuality(metrics *CallMetrics) {
 		if metrics.FormatAlignment.FrameSizeMismatch {
 			issues = append(issues, "Frame size mismatch")
 			score -= 20.0
+		}
+	}
+
+	return score, issues
+}
+
+// displayCallQuality shows overall call quality verdict
+func (r *Runner) displayCallQuality(analysis *Analysis) {
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println("🎯 OVERALL CALL QUALITY")
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println()
+
+	metrics := analysis.Metrics
+	if !metricsHasEvidence(metrics) {
+		warningColor.Println("Verdict: ⚠️  INSUFFICIENT DATA - No RCA metrics extracted from logs")
+		fmt.Println("Quality Score: N/A")
+		fmt.Println()
+		fmt.Println("Notes:")
+		fmt.Println("  • This usually means ai_engine is running in console/info logging without RCA metric events,")
+		fmt.Println("    or the collected logs do not include the relevant streaming/provider markers for this call.")
+		fmt.Println("  • Enable debug logs for richer RCA, then re-run a test call and run: agent rca")
+		fmt.Println()
+		return
+	}
+
+	score, issues := evaluateCallQuality(metrics)
+
+	// Treat errors as call-stability issues even if audio metrics look good.
+	// (e.g., provider websocket closes, auth failures, ARI failures, etc.)
+	if len(analysis.Errors) > 0 {
+		issues = append(issues, fmt.Sprintf("Errors in logs (%d) - call stability issue", len(analysis.Errors)))
+		// Cap score at 70 and apply a penalty so we don't show "EXCELLENT" with hard errors.
+		if score > 70 {
+			score = 70
+		}
+		score -= 20.0
+		if score < 0 {
+			score = 0
 		}
 	}
 
@@ -1035,6 +1343,33 @@ func (r *Runner) displayCallQuality(metrics *CallMetrics) {
 	}
 
 	fmt.Println()
+}
+
+func metricsHasEvidence(metrics *CallMetrics) bool {
+	if metrics == nil {
+		return false
+	}
+	if len(metrics.ProviderSegments) > 0 || len(metrics.StreamingSummaries) > 0 {
+		return true
+	}
+	if metrics.UnderflowCount > 0 || metrics.GateClosures > 0 || metrics.GateFlutterDetected {
+		return true
+	}
+	if metrics.VADSettings != nil {
+		return true
+	}
+	if metrics.AudioSocketFormat != "" || metrics.ProviderInputFormat != "" || metrics.ProviderOutputFormat != "" || metrics.SampleRate > 0 {
+		return true
+	}
+	if metrics.FormatAlignment != nil {
+		if metrics.FormatAlignment.RuntimeAudioSocketFormat != "" || metrics.FormatAlignment.RuntimeProviderInputFormat != "" || metrics.FormatAlignment.RuntimeSampleRate > 0 {
+			return true
+		}
+		if len(metrics.FormatAlignment.Issues) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // displayLLMDiagnosis shows AI-powered diagnosis

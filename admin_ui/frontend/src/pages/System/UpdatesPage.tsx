@@ -121,7 +121,6 @@ const UpdatesPage = () => {
       setBranches([]);
     }
   };
-
   const checkUpdates = async (opts?: { force?: boolean }) => {
     setInitialized(false);
     setPlan(null);

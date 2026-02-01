@@ -391,9 +391,46 @@ async def get_yaml_config():
         _safe_load_no_duplicates(config_content)  # Validate YAML and reject duplicate keys
         return {"content": config_content}
     except yaml.YAMLError as e:
-        raise HTTPException(status_code=500, detail=f"Error reading or parsing YAML config: {str(e)}")
+        logger.info("YAML parse error while reading config YAML", exc_info=True)
+        # Extract detailed error information for user-friendly display
+        error_info = {
+            "type": "yaml_error",
+            "message": "Invalid YAML",
+            "line": None,
+            "column": None,
+            "context": None,
+            "snippet": None,
+        }
+        # Extract line/column from YAML error marks
+        if hasattr(e, 'problem_mark') and e.problem_mark:
+            mark = e.problem_mark
+            error_info["line"] = mark.line + 1  # Convert to 1-indexed
+            error_info["column"] = mark.column + 1
+        if hasattr(e, 'context_mark') and e.context_mark:
+            ctx_mark = e.context_mark
+            error_info["context"] = f"Line {ctx_mark.line + 1}, column {ctx_mark.column + 1}"
+        # Try to extract a snippet around the error line
+        if error_info["line"]:
+            try:
+                lines = config_content.splitlines()
+                line_num = error_info["line"] - 1  # 0-indexed
+                start = max(0, line_num - 2)
+                end = min(len(lines), line_num + 3)
+                snippet_lines = []
+                for i in range(start, end):
+                    prefix = ">>> " if i == line_num else "    "
+                    snippet_lines.append(f"{prefix}{i+1}: {lines[i]}")
+                error_info["snippet"] = "\n".join(snippet_lines)
+            except Exception:
+                pass
+        # Return content along with error so Raw YAML editor can still load it for fixing
+        return {
+            "content": config_content,
+            "yaml_error": error_info
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+        logger.error("Unexpected error while reading config YAML", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read config YAML") from e
 
 @router.get("/env")
 async def get_env_config():
@@ -1055,18 +1092,32 @@ async def export_logs():
                     with open(settings.CONFIG_PATH, 'r') as f:
                         parsed = yaml.safe_load(f) or {}
 
+                    import re
+                    email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+                    # Pattern for hostnames that look like internal infrastructure
+                    hostname_pattern = re.compile(r'\b(?:pbx|sip|voip|trunk|asterisk)[a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b', re.IGNORECASE)
+                    
                     def redact(obj):
                         if isinstance(obj, dict):
                             out = {}
                             for k, v in obj.items():
                                 key = str(k).lower()
+                                # Redact sensitive keys
                                 if any(s in key for s in ["api_key", "apikey", "token", "secret", "password", "pass", "key"]):
                                     out[k] = "[REDACTED]"
+                                # Redact email fields
+                                elif "email" in key:
+                                    out[k] = "[EMAIL_REDACTED]"
                                 else:
                                     out[k] = redact(v)
                             return out
                         if isinstance(obj, list):
                             return [redact(v) for v in obj]
+                        # Redact email addresses and sensitive hostnames in string values
+                        if isinstance(obj, str):
+                            result = email_pattern.sub('[EMAIL_REDACTED]', obj)
+                            result = hostname_pattern.sub('[HOSTNAME_REDACTED]', result)
+                            return result
                         return obj
 
                     redacted = redact(parsed)
@@ -1126,6 +1177,14 @@ async def export_logs():
                         if logs:
                             # Strip ANSI escape codes for clean log files
                             clean_logs = strip_ansi_codes(logs)
+                            # Redact sensitive information for privacy (AAVA-162)
+                            import re
+                            # Email addresses
+                            clean_logs = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[EMAIL_REDACTED]', clean_logs)
+                            # PBX/SIP/VoIP hostnames (likely internal infrastructure)
+                            clean_logs = re.sub(r'\b(?:pbx|sip|voip|trunk|asterisk)[a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b', '[HOSTNAME_REDACTED]', clean_logs, flags=re.IGNORECASE)
+                            # API key previews (e.g., api_key_preview=AIzaSyB2..._H_M)
+                            clean_logs = re.sub(r'(api_key_preview=)[^\s\]]+', r'\1[REDACTED]', clean_logs)
                             zip_file.writestr(f'{container_name}.log', clean_logs)
                             found_logs = True
                     except Exception as e:

@@ -123,7 +123,11 @@ class DeepgramToolAdapter:
             logger.error(f"Failed to parse function arguments: {e}", arguments=arguments_str)
             parameters = {}
         
-        logger.info(f"🔧 Deepgram tool call: {function_name}({parameters})", call_id=function_call_id)
+        logger.info(
+            f"🔧 Deepgram tool call: {function_name}({parameters})",
+            call_id=context.get("call_id"),
+            function_call_id=function_call_id,
+        )
         
         # Get tool from registry
         tool = self.registry.get(function_name)
@@ -141,6 +145,7 @@ class DeepgramToolAdapter:
             call_id=context['call_id'],
             caller_channel_id=context.get('caller_channel_id'),
             bridge_id=context.get('bridge_id'),
+            called_number=context.get('called_number'),
             session_store=context['session_store'],
             ari_client=context['ari_client'],
             config=context.get('config'),
@@ -151,7 +156,12 @@ class DeepgramToolAdapter:
         # Execute tool
         try:
             result = await tool.execute(parameters, exec_context)
-            logger.info(f"✅ Tool {function_name} executed: {result.get('status')}", function_call_id=function_call_id)
+            logger.info(
+                f"✅ Tool {function_name} executed: {result.get('status')}",
+                call_id=context.get("call_id"),
+                function_call_id=function_call_id,
+                message=result.get("message"),
+            )
             result['function_call_id'] = function_call_id
             result['function_name'] = function_name  # Pass function name for response
             return result
@@ -214,6 +224,10 @@ class DeepgramToolAdapter:
         
         try:
             await websocket.send(json.dumps(response))
-            logger.info(f"✅ Sent tool result to Deepgram: {safe_result.get('status')}", function_call_id=function_call_id)
+            logger.info(
+                f"✅ Sent tool result to Deepgram: {safe_result.get('status')}",
+                call_id=context.get("call_id"),
+                function_call_id=function_call_id,
+            )
         except Exception as e:
             logger.error(f"Failed to send tool result to Deepgram: {e}", exc_info=True)

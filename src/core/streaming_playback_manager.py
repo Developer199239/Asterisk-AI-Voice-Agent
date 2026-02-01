@@ -243,12 +243,12 @@ class StreamingPlaybackManager:
             self.greeting_min_start_ms = int(self.streaming_config.get('greeting_min_start_ms', 0))
         except Exception:
             self.greeting_min_start_ms = 0
-        # ExternalMedia greeting: give Asterisk a short window to start sending inbound RTP
-        # (needed to learn the remote endpoint). After this window, we fall back to file playback.
+        # ExternalMedia greeting: safety net timeout for RTP endpoint establishment.
+        # With RTP kick fix, RTP establishes in ~40-50ms. This is just a fallback if kick fails.
         try:
-            self.greeting_rtp_wait_ms = int(self.streaming_config.get('greeting_rtp_wait_ms', 250))
+            self.greeting_rtp_wait_ms = int(self.streaming_config.get('greeting_rtp_wait_ms', 1000))
         except Exception:
-            self.greeting_rtp_wait_ms = 250
+            self.greeting_rtp_wait_ms = 1000
         self.greeting_min_start_chunks = (
             max(1, int(math.ceil(self.greeting_min_start_ms / max(1, self.chunk_size_ms))))
             if self.greeting_min_start_ms > 0 else self.min_start_chunks
@@ -1313,12 +1313,15 @@ class StreamingPlaybackManager:
             # drain the jitter buffer and leave nothing for file playback fallback.
             try:
                 rem = self.frame_remainders.get(call_id, b"") or b""
-                self.frame_remainders[call_id] = frame + rem
+                # FIX: Append frame to end (chronological order), not prepend
+                # Previously: frame + rem (wrong - newest first)
+                # Now: rem + frame (correct - oldest first)
+                self.frame_remainders[call_id] = rem + frame
             except Exception:
                 pass
 
             # ExternalMedia greeting can fail before we learn the remote RTP endpoint (Asterisk may
-            # not emit RTP until the caller speaks). Wait briefly, then fall back.
+            # not emit RTP until the caller speaks). Wait for greeting to complete, then fall back.
             try:
                 info = self.active_streams.get(call_id, {}) or {}
                 is_greeting = str(info.get("playback_type") or "") == "greeting"
@@ -1329,19 +1332,31 @@ class StreamingPlaybackManager:
                     and hasattr(self.rtp_server, "has_remote_endpoint")
                     and not self.rtp_server.has_remote_endpoint(call_id)
                 ):
-                    wait_ms = int(getattr(self, "greeting_rtp_wait_ms", 0) or 0)
+                    # Simple safety-net timeout for RTP endpoint establishment.
+                    # With RTP kick fix, RTP establishes in ~40-50ms. This fallback should
+                    # rarely trigger - it's just a safety net if kick fails for some reason.
+                    wait_ms = int(getattr(self, "greeting_rtp_wait_ms", 1000) or 1000)
                     if wait_ms > 0:
                         now = time.time()
                         start_ts = float(info.get("rtp_wait_started_ts") or 0.0) or now
                         info["rtp_wait_started_ts"] = start_ts
                         waited_ms = (now - start_ts) * 1000.0
                         self.active_streams[call_id] = info
+                        
                         if waited_ms < float(wait_ms):
                             return "wait"
+                        
+                        # Timeout expired - trigger fallback to file playback
                         info["end_reason"] = "rtp-remote-endpoint-timeout"
                         self.active_streams[call_id] = info
+                        logger.warning(
+                            "🎵 GREETING FALLBACK - RTP endpoint not established (RTP kick may have failed)",
+                            call_id=call_id,
+                            waited_ms=round(waited_ms),
+                            timeout_ms=wait_ms,
+                        )
             except Exception:
-                pass
+                logger.debug("Greeting fallback check failed", call_id=call_id, exc_info=True)
             return "error"
         if not filler:
             self._decrement_buffered_bytes(call_id, len(frame))

@@ -3,6 +3,7 @@ package troubleshoot
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -108,38 +109,84 @@ func ExtractMetrics(logData string) *CallMetrics {
 	lines := strings.Split(logData, "\n")
 
 	for _, line := range lines {
-		// Parse JSON logs
-		var logEntry map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &logEntry); err != nil {
-			continue // Not JSON, skip
+		// Parse JSON logs OR console structlog logs.
+		_, event, fields, ok := parseLogLine(line)
+		if !ok {
+			continue
 		}
-
-		event, _ := logEntry["event"].(string)
 
 		switch event {
 		case "PROVIDER SEGMENT BYTES":
-			extractProviderBytes(logEntry, metrics)
+			// JSON path still supported; console path uses fields parsing.
+			if len(fields) > 0 {
+				extractProviderBytesFields(fields, metrics)
+			} else {
+				var logEntry map[string]interface{}
+				if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+					extractProviderBytes(logEntry, metrics)
+				}
+			}
 
 		case "🎛️ STREAMING TUNING SUMMARY":
-			extractStreamingSummary(logEntry, metrics)
+			if len(fields) > 0 {
+				extractStreamingSummaryFields(fields, metrics)
+			} else {
+				var logEntry map[string]interface{}
+				if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+					extractStreamingSummary(logEntry, metrics)
+				}
+			}
 
 		case "Transport alignment summary":
-			extractTransportAlignment(logEntry, metrics)
+			if len(fields) > 0 {
+				extractTransportAlignmentFields(fields, metrics)
+			} else {
+				var logEntry map[string]interface{}
+				if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+					extractTransportAlignment(logEntry, metrics)
+				}
+			}
 
 		case "🎯 WebRTC VAD settings":
-			extractVADSettings(logEntry, metrics)
+			if len(fields) > 0 {
+				extractVADSettingsFields(fields, metrics)
+			} else {
+				var logEntry map[string]interface{}
+				if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+					extractVADSettings(logEntry, metrics)
+				}
+			}
 
 		case "Streaming segment bytes summary v2":
 			// Extract underflow count from segment summary
 			// Check if this is a greeting segment
-			streamID, _ := logEntry["stream_id"].(string)
+			streamID := fields["stream_id"]
+			if streamID == "" {
+				var logEntry map[string]interface{}
+				if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+					if sid, ok := logEntry["stream_id"].(string); ok {
+						streamID = sid
+					}
+				}
+			}
 			isGreeting := strings.Contains(streamID, "greeting")
 
-			if uf, ok := logEntry["underflow_events"].(float64); ok {
+			underflows := 0
+			if v := fields["underflow_events"]; v != "" {
+				underflows = atoiSafe(v)
+			} else {
+				var logEntry map[string]interface{}
+				if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+					if uf, ok := logEntry["underflow_events"].(float64); ok {
+						underflows = int(uf)
+					}
+				}
+			}
+			if underflows > 0 {
 				// Only count underflows from non-greeting segments
 				// Greeting segments have underflows during conversation pauses (normal)
 				if !isGreeting {
-					metrics.UnderflowCount += int(uf)
+					metrics.UnderflowCount += underflows
 				}
 			}
 
@@ -165,6 +212,123 @@ func ExtractMetrics(logData string) *CallMetrics {
 	}
 
 	return metrics
+}
+
+func extractProviderBytesFields(fields map[string]string, metrics *CallMetrics) {
+	segment := ProviderSegment{}
+
+	segment.ProviderBytes = atoiSafe(fields["provider_bytes"])
+	segment.EnqueuedBytes = atoiSafe(fields["enqueued_bytes"])
+
+	if segment.ProviderBytes > 0 {
+		metrics.ProviderBytesTotal += segment.ProviderBytes
+	}
+	if segment.EnqueuedBytes > 0 {
+		metrics.EnqueuedBytesTotal += segment.EnqueuedBytes
+	}
+	if v := fields["enqueued_ratio"]; v != "" {
+		segment.Ratio = atofSafe(v)
+		deviation := abs(1.0 - segment.Ratio)
+		worstDeviation := abs(1.0 - metrics.WorstEnqueuedRatio)
+		if deviation > worstDeviation {
+			metrics.WorstEnqueuedRatio = segment.Ratio
+		}
+	}
+
+	metrics.ProviderSegments = append(metrics.ProviderSegments, segment)
+}
+
+func extractStreamingSummaryFields(fields map[string]string, metrics *CallMetrics) {
+	sum := StreamingSummary{}
+
+	if sid := fields["stream_id"]; sid != "" {
+		sum.StreamID = sid
+		sum.IsGreeting = strings.Contains(sid, "greeting")
+	}
+
+	sum.BytesSent = atoiSafe(fields["bytes_sent"])
+	sum.EffectiveSeconds = atofSafe(fields["effective_seconds"])
+	sum.WallSeconds = atofSafe(fields["wall_seconds"])
+	sum.DriftPct = atofSafe(fields["drift_pct"])
+	sum.LowWatermark = atoiSafe(fields["low_watermark"])
+	sum.MinStart = atoiSafe(fields["min_start"])
+
+	if sum.DriftPct != 0 && !sum.IsGreeting {
+		if abs(sum.DriftPct) > abs(metrics.WorstDriftPct) {
+			metrics.WorstDriftPct = sum.DriftPct
+		}
+	}
+
+	metrics.StreamingSummaries = append(metrics.StreamingSummaries, sum)
+}
+
+func extractTransportAlignmentFields(fields map[string]string, metrics *CallMetrics) {
+	if v := fields["audiosocket_format"]; v != "" {
+		metrics.AudioSocketFormat = v
+	}
+	if v := fields["provider_input_format"]; v != "" {
+		metrics.ProviderInputFormat = v
+	}
+	if v := fields["provider_output_format"]; v != "" {
+		metrics.ProviderOutputFormat = v
+	}
+	if v := fields["sample_rate"]; v != "" {
+		metrics.SampleRate = atoiSafe(v)
+	}
+}
+
+func extractVADSettingsFields(fields map[string]string, metrics *CallMetrics) {
+	if metrics.VADSettings == nil {
+		metrics.VADSettings = &VADSettings{}
+	}
+
+	// Some sources log "aggressiveness", some log "webrtc_aggressiveness".
+	if v := fields["aggressiveness"]; v != "" || fields["webrtc_aggressiveness"] != "" {
+		if v == "" {
+			v = fields["webrtc_aggressiveness"]
+		}
+		metrics.VADSettings.WebRTCAggressiveness = atoiSafe(v)
+	}
+	if v := fields["confidence_threshold"]; v != "" {
+		metrics.VADSettings.ConfidenceThreshold = atofSafe(v)
+	}
+	if v := fields["energy_threshold"]; v != "" {
+		metrics.VADSettings.EnergyThreshold = atoiSafe(v)
+	}
+	if v := strings.ToLower(strings.TrimSpace(fields["enhanced_enabled"])); v != "" {
+		metrics.VADSettings.EnhancedEnabled = v == "true" || v == "1" || v == "yes" || v == "on"
+	}
+}
+
+func atoiSafe(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if strings.Contains(s, ".") {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0
+		}
+		return int(f)
+	}
+	i, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return i
+}
+
+func atofSafe(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
 }
 
 func extractProviderBytes(entry map[string]interface{}, metrics *CallMetrics) {
