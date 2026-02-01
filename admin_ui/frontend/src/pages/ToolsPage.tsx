@@ -244,6 +244,7 @@ const ToolsPage = () => {
                             config={config.tools || {}}
                             onChange={(newTools) => setConfig({ ...config, tools: newTools })}
                             phase="pre_call"
+                            contexts={config.contexts}
                         />
                     </ConfigCard>
                 </ConfigSection>
@@ -287,6 +288,7 @@ const ToolsPage = () => {
                             config={config.tools || {}}
                             onChange={(newTools) => setConfig({ ...config, tools: newTools })}
                             phase="post_call"
+                            contexts={config.contexts}
                         />
                     </ConfigCard>
                 </ConfigSection>

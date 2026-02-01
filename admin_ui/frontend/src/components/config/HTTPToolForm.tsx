@@ -170,12 +170,20 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
     };
 
     const handleDeleteTool = (key: string) => {
-        // P1: Check if tool is used by any context (for in_call tools)
-        if (phase === 'in_call' && contexts) {
+        // P1: Check if tool is used by any context (for all phases)
+        if (contexts) {
+            // Map phase to the context config key
+            const phaseToContextKey: Record<string, string> = {
+                'pre_call': 'pre_call_tools',
+                'in_call': 'in_call_http_tools',
+                'post_call': 'post_call_tools'
+            };
+            const contextKey = phaseToContextKey[phase];
+            
             const usingContexts = Object.entries(contexts)
                 .filter(([_, ctx]) => {
-                    const httpTools = (ctx as any).in_call_http_tools || [];
-                    return httpTools.includes(key);
+                    const tools = (ctx as any)[contextKey] || [];
+                    return tools.includes(key);
                 })
                 .map(([ctxName]) => ctxName);
             
