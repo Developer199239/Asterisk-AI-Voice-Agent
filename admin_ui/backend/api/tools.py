@@ -11,7 +11,7 @@ import logging
 import time
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from ..settings import get_setting
 
 router = APIRouter()
@@ -309,9 +309,6 @@ async def test_http_tool(request: TestHTTPRequest):
                 if not (follow_redirects and is_redirect):
                     break
 
-                # Resolve relative redirects against the current URL.
-                from urllib.parse import urljoin
-
                 next_url = urljoin(str(resp.url), str(resp.headers.get("location") or ""))
                 _validate_http_tool_test_target(next_url)
 
@@ -336,7 +333,7 @@ async def test_http_tool(request: TestHTTPRequest):
                 json_body = resp.json()
                 response_data.body = json_body
                 response_data.suggested_mappings = _extract_json_paths(json_body)
-            except Exception:
+            except (ValueError, httpx.DecodingError):
                 # Not JSON, just use raw text
                 response_data.body = resp.text[:10000]
             

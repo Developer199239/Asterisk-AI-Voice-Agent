@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	consoleLevelRe = regexp.MustCompile(`\[(debug|info|warning|warn|error)\b`)
+	consoleLevelRe = regexp.MustCompile(`(?i)\[(debug|info|warning|warn|error)\b`)
 	consoleEventRe = regexp.MustCompile(`\]\s+([^\[]+?)\s+\[`)
 	kvRe           = regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)=('[^']*'|"[^"]*"|\S+)`)
 )
