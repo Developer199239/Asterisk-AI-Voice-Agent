@@ -197,7 +197,7 @@ class TestPostCallToolExecution:
         mock_request_cm.__aenter__ = AsyncMock(return_value=mock_response)
         mock_request_cm.__aexit__ = AsyncMock(return_value=None)
         
-        def capture_request(*args, **kwargs):
+        def capture_request(*_args, **kwargs):
             nonlocal captured_data
             captured_data = kwargs.get("data")
             return mock_request_cm

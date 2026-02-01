@@ -12,6 +12,7 @@ import time
 import ipaddress
 import socket
 from urllib.parse import urlparse
+from ..settings import get_setting
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -68,7 +69,8 @@ def _substitute_variables(template: str, values: Dict[str, str]) -> str:
     env_pattern = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
     def env_replacer(match):
         env_name = match.group(1)
-        return os.environ.get(env_name, f"${{{env_name}}}")
+        resolved = get_setting(env_name, default=f"${{{env_name}}}")
+        return resolved
     
     result = env_pattern.sub(env_replacer, result)
     return result

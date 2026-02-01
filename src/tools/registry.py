@@ -478,8 +478,8 @@ After outputting a tool call, provide a brief spoken response.
                     self.register_instance(tool)
                     http_tool_count += 1
                     logger.info(f"✅ Registered HTTP lookup tool: {tool_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to create HTTP lookup tool {tool_name}: {e}")
+                except Exception as e:  # noqa: BLE001 - best-effort tool bootstrapping from user config
+                    logger.warning(f"Failed to create HTTP lookup tool {tool_name}: {e}", exc_info=True)
             
             elif kind == 'generic_webhook':
                 try:
@@ -488,8 +488,8 @@ After outputting a tool call, provide a brief spoken response.
                     self.register_instance(tool)
                     http_tool_count += 1
                     logger.info(f"✅ Registered webhook tool: {tool_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to create webhook tool {tool_name}: {e}")
+                except Exception as e:  # noqa: BLE001 - best-effort tool bootstrapping from user config
+                    logger.warning(f"Failed to create webhook tool {tool_name}: {e}", exc_info=True)
         
         if http_tool_count > 0:
             logger.info(f"🌐 Initialized {http_tool_count} HTTP tools from config")
@@ -522,8 +522,8 @@ After outputting a tool call, provide a brief spoken response.
                     self.register_instance(tool)
                     in_call_tool_count += 1
                     logger.info(f"✅ Registered in-call HTTP tool: {tool_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to create in-call HTTP tool {tool_name}: {e}")
+                except Exception as e:  # noqa: BLE001 - best-effort tool bootstrapping from user config
+                    logger.warning(f"Failed to create in-call HTTP tool {tool_name}: {e}", exc_info=True)
         
         if in_call_tool_count > 0:
             logger.info(f"📞 Initialized {in_call_tool_count} in-call HTTP tools from config")

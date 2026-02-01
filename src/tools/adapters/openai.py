@@ -130,10 +130,23 @@ class OpenAIToolAdapter:
             logger.error(f"Failed to parse function arguments: {e}", arguments=arguments_str)
             parameters = {}
         
+        parameter_keys: List[str] = []
+        if isinstance(parameters, dict):
+            parameter_keys = sorted([str(k) for k in parameters.keys()])
+
         logger.info(
-            f"🔧 OpenAI tool call: {function_name}({parameters})",
+            "OpenAI tool call received",
             call_id=context.get("call_id"),
             function_call_id=function_call_id,
+            tool=function_name,
+            parameter_keys=parameter_keys,
+        )
+        logger.debug(
+            "OpenAI tool call parameters",
+            call_id=context.get("call_id"),
+            function_call_id=function_call_id,
+            tool=function_name,
+            parameters=parameters,
         )
         
         # Get tool from registry
@@ -164,11 +177,20 @@ class OpenAIToolAdapter:
         # Execute tool
         try:
             result = await tool.execute(parameters, exec_context)
+            sanitized = sanitize_tool_result_for_json_string(result)
             logger.info(
-                f"✅ Tool {function_name} executed: {result.get('status')}",
+                "Tool executed",
                 call_id=context.get("call_id"),
                 function_call_id=function_call_id,
-                message=result.get("message"),
+                tool=function_name,
+                status=result.get("status"),
+            )
+            logger.debug(
+                "Tool execution result",
+                call_id=context.get("call_id"),
+                function_call_id=function_call_id,
+                tool=function_name,
+                result=sanitized,
             )
             result['call_id'] = function_call_id
             result['function_name'] = function_name

@@ -193,6 +193,12 @@ async def _probe_endpoint(
             resource=f"endpoints/{tech}/{quote(extension, safe='')}",
         )
     except Exception:
+        logger.debug(
+            "ARI endpoint probe failed",
+            tech=tech,
+            extension=extension,
+            exc_info=True,
+        )
         return None
     if not isinstance(resp, dict):
         return None
