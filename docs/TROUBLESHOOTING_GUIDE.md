@@ -664,6 +664,19 @@ agent setup
 
 **Tool execution** allows AI agents to perform actions like call transfers, hangups, and sending emails. When tools don't work, follow this debugging workflow.
 
+### HTTP Phase Tools (Pre/In/Post Call)
+
+If you are troubleshooting **pre-call HTTP lookups**, **in-call HTTP tools**, or **post-call webhooks**:
+
+- **Template variables** use the *variable name* (e.g., `{patient_id}`), not the JSON extraction path (e.g., `patient.id`).
+- In the Admin UI, the variable names you can reuse elsewhere are highlighted in the HTTP tool editors.
+- With `LOG_LEVEL=debug`, the engine emits `[HTTP_TOOL_TRACE]` logs showing the resolved request (URL/headers/body), referenced variable values, and a bounded response preview.
+
+```bash
+# Show HTTP tool request/response traces (requires LOG_LEVEL=debug)
+docker logs ai_engine 2>&1 | grep "\\[HTTP_TOOL_TRACE\\]"
+```
+
 ### Quick Diagnostics for Tool Issues
 
 ```bash
