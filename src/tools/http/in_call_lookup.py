@@ -9,6 +9,7 @@ import os
 import re
 import json
 import logging
+import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
@@ -16,6 +17,13 @@ import aiohttp
 
 from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolPhase, ToolParameter
 from src.tools.context import ToolExecutionContext
+from src.tools.http.debug_trace import (
+    build_var_snapshot,
+    debug_enabled,
+    extract_used_brace_vars,
+    extract_used_env_vars,
+    preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +171,7 @@ class InCallHTTPTool(Tool):
             }
         
         try:
+            started = time.monotonic()
             # Build substitution context (context vars + pre-call results + AI params)
             sub_context = await self._build_substitution_context(parameters, context)
             
@@ -186,6 +195,37 @@ class InCallHTTPTool(Tool):
                     json_body = json.loads(body_str)
                 except json.JSONDecodeError:
                     body = body_str
+
+            if debug_enabled(logger):
+                used_brace = extract_used_brace_vars(
+                    self.config.url,
+                    *(self.config.headers or {}).values(),
+                    *(self.config.query_params or {}).values(),
+                    self.config.body_template,
+                )
+                used_env = extract_used_env_vars(
+                    self.config.url,
+                    *(self.config.headers or {}).values(),
+                    *(self.config.query_params or {}).values(),
+                    self.config.body_template,
+                )
+                logger.debug(
+                    "[HTTP_TOOL_TRACE] request_resolved in_call tool=%s method=%s url=%s headers=%s params=%s body=%s json_body=%s vars=%s call_id=%s",
+                    self.config.name,
+                    self.config.method,
+                    url,
+                    headers,
+                    query_params,
+                    preview(body),
+                    preview(json.dumps(json_body)) if json_body is not None else "",
+                    build_var_snapshot(
+                        used_brace_vars=used_brace,
+                        used_env_vars=used_env,
+                        values=sub_context,
+                        env=os.environ,
+                    ),
+                    context.call_id,
+                )
             
             logger.info(
                 f"Executing in-call HTTP tool: {self.config.name}",
@@ -229,20 +269,67 @@ class InCallHTTPTool(Tool):
                             f"In-call HTTP tool returned non-200: {self.config.name}",
                             extra={"status": response.status, "call_id": context.call_id}
                         )
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            body_preview = ""
+                            try:
+                                body_preview = preview(await response.text())
+                            except Exception as e:
+                                body_preview = f"<failed to read body: {e}>"
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_non_200 in_call tool=%s status=%s elapsed_ms=%s body_preview=%s call_id=%s",
+                                self.config.name,
+                                response.status,
+                                elapsed_ms,
+                                body_preview,
+                                context.call_id,
+                            )
                         return {
                             "status": "failed",
                             "message": self.config.error_message,
                         }
                     
                     # Parse JSON response
+                    body_text = ""
                     try:
                         data = await response.json()
+                        if debug_enabled(logger):
+                            try:
+                                body_text = json.dumps(data, ensure_ascii=False)
+                            except Exception:
+                                body_text = str(data)
                     except Exception as e:
                         logger.warning(f"Failed to parse JSON response: {self.config.name} error={e}")
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            raw_text = ""
+                            try:
+                                raw_text = await response.text()
+                            except Exception:
+                                raw_text = ""
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_invalid_json in_call tool=%s elapsed_ms=%s body_preview=%s call_id=%s error=%s",
+                                self.config.name,
+                                elapsed_ms,
+                                preview(raw_text),
+                                context.call_id,
+                                str(e),
+                            )
                         return {
                             "status": "error",
                             "message": self.config.error_message,
                         }
+
+                    if debug_enabled(logger):
+                        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                        logger.debug(
+                            "[HTTP_TOOL_TRACE] response_ok in_call tool=%s status=%s elapsed_ms=%s body_preview=%s call_id=%s",
+                            self.config.name,
+                            response.status,
+                            elapsed_ms,
+                            preview(body_text),
+                            context.call_id,
+                        )
                     
                     # Build result
                     result = {
@@ -259,6 +346,16 @@ class InCallHTTPTool(Tool):
                         result["data"] = extracted
                         # Build human-readable message
                         result["message"] = self._build_result_message(extracted)
+
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] outputs in_call tool=%s elapsed_ms=%s outputs=%s call_id=%s",
+                                self.config.name,
+                                elapsed_ms,
+                                extracted,
+                                context.call_id,
+                            )
                     
                     logger.info(
                         f"In-call HTTP tool completed: {self.config.name}",
