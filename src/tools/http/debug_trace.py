@@ -17,10 +17,12 @@ _BRACE_PATTERN = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 
 def debug_enabled(logger: logging.Logger) -> bool:
+    """Return True when DEBUG logging is enabled for this logger."""
     return bool(logger and logger.isEnabledFor(logging.DEBUG))
 
 
 def preview(value: Any, *, limit: int = 4096) -> str:
+    """Render a bounded string preview of `value` for logs."""
     if value is None:
         return ""
     try:
@@ -36,6 +38,7 @@ def preview(value: Any, *, limit: int = 4096) -> str:
 
 
 def extract_used_env_vars(*templates: Optional[str]) -> list[str]:
+    """Return sorted `${ENV_VAR}` names referenced across templates."""
     names: set[str] = set()
     for t in templates:
         if not t:
@@ -46,6 +49,7 @@ def extract_used_env_vars(*templates: Optional[str]) -> list[str]:
 
 
 def extract_used_brace_vars(*templates: Optional[str]) -> list[str]:
+    """Return sorted `{var}` names referenced across templates."""
     names: set[str] = set()
     for t in templates:
         if not t:
@@ -62,19 +66,13 @@ def build_var_snapshot(
     values: Mapping[str, Any],
     env: Mapping[str, str],
 ) -> Dict[str, Any]:
+    """Build a snapshot of referenced variables and env vars for debug logs."""
     brace: Dict[str, Any] = {}
     for name in used_brace_vars:
-        try:
-            brace[name] = values.get(name)
-        except Exception:
-            brace[name] = None
+        brace[name] = values.get(name)
 
     envs: Dict[str, Any] = {}
     for name in used_env_vars:
-        try:
-            envs[name] = env.get(name)
-        except Exception:
-            envs[name] = None
+        envs[name] = env.get(name)
 
     return {"vars": brace, "env": envs}
-

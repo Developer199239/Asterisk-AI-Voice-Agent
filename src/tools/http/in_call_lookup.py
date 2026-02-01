@@ -290,9 +290,9 @@ class InCallHTTPTool(Tool):
                         }
                     
                     # Parse JSON response
+                    body_text = ""
                     try:
                         data = await response.json()
-                        body_text = ""
                         if debug_enabled(logger):
                             try:
                                 body_text = json.dumps(data, ensure_ascii=False)
@@ -311,7 +311,7 @@ class InCallHTTPTool(Tool):
                                 "[HTTP_TOOL_TRACE] response_invalid_json in_call tool=%s elapsed_ms=%s body_preview=%s call_id=%s error=%s",
                                 self.config.name,
                                 elapsed_ms,
-                                preview(raw_text or locals().get("body_text", "")),
+                                preview(raw_text),
                                 context.call_id,
                                 str(e),
                             )
@@ -327,7 +327,7 @@ class InCallHTTPTool(Tool):
                             self.config.name,
                             response.status,
                             elapsed_ms,
-                            preview(locals().get("body_text", "")),
+                            preview(body_text),
                             context.call_id,
                         )
                     
