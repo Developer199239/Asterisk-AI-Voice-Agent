@@ -14,7 +14,6 @@ import ipaddress
 import socket
 from urllib.parse import urlparse, urljoin
 from settings import get_setting
-from settings import get_setting
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
