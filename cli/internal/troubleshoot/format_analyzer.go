@@ -19,6 +19,14 @@ func AnalyzeFormatAlignment(metrics *CallMetrics, header *RCAHeader) *FormatAlig
 		alignment.ConfigAudioTransport = strings.ToLower(strings.TrimSpace(header.AudioTransport))
 		alignment.ConfigAudioSocketFormat = strings.TrimSpace(header.AudioSocketFormat)
 		alignment.ConfigSampleRate = header.StreamingSampleRate
+		if header.ProviderInputEncoding != "" {
+			alignment.ConfigProviderInputFormat = header.ProviderInputEncoding
+		} else if header.ProviderProviderInputEncoding != "" {
+			alignment.ConfigProviderInputFormat = header.ProviderProviderInputEncoding
+		}
+		if header.ProviderOutputEncoding != "" {
+			alignment.ConfigProviderOutputFormat = header.ProviderOutputEncoding
+		}
 	}
 
 	// Get runtime values from logs

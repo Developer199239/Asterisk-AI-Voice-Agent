@@ -294,6 +294,25 @@ const ContextsPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (yamlError) {
+        return (
+            <div className="space-y-4 p-6">
+                <YamlErrorBanner error={yamlError} />
+                <div className="flex items-center justify-between rounded-md border border-red-500/30 bg-red-500/10 p-4 text-red-700 dark:text-red-400">
+                    <div className="flex items-center">
+                        <AlertCircle className="mr-2 h-5 w-5" />
+                        Context editing is disabled while `config/ai-agent.yaml` has YAML errors. Fix the YAML and reload.
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                    >
+                        Reload
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     const profilesBlock = config.profiles || {};
     const defaultProfileName = (typeof profilesBlock.default === 'string' && profilesBlock.default) ? profilesBlock.default : '';
@@ -351,8 +370,6 @@ const ContextsPage = () => {
                     </button>
                 </div>
             )}
-
-            {yamlError && <YamlErrorBanner error={yamlError} />}
 
             <div className="flex justify-between items-center">
                 <div>

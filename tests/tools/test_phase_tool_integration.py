@@ -261,7 +261,7 @@ class TestPostCallToolExecution:
             assert field in payload, f"Missing required field: {field}"
     
     @pytest.mark.asyncio
-    async def test_global_postcall_tool_definition(self, postcall_context):
+    async def test_global_postcall_tool_definition(self):
         """Test that global post-call tools are properly configured."""
         tool = create_webhook_tool("global_webhook", {
             "enabled": True,

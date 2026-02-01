@@ -7,6 +7,8 @@ Singleton pattern ensures only one registry exists across the application.
 from typing import Dict, List, Type, Optional, Iterable, Set, Union, Any
 from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolPhase, PreCallTool, PostCallTool
 import logging
+import hashlib
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ class ToolRegistry:
             cls._instance = super().__new__(cls)
             cls._instance._tools: Dict[str, Tool] = {}
             cls._instance._initialized = False
+            cls._instance._in_call_http_init_cache: Set[str] = set()
         return cls._instance
     
     def register(self, tool_class: Type[Tool]) -> None:
@@ -494,7 +497,7 @@ After outputting a tool call, provide a brief spoken response.
         if http_tool_count > 0:
             logger.info(f"🌐 Initialized {http_tool_count} HTTP tools from config")
 
-    def initialize_in_call_http_tools_from_config(self, in_call_tools_config: Dict[str, Any]) -> None:
+    def initialize_in_call_http_tools_from_config(self, in_call_tools_config: Dict[str, Any], *, cache_key: Optional[str] = None) -> None:
         """
         Initialize in-call HTTP tools from YAML config.
         
@@ -505,6 +508,17 @@ After outputting a tool call, provide a brief spoken response.
             in_call_tools_config: The 'in_call_tools' section from ai-agent.yaml or context config
         """
         if not in_call_tools_config:
+            return
+
+        effective_key = cache_key
+        if not effective_key:
+            try:
+                payload = json.dumps(in_call_tools_config, sort_keys=True, default=str).encode("utf-8")
+                effective_key = hashlib.sha256(payload).hexdigest()
+            except Exception:
+                effective_key = repr(in_call_tools_config)
+
+        if effective_key in self._in_call_http_init_cache:
             return
         
         in_call_tool_count = 0
@@ -527,6 +541,7 @@ After outputting a tool call, provide a brief spoken response.
         
         if in_call_tool_count > 0:
             logger.info(f"📞 Initialized {in_call_tool_count} in-call HTTP tools from config")
+        self._in_call_http_init_cache.add(effective_key)
     
     def list_tools(self) -> List[str]:
         """

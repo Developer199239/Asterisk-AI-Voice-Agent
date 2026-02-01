@@ -155,7 +155,21 @@ def text_contains_marker(text: str, markers: Iterable[str]) -> bool:
     t = _normalize_text(text)
     if not t:
         return False
-    return any(m in t for m in markers)
+    for m in markers:
+        if not m:
+            continue
+        m = str(m).strip().lower()
+        if not m:
+            continue
+        # Multi-word markers use substring matching after normalization.
+        if " " in m:
+            if m in t:
+                return True
+            continue
+        # Single-word markers should match whole words to avoid false positives (e.g., "no" in "notification").
+        if re.search(rf"(?:^|\\b){re.escape(m)}(?:\\b|$)", t):
+            return True
+    return False
 
 
 def text_contains_marker_word(text: str, markers: Iterable[str]) -> bool:

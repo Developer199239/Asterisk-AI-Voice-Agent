@@ -193,7 +193,7 @@ def _validate_http_tool_test_target(resolved_url: str) -> None:
     try:
         infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to resolve hostname: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to resolve hostname: {e}") from e
 
     ips: set[str] = set()
     for _, _, _, _, sockaddr in infos:
@@ -274,7 +274,7 @@ async def test_http_tool(request: TestHTTPRequest):
     
     try:
         follow_redirects = _env_bool("AAVA_HTTP_TOOL_TEST_FOLLOW_REDIRECTS", default=False)
-        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=follow_redirects) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False) as client:
             # Prepare request kwargs
             kwargs: Dict[str, Any] = {
                 "method": method,
@@ -299,8 +299,32 @@ async def test_http_tool(request: TestHTTPRequest):
                 else:
                     kwargs["content"] = resolved_body
             
-            # Make the request
-            resp = await client.request(**kwargs)
+            # Make the request (manual redirects to prevent SSRF bypass via redirect-to-private targets).
+            max_hops = 10
+            resp = None
+            for _ in range(max_hops + 1):
+                resp = await client.request(**kwargs)
+
+                is_redirect = resp.status_code in (301, 302, 303, 307, 308) and bool(resp.headers.get("location"))
+                if not (follow_redirects and is_redirect):
+                    break
+
+                # Resolve relative redirects against the current URL.
+                from urllib.parse import urljoin
+
+                next_url = urljoin(str(resp.url), str(resp.headers.get("location") or ""))
+                _validate_http_tool_test_target(next_url)
+
+                # RFC-ish behavior: 303 always becomes GET.
+                if resp.status_code == 303:
+                    kwargs["method"] = "GET"
+                    kwargs.pop("json", None)
+                    kwargs.pop("content", None)
+                kwargs["url"] = next_url
+
+            if resp is None:
+                raise HTTPException(status_code=400, detail="Request failed: no response received")
+            response_data.resolved_url = str(resp.url)
             
             response_data.response_time_ms = (time.time() - start_time) * 1000
             response_data.status_code = resp.status_code

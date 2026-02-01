@@ -183,7 +183,7 @@ class OpenAIToolAdapter:
                 call_id=context.get("call_id"),
                 function_call_id=function_call_id,
                 tool=function_name,
-                status=result.get("status"),
+                status=sanitized.get("status"),
             )
             logger.debug(
                 "Tool execution result",

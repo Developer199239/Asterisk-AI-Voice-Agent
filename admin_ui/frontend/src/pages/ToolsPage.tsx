@@ -99,9 +99,19 @@ const ToolsPage = () => {
     const updateToolsConfig = (newToolsConfig: any) => {
         // Extract root-level settings that should not be nested under tools
         const { farewell_hangup_delay_sec, ...toolsOnly } = newToolsConfig;
-        
+
+        // Preserve phase-based HTTP tools stored under `config.tools` (generic_http_lookup / generic_webhook).
+        // ToolForm edits built-in tools only and should not delete phase tool entries.
+        const existingTools = config.tools || {};
+        const preservedPhaseTools: Record<string, any> = {};
+        Object.entries(existingTools).forEach(([k, v]) => {
+            if (v && typeof v === 'object' && (v as any).kind && (v as any).phase) {
+                preservedPhaseTools[k] = v;
+            }
+        });
+
         // Update both tools config and root-level farewell_hangup_delay_sec
-        const updatedConfig = { ...config, tools: toolsOnly };
+        const updatedConfig = { ...config, tools: { ...preservedPhaseTools, ...toolsOnly } };
         if (farewell_hangup_delay_sec !== undefined) {
             updatedConfig.farewell_hangup_delay_sec = farewell_hangup_delay_sec;
         }
@@ -109,10 +119,28 @@ const ToolsPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (yamlError) {
+        return (
+            <div className="space-y-4 p-6">
+                <YamlErrorBanner error={yamlError} />
+                <div className="flex items-center justify-between rounded-md border border-red-500/30 bg-red-500/10 p-4 text-red-700 dark:text-red-400">
+                    <div className="flex items-center">
+                        <AlertCircle className="mr-2 h-5 w-5" />
+                        Tools editing is disabled while `config/ai-agent.yaml` has YAML errors. Fix the YAML and reload.
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                    >
+                        Reload
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6">
-            {yamlError && <YamlErrorBanner error={yamlError} />}
             <div className={`${pendingRestart ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
                 <div className="flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />

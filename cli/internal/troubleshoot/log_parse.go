@@ -53,8 +53,13 @@ func parseLogLine(line string) (level string, event string, fields map[string]st
 			case string:
 				fields[k] = t
 			case float64:
-				// Keep as JSON-ish number string.
-				fields[k] = strings.TrimRight(strings.TrimRight(strings.TrimSpace(jsonNumberString(t)), "0"), ".")
+				// Keep as JSON-ish number string without trimming significant zeros (e.g., 1000 -> "1").
+				num := strings.TrimSpace(jsonNumberString(t))
+				if strings.Contains(num, ".") && !strings.ContainsAny(num, "eE") {
+					num = strings.TrimRight(num, "0")
+					num = strings.TrimRight(num, ".")
+				}
+				fields[k] = num
 			case bool:
 				if t {
 					fields[k] = "true"
@@ -104,4 +109,3 @@ func jsonNumberString(f float64) string {
 	b, _ := json.Marshal(f)
 	return string(b)
 }
-
