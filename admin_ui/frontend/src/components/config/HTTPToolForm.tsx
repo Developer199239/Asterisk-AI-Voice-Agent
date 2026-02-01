@@ -98,6 +98,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     const [showTestPanel, setShowTestPanel] = useState(false);
     const [showTestValues, setShowTestValues] = useState(false);
     const [showAllMappings, setShowAllMappings] = useState(false);
+    const variableTokenClass = "font-mono text-emerald-700";
 
     const getHTTPTools = () => {
         const tools: Record<string, HTTPToolConfig> = {};
@@ -524,23 +525,27 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                 <div className="space-y-1">
                                     {Object.entries(toolForm.output_variables || {}).map(([k, v]) => (
                                         <div key={k} className="flex items-center gap-2 text-xs bg-accent/50 px-2 py-1 rounded">
-                                            <span className="font-mono">{k} ← {String(v)}</span>
+                                            <span className="font-mono">
+                                                <span className={variableTokenClass}>{k}</span>{" "}
+                                                <span className="text-muted-foreground">←</span>{" "}
+                                                <span>{String(v)}</span>
+                                            </span>
                                             <button onClick={() => removeOutputVariable(k)} className="ml-auto text-destructive hover:text-destructive/80">
                                                 <Trash2 className="w-3 h-3" />
                                             </button>
                                         </div>
                                     ))}
                                 </div>
-                                <div className="flex gap-2">
-                                    <input
-                                        className="flex-1 px-2 py-1 text-sm border rounded"
-                                        placeholder="Variable name (e.g., customer_name)"
-                                        value={outputVarKey}
-                                        onChange={(e) => setOutputVarKey(e.target.value)}
-                                    />
-                                    <input
-                                        className="flex-1 px-2 py-1 text-sm border rounded"
-                                        placeholder="JSON path (e.g., contact.name)"
+                                    <div className="flex gap-2">
+                                        <input
+                                            className={`flex-1 px-2 py-1 text-sm border rounded ${variableTokenClass}`}
+                                            placeholder="Variable name (e.g., customer_name)"
+                                            value={outputVarKey}
+                                            onChange={(e) => setOutputVarKey(e.target.value)}
+                                        />
+                                        <input
+                                            className="flex-1 px-2 py-1 text-sm border rounded"
+                                            placeholder="JSON path (e.g., contact.name)"
                                         value={outputVarPath}
                                         onChange={(e) => setOutputVarPath(e.target.value)}
                                     />
@@ -719,7 +724,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                         <div key={idx} className="flex items-start gap-2 p-2 bg-accent/30 rounded border">
                                             <div className="flex-1 grid grid-cols-4 gap-2">
                                                 <input
-                                                    className="px-2 py-1 text-xs border rounded"
+                                                    className={`px-2 py-1 text-xs border rounded ${variableTokenClass}`}
                                                     placeholder="Name"
                                                     value={param.name}
                                                     onChange={(e) => {
@@ -856,7 +861,11 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     <div className="space-y-1">
                                         {Object.entries(toolForm.output_variables || {}).map(([k, v]) => (
                                             <div key={k} className="flex items-center gap-2 text-xs bg-accent/50 px-2 py-1 rounded">
-                                                <span className="font-mono">{k} ← {String(v)}</span>
+                                                <span className="font-mono">
+                                                    <span className={variableTokenClass}>{k}</span>{" "}
+                                                    <span className="text-muted-foreground">←</span>{" "}
+                                                    <span>{String(v)}</span>
+                                                </span>
                                                 <button onClick={() => removeOutputVariable(k)} className="ml-auto text-destructive hover:text-destructive/80">
                                                     <Trash2 className="w-3 h-3" />
                                                 </button>
@@ -865,7 +874,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     </div>
                                     <div className="flex gap-2">
                                         <input
-                                            className="flex-1 px-2 py-1 text-sm border rounded"
+                                            className={`flex-1 px-2 py-1 text-sm border rounded ${variableTokenClass}`}
                                             placeholder="Variable name (e.g., available)"
                                             value={outputVarKey}
                                             onChange={(e) => setOutputVarKey(e.target.value)}
@@ -924,7 +933,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     <div className="mt-3 grid grid-cols-2 gap-3">
                                         {Object.entries(testValues).map(([key, value]) => (
                                             <div key={key} className="flex flex-col gap-1">
-                                                <label className="text-xs text-muted-foreground font-mono">{`{${key}}`}</label>
+                                                <label className={`text-xs ${variableTokenClass}`}>{`{${key}}`}</label>
                                                 <input
                                                     className="w-full px-2 py-1 text-xs border rounded bg-background"
                                                     value={value}
@@ -935,7 +944,10 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                         {/* Add AI parameter test values */}
                                         {(toolForm.parameters || []).map((param: ToolParameter) => (
                                             <div key={`param_${param.name}`} className="flex flex-col gap-1">
-                                                <label className="text-xs text-muted-foreground font-mono">{`{${param.name}}`} <span className="text-blue-500">(AI param)</span></label>
+                                                <label className="text-xs">
+                                                    <span className={variableTokenClass}>{`{${param.name}}`}</span>{" "}
+                                                    <span className="text-blue-500">(AI param)</span>
+                                                </label>
                                                 <input
                                                     className="w-full px-2 py-1 text-xs border rounded bg-background"
                                                     value={testValues[param.name] || ''}
