@@ -446,18 +446,27 @@ const ContextsPage = () => {
                                     <p className="text-foreground/90 italic">"{contextData.greeting}"</p>
                                 </div>
 
-                                {contextData.tools && contextData.tools.length > 0 && (
-                                    <div>
-                                        <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-2">Enabled Tools</span>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {contextData.tools.map((tool: string) => (
-                                                <span key={tool} className="px-2 py-1 rounded-md text-xs bg-accent text-accent-foreground font-medium border border-accent-foreground/10">
-                                                    {displayToolName(tool)}
-                                                </span>
-                                            ))}
+                                {/* Show all tool types: built-in, pre-call, in-call HTTP, post-call */}
+                                {(() => {
+                                    const allTools = [
+                                        ...(contextData.tools || []).map((t: string) => ({ name: t, phase: 'in-call' })),
+                                        ...(contextData.pre_call_tools || []).map((t: string) => ({ name: t, phase: 'pre-call' })),
+                                        ...(contextData.in_call_http_tools || []).map((t: string) => ({ name: t, phase: 'in-call' })),
+                                        ...(contextData.post_call_tools || []).map((t: string) => ({ name: t, phase: 'post-call' })),
+                                    ];
+                                    return allTools.length > 0 ? (
+                                        <div>
+                                            <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-2">Enabled Tools</span>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {allTools.map((tool, idx) => (
+                                                    <span key={`${tool.phase}-${tool.name}-${idx}`} className="px-2 py-1 rounded-md text-xs bg-accent text-accent-foreground font-medium border border-accent-foreground/10">
+                                                        {displayToolName(tool.name)}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
-                                    </div>
-                                )}
+                                    ) : null;
+                                })()}
                             </div>
                         </ConfigCard>
                     ))}
