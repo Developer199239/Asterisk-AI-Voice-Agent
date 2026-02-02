@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, MessageSquare, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
@@ -11,6 +12,7 @@ import { Modal } from '../components/ui/Modal';
 import ContextForm from '../components/config/ContextForm';
 
 const ContextsPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -171,9 +173,12 @@ const ContextsPage = () => {
             const status = response.data?.status ?? (response.status === 200 ? 'success' : undefined);
 
             if (status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleApplyChanges(true);
@@ -250,7 +255,13 @@ const ContextsPage = () => {
     };
 
     const handleDeleteContext = async (name: string) => {
-        if (!confirm(`Are you sure you want to delete context "${name}"?`)) return;
+        const confirmed = await confirm({
+            title: 'Delete Context?',
+            description: `Are you sure you want to delete context "${name}"?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newContexts = { ...config.contexts };
         delete newContexts[name];
         await saveConfig({ ...config, contexts: newContexts });

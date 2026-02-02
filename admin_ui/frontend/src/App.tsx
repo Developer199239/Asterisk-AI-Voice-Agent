@@ -1,6 +1,7 @@
 import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'sonner';
+import { ConfirmDialogProvider } from './hooks/useConfirmDialog';
 import AppShell from './components/layout/AppShell';
 import Dashboard from './pages/Dashboard';
 import CallHistoryPage from './pages/CallHistoryPage';
@@ -117,6 +118,7 @@ const SetupGuard = ({ children }: { children: React.ReactNode }) => {
 function App() {
     return (
         <AuthProvider>
+            <ConfirmDialogProvider>
             <Toaster position="top-right" richColors closeButton />
             <Router>
                 <Routes>
@@ -173,6 +175,7 @@ function App() {
                     } />
                 </Routes>
             </Router>
+            </ConfirmDialogProvider>
         </AuthProvider>
     );
 }

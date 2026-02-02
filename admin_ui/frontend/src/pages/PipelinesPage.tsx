@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, ArrowRight, Workflow, AlertTriangle, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
@@ -12,6 +13,7 @@ import PipelineForm from '../components/config/PipelineForm';
 import { ensureModularKey, isFullAgentProvider } from '../utils/providerNaming';
 
 const PipelinesPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -149,9 +151,12 @@ const PipelinesPage = () => {
             const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
 
             if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleReloadAIEngine(true);
@@ -217,7 +222,13 @@ const PipelinesPage = () => {
             confirmMessage = `Pipeline "${name}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nThose contexts will fall back to the default pipeline.\n\nAre you sure you want to delete it?`;
         }
 
-        if (!confirm(confirmMessage)) return;
+        const confirmed = await confirm({
+            title: 'Delete Pipeline?',
+            description: confirmMessage,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newPipelines = { ...config.pipelines };
         delete newPipelines[name];
         await saveConfig({ ...config, pipelines: newPipelines });

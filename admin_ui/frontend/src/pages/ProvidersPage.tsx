@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, Server, AlertCircle, CheckCircle2, Loader2, RefreshCw, Wand2, Star } from 'lucide-react';
@@ -23,6 +24,7 @@ import { Capability, capabilityFromKey, ensureModularKey, isFullAgentProvider } 
 const stripModularSuffix = (name: string): string => (name || '').replace(/_(stt|llm|tts)$/i, '');
 
 const ProvidersPage: React.FC = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -272,9 +274,12 @@ const ProvidersPage: React.FC = () => {
             const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
 
             if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleReloadAIEngine(true);
@@ -335,10 +340,22 @@ const ProvidersPage: React.FC = () => {
         }
 
         if (warnings.length > 0) {
-            const warningMsg = `Provider "${name}" has the following dependencies:\n\n• ${warnings.join('\n• ')}\n\nDeleting may break calls. Are you sure?`;
-            if (!confirm(warningMsg)) return;
+            const warningMsg = `Provider "${name}" has the following dependencies:\n\n• ${warnings.join('\n• ')}\n\nDeleting may break calls.`;
+            const confirmed = await confirm({
+                title: 'Delete Provider?',
+                description: warningMsg,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
+            if (!confirmed) return;
         } else {
-            if (!confirm(`Are you sure you want to delete provider "${name}"?`)) return;
+            const confirmed = await confirm({
+                title: 'Delete Provider?',
+                description: `Are you sure you want to delete provider "${name}"?`,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
+            if (!confirmed) return;
         }
 
         const newProviders = { ...(config.providers || {}) };
