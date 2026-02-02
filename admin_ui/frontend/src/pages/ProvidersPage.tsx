@@ -792,11 +792,7 @@ const ProvidersPage: React.FC = () => {
                                             type="checkbox"
                                             className="sr-only peer"
                                             checked={providerData.enabled ?? true}
-                                            onChange={async (e) => {
-                                                const newProviders = { ...config.providers };
-                                                newProviders[name] = { ...providerData, enabled: e.target.checked };
-                                                await saveConfig({ ...config, providers: newProviders });
-                                            }}
+                                            onChange={(e) => handleToggleProvider(name, providerData, e.target.checked)}
                                         />
                                         <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                                     </label>
