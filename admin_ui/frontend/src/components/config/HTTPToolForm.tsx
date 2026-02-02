@@ -170,8 +170,15 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
     };
 
     const handleDeleteTool = (key: string) => {
-        // P1: Check if tool is used by any context (for all phases)
-        if (contexts) {
+        const toolData = config[key] as HTTPToolConfig;
+        
+        // P2 Fix: Check if tool is global - affects ALL contexts
+        if (toolData?.is_global) {
+            const contextCount = contexts ? Object.keys(contexts).length : 0;
+            const warningMsg = `⚠️ Global Tool Warning\n\nHTTP tool "${key}" is marked as GLOBAL and automatically applies to ALL ${contextCount} context(s).\n\nDeleting this tool will affect every context. Continue?`;
+            if (!confirm(warningMsg)) return;
+        } else if (contexts) {
+            // P1: Check if tool is used by any context (for all phases)
             // Map phase to the context config key
             const phaseToContextKey: Record<string, string> = {
                 'pre_call': 'pre_call_tools',
