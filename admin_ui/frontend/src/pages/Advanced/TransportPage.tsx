@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import yaml from 'js-yaml';
 import { Save, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 import { YamlErrorBanner, YamlErrorInfo } from '../../components/ui/YamlErrorBanner';
@@ -51,13 +52,13 @@ const TransportPage = () => {
             
             // Show appropriate message based on recommended apply method
             if (method === 'hot_reload') {
-                alert('Configuration saved. Changes can be applied via hot-reload.');
+                toast.success('Configuration saved. Changes can be applied via hot-reload.');
             } else {
-                alert('Transport configuration saved. Restart AI Engine to apply changes.');
+                toast.success('Transport configuration saved. Restart AI Engine to apply changes.');
             }
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         } finally {
             setSaving(false);
         }
@@ -72,19 +73,17 @@ const TransportPage = () => {
                 if (response.data?.restart_required) {
                     setApplyMethod('restart');
                     setPendingRestart(true);
-                    alert(
-                        `Hot reload applied partially: ${response.data.message || 'some changes require a restart'}\n\nRestart AI Engine to fully apply changes.`
-                    );
+                    toast.warning('Hot reload applied partially', { description: response.data.message || 'Restart AI Engine to fully apply changes' });
                     return;
                 }
 
                 if (response.data?.status === 'success') {
                     setPendingRestart(false);
-                    alert('AI Engine hot reloaded! Changes are now active.');
+                    toast.success('AI Engine hot reloaded! Changes are now active.');
                     return;
                 }
 
-                alert(`Hot reload response: ${response.data?.message || 'unknown status'}`);
+                toast.info(`Hot reload response: ${response.data?.message || 'unknown status'}`);
                 return;
             }
 
@@ -102,20 +101,18 @@ const TransportPage = () => {
             }
 
             if (response.data.status === 'degraded') {
-                alert(
-                    `AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`
-                );
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 return;
             }
 
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted! Changes are now active.');
+                toast.success('AI Engine restarted! Changes are now active.');
                 return;
             }
         } catch (error: any) {
             const actionLabel = applyMethod === 'hot_reload' ? 'hot reload' : 'restart';
-            alert(`Failed to ${actionLabel} AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error(`Failed to ${actionLabel} AI Engine`, { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }

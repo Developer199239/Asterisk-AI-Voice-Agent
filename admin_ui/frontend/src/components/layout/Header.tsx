@@ -12,7 +12,7 @@ const Header = () => {
             'pipelines': 'Pipelines',
             'contexts': 'Contexts',
             'tools': 'Tools',
-            'vad': 'VAD Settings',
+            'vad': 'Voice Activity Detection',
             'streaming': 'Streaming',
             'llm': 'LLM Defaults',
             'env': 'Environment',

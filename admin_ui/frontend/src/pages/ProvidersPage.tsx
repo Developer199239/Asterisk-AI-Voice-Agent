@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, Server, AlertCircle, CheckCircle2, Loader2, RefreshCw, Wand2, Star } from 'lucide-react';
@@ -100,7 +101,7 @@ const ProvidersPage: React.FC = () => {
             setPendingRestart(true);
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         }
     };
 
@@ -157,7 +158,7 @@ const ProvidersPage: React.FC = () => {
 
     const handleAddSelectedProviders = async () => {
         if (selectedTemplates.length === 0) {
-            alert('Please select at least one provider template.');
+            toast.error('Please select at least one provider template.');
             return;
         }
 
@@ -239,7 +240,7 @@ const ProvidersPage: React.FC = () => {
         });
 
         if (!changed) {
-            alert('Selected providers already exist.');
+            toast.info('Selected providers already exist.');
             setShowAddProvidersModal(false);
             return;
         }
@@ -282,16 +283,16 @@ const ProvidersPage: React.FC = () => {
             }
 
             if (response.data.status === 'degraded') {
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 return;
             }
 
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted! Changes are now active.');
+                toast.success('AI Engine restarted! Changes are now active.');
             }
         } catch (error: any) {
-            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error('Failed to restart AI Engine', { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
@@ -374,7 +375,7 @@ const ProvidersPage: React.FC = () => {
 
     const handleSaveProvider = async () => {
         if (!providerForm.name) {
-            alert('Provider name is required.');
+            toast.error('Provider name is required.');
             return;
         }
 
@@ -393,7 +394,7 @@ const ProvidersPage: React.FC = () => {
                     cap = inferred;
                     capabilities = [cap];
                 } else {
-                    alert('Capability is required for modular providers. Select STT, LLM, or TTS.');
+                    toast.error('Capability is required for modular providers. Select STT, LLM, or TTS.');
                     return;
                 }
             }
@@ -411,7 +412,7 @@ const ProvidersPage: React.FC = () => {
         if (!newConfig.providers) newConfig.providers = {};
 
         if ((isNewProvider || editingProvider !== finalName) && newConfig.providers[finalName]) {
-            alert(`Provider "${finalName}" already exists.`);
+            toast.error(`Provider "${finalName}" already exists.`);
             return;
         }
 
@@ -419,12 +420,12 @@ const ProvidersPage: React.FC = () => {
         const providerData = { ...existingData, ...providerForm, name: finalName, capabilities };
 
         if (!isFull && providerData.capabilities.length !== 1) {
-            alert('Modular providers must have exactly one capability.');
+            toast.error('Modular providers must have exactly one capability.');
             return;
         }
 
         if (!isFull && !providerData.capabilities[0]) {
-            alert('Capability is required for modular providers.');
+            toast.error('Capability is required for modular providers.');
             return;
         }
 
@@ -478,7 +479,7 @@ const ProvidersPage: React.FC = () => {
     const handleSetModularCapability = (cap: Capability) => {
         const rawName = (providerForm.name || '').toLowerCase();
         if (!rawName.trim()) {
-            alert('Please enter a provider name before selecting a capability.');
+            toast.error('Please enter a provider name before selecting a capability.');
             return;
         }
         const normalizedName = ensureModularKey(stripModularSuffix(rawName), cap);

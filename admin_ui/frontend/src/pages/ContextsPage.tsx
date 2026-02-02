@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, MessageSquare, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
@@ -156,7 +157,7 @@ const ContextsPage = () => {
             setPendingApply(true);
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         }
     };
 
@@ -182,7 +183,7 @@ const ContextsPage = () => {
 
             if (status === 'degraded') {
                 setPendingApply(false);
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 fetchConfig();
                 return;
             }
@@ -192,13 +193,13 @@ const ContextsPage = () => {
                 // MCP reload deferred due to active calls).
                 setApplyMethod('restart');
                 setPendingApply(true);
-                alert(response.data.message || 'Hot reload applied partially; restart AI Engine to fully apply changes.');
+                toast.warning(response.data.message || 'Hot reload applied partially; restart AI Engine to fully apply changes.');
                 return;
             }
 
             if (status === 'success') {
                 setPendingApply(false);
-                alert(applyMethod === 'hot_reload'
+                toast.success(applyMethod === 'hot_reload'
                     ? 'AI Engine hot reloaded! Changes apply to new calls.'
                     : 'AI Engine restarted! Changes are now active.');
                 // Refresh config/tool availability after apply (best-effort)
@@ -210,13 +211,13 @@ const ContextsPage = () => {
             // completed so the UI doesn't get stuck showing "Apply Changes" forever.
             if (response.status === 200) {
                 setPendingApply(false);
-                alert('AI Engine updated. Please verify with a test call and logs.');
+                toast.success('AI Engine updated. Please verify with a test call and logs.');
                 fetchConfig();
                 return;
             }
         } catch (error: any) {
             const action = applyMethod === 'hot_reload' ? 'hot reload' : 'restart';
-            alert(`Failed to ${action} AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error(`Failed to ${action} AI Engine`, { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
@@ -262,11 +263,11 @@ const ContextsPage = () => {
         if (contextForm.provider) {
             const provider = config.providers?.[contextForm.provider];
             if (!provider) {
-                alert(`Provider '${contextForm.provider}' does not exist.`);
+                toast.error(`Provider '${contextForm.provider}' does not exist.`);
                 return;
             }
             if (provider.enabled === false) {
-                alert(`Provider '${contextForm.provider}' is disabled. Please enable it or select another provider.`);
+                toast.error(`Provider '${contextForm.provider}' is disabled. Please enable it or select another provider.`);
                 return;
             }
         }
@@ -293,7 +294,7 @@ const ContextsPage = () => {
         });
 
         if (isNewContext && newConfig.contexts[name]) {
-            alert('Context already exists');
+            toast.error('Context already exists');
             return;
         }
 

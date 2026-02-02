@@ -6,6 +6,7 @@ import {
     BarChart3, Users, Timer, Activity, TrendingUp, Zap, PieChart
 } from 'lucide-react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { useLocation } from 'react-router-dom';
 
 interface CallRecordSummary {
@@ -253,6 +254,7 @@ const CallHistoryPage = () => {
             }
         } catch (err) {
             console.error('Failed to delete:', err);
+            toast.error('Failed to delete call record');
         }
     };
 

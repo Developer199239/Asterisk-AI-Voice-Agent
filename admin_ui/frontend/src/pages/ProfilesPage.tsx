@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Settings, Radio, Star, AlertCircle, RefreshCw, Loader2, Plus, Trash2 } from 'lucide-react';
@@ -63,7 +64,7 @@ const ProfilesPage = () => {
             setConfig(sanitized);
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         }
     };
 
@@ -76,12 +77,12 @@ const ProfilesPage = () => {
 	                if (status === 'partial' || response.data?.restart_required) {
 	                    setApplyMethod('restart');
 	                    setPendingApply(true);
-	                    alert('Hot reload applied partially; restart AI Engine to fully apply changes.');
+	                    toast.warning('Hot reload applied partially', { description: 'Restart AI Engine to fully apply changes' });
 	                    return;
 	                }
 	                if (status === 'success' || response.status === 200) {
 	                    setPendingApply(false);
-	                    alert('AI Engine hot reloaded! Changes are now active.');
+	                    toast.success('AI Engine hot reloaded! Changes are now active.');
 	                    fetchConfig();
 	                    return;
 	                }
@@ -101,19 +102,19 @@ const ProfilesPage = () => {
 	            }
 	            if (status === 'degraded') {
 	                setPendingApply(false);
-	                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+	                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
 	                fetchConfig();
 	                return;
 	            }
 	            if (status === 'success' || response.status === 200) {
 	                setPendingApply(false);
-	                alert('AI Engine restarted! Changes are now active.');
+	                toast.success('AI Engine restarted! Changes are now active.');
 	                fetchConfig();
 	                return;
 	            }
 	        } catch (err: any) {
 	            const action = applyMethod === 'hot_reload' ? 'hot reload' : 'restart';
-	            alert(`Failed to ${action} AI Engine: ${err.response?.data?.detail || err.message}`);
+	            toast.error(`Failed to ${action} AI Engine`, { description: err.response?.data?.detail || err.message });
 	        } finally {
 	            setApplying(false);
 	        }
