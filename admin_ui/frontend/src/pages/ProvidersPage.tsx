@@ -306,7 +306,7 @@ const ProvidersPage: React.FC = () => {
     const handleDeleteProvider = async (name: string) => {
         // P1 Guard: Check if this is the default provider
         if (config.default_provider === name) {
-            alert(`Cannot delete provider "${name}" because it is the default provider.\n\nPlease set a different default provider first.`);
+            toast.error(`Cannot delete provider "${name}"`, { description: 'Please set a different default provider first.' });
             return;
         }
 
@@ -373,14 +373,14 @@ const ProvidersPage: React.FC = () => {
                 const ap = pipelines[activePipeline] as any;
                 if (ap.stt === name || ap.llm === name || ap.tts === name) {
                     const role = ap.stt === name ? 'STT' : ap.llm === name ? 'LLM' : 'TTS';
-                    alert(`Cannot disable provider "${name}" because it is the ${role} provider for the active pipeline "${activePipeline}".\n\nDisabling will break all calls. Please update the active pipeline first.`);
+                    toast.error(`Cannot disable provider "${name}"`, { description: `It is the ${role} provider for the active pipeline "${activePipeline}". Please update the active pipeline first.` });
                     return;
                 }
             }
 
             // Check if it's the default provider
             if (config.default_provider === name) {
-                alert(`Cannot disable provider "${name}" because it is the default provider.\n\nPlease set a different default provider first.`);
+                toast.error(`Cannot disable provider "${name}"`, { description: 'Please set a different default provider first.' });
                 return;
             }
         }
