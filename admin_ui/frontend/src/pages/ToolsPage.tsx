@@ -100,18 +100,32 @@ const ToolsPage = () => {
         // Extract root-level settings that should not be nested under tools
         const { farewell_hangup_delay_sec, ...toolsOnly } = newToolsConfig;
 
-        // Preserve phase-based HTTP tools stored under `config.tools` (generic_http_lookup / generic_webhook).
-        // ToolForm edits built-in tools only and should not delete phase tool entries.
+        // P1 Fix: Preserve ALL existing tool entries that are not being explicitly updated.
+        // This prevents silent config loss of custom/unknown tool entries.
+        // Built-in tools that ToolForm manages: transfer, hangup_call, leave_voicemail, 
+        // send_email_summary, request_transcript
+        const builtInToolKeys = ['transfer', 'attended_transfer', 'cancel_transfer', 'hangup_call', 'leave_voicemail', 'send_email_summary', 'request_transcript'];
+        
         const existingTools = config.tools || {};
-        const preservedPhaseTools: Record<string, any> = {};
+        const preservedTools: Record<string, any> = {};
+        
         Object.entries(existingTools).forEach(([k, v]) => {
-            if (v && typeof v === 'object' && (v as any).kind && (v as any).phase) {
-                preservedPhaseTools[k] = v;
+            // Preserve if:
+            // 1. It's a phase-based HTTP tool (has kind and phase)
+            // 2. It's NOT a built-in tool that ToolForm manages (those get updated from toolsOnly)
+            const isPhaseHttpTool = v && typeof v === 'object' && (v as any).kind && (v as any).phase;
+            const isBuiltInTool = builtInToolKeys.includes(k);
+            
+            if (isPhaseHttpTool || !isBuiltInTool) {
+                // Only preserve if not being explicitly set in toolsOnly
+                if (!(k in toolsOnly)) {
+                    preservedTools[k] = v;
+                }
             }
         });
 
         // Update both tools config and root-level farewell_hangup_delay_sec
-        const updatedConfig = { ...config, tools: { ...preservedPhaseTools, ...toolsOnly } };
+        const updatedConfig = { ...config, tools: { ...preservedTools, ...toolsOnly } };
         if (farewell_hangup_delay_sec !== undefined) {
             updatedConfig.farewell_hangup_delay_sec = farewell_hangup_delay_sec;
         }
@@ -230,6 +244,7 @@ const ToolsPage = () => {
                             config={config.tools || {}}
                             onChange={(newTools) => setConfig({ ...config, tools: newTools })}
                             phase="pre_call"
+                            contexts={config.contexts}
                         />
                     </ConfigCard>
                 </ConfigSection>
@@ -255,6 +270,7 @@ const ToolsPage = () => {
                                 config={config.in_call_tools || {}}
                                 onChange={(newTools) => setConfig({ ...config, in_call_tools: newTools })}
                                 phase="in_call"
+                                contexts={config.contexts}
                             />
                         </ConfigCard>
                     </ConfigSection>
@@ -272,6 +288,7 @@ const ToolsPage = () => {
                             config={config.tools || {}}
                             onChange={(newTools) => setConfig({ ...config, tools: newTools })}
                             phase="post_call"
+                            contexts={config.contexts}
                         />
                     </ConfigCard>
                 </ConfigSection>

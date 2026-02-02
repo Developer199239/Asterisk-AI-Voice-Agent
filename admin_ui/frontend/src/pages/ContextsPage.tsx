@@ -271,6 +271,15 @@ const ContextsPage = () => {
             }
         }
 
+        // P1 Validation: Check pipeline exists
+        if (contextForm.pipeline) {
+            const pipeline = config.pipelines?.[contextForm.pipeline];
+            if (!pipeline) {
+                alert(`Pipeline '${contextForm.pipeline}' does not exist.\n\nPlease select a valid pipeline or leave blank to use the active pipeline.`);
+                return;
+            }
+        }
+
         const newConfig = { ...config };
         if (!newConfig.contexts) newConfig.contexts = {};
 
@@ -437,18 +446,30 @@ const ContextsPage = () => {
                                     <p className="text-foreground/90 italic">"{contextData.greeting}"</p>
                                 </div>
 
-                                {contextData.tools && contextData.tools.length > 0 && (
-                                    <div>
-                                        <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-2">Enabled Tools</span>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {contextData.tools.map((tool: string) => (
-                                                <span key={tool} className="px-2 py-1 rounded-md text-xs bg-accent text-accent-foreground font-medium border border-accent-foreground/10">
-                                                    {displayToolName(tool)}
-                                                </span>
-                                            ))}
+                                {/* Show all tool types with colored phase badges */}
+                                {(() => {
+                                    const allTools = [
+                                        ...(contextData.pre_call_tools || []).map((t: string) => ({ name: t, phase: 'pre', color: 'bg-blue-500/20 text-blue-600 dark:text-blue-400' })),
+                                        ...(contextData.tools || []).map((t: string) => ({ name: t, phase: 'in', color: 'bg-green-500/20 text-green-600 dark:text-green-400' })),
+                                        ...(contextData.in_call_http_tools || []).map((t: string) => ({ name: t, phase: 'in', color: 'bg-green-500/20 text-green-600 dark:text-green-400' })),
+                                        ...(contextData.post_call_tools || []).map((t: string) => ({ name: t, phase: 'post', color: 'bg-orange-500/20 text-orange-600 dark:text-orange-400' })),
+                                    ];
+                                    return allTools.length > 0 ? (
+                                        <div>
+                                            <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-2">Enabled Tools</span>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {allTools.map((tool, idx) => (
+                                                    <span key={`${tool.phase}-${tool.name}-${idx}`} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-accent text-accent-foreground font-medium border border-accent-foreground/10">
+                                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${tool.color}`}>
+                                                            {tool.phase}
+                                                        </span>
+                                                        {displayToolName(tool.name)}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
-                                    </div>
-                                )}
+                                    ) : null;
+                                })()}
                             </div>
                         </ConfigCard>
                     ))}

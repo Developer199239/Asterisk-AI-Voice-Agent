@@ -298,15 +298,77 @@ const ProvidersPage: React.FC = () => {
     };
 
     const handleDeleteProvider = async (name: string) => {
-        const pipelines = config.pipelines || {};
-        const inUse = Object.entries(pipelines).filter(([_, p]: [string, any]) => p.stt === name || p.llm === name || p.tts === name);
-        if (inUse.length > 0) {
-            const pipelineList = inUse.map(([n]) => n).join(', ');
-            if (!confirm(`Provider "${name}" is used by pipelines: ${pipelineList}. Deleting may break calls. Continue?`)) return;
+        // P1 Guard: Check if this is the default provider
+        if (config.default_provider === name) {
+            alert(`Cannot delete provider "${name}" because it is the default provider.\n\nPlease set a different default provider first.`);
+            return;
         }
-        if (!confirm(`Are you sure you want to delete provider "${name}"?`)) return;
+
+        // Check pipeline usage
+        const pipelines = config.pipelines || {};
+        const inUsePipelines = Object.entries(pipelines).filter(([_, p]: [string, any]) => p.stt === name || p.llm === name || p.tts === name);
+        
+        // P1 Guard: Block if used by active pipeline
+        const activePipeline = config.active_pipeline;
+        if (activePipeline && pipelines[activePipeline]) {
+            const ap = pipelines[activePipeline] as any;
+            if (ap.stt === name || ap.llm === name || ap.tts === name) {
+                alert(`Cannot delete provider "${name}" because it is used by the active pipeline "${activePipeline}".\n\nPlease update the active pipeline first.`);
+                return;
+            }
+        }
+
+        // P1 Guard: Check context provider overrides
+        const contexts = config.contexts || {};
+        const usingContexts = Object.entries(contexts)
+            .filter(([_, ctx]) => (ctx as any).provider === name)
+            .map(([ctxName]) => ctxName);
+
+        // Build warning message with all impacts
+        const warnings: string[] = [];
+        if (inUsePipelines.length > 0) {
+            warnings.push(`Used by pipelines: ${inUsePipelines.map(([n]) => n).join(', ')}`);
+        }
+        if (usingContexts.length > 0) {
+            warnings.push(`Used by contexts (provider override): ${usingContexts.join(', ')}`);
+        }
+
+        if (warnings.length > 0) {
+            const warningMsg = `Provider "${name}" has the following dependencies:\n\n• ${warnings.join('\n• ')}\n\nDeleting may break calls. Are you sure?`;
+            if (!confirm(warningMsg)) return;
+        } else {
+            if (!confirm(`Are you sure you want to delete provider "${name}"?`)) return;
+        }
+
         const newProviders = { ...(config.providers || {}) };
         delete newProviders[name];
+        await saveConfig({ ...config, providers: newProviders });
+    };
+
+    const handleToggleProvider = async (name: string, providerData: any, newEnabled: boolean) => {
+        // P1 Guard: Warn/block disabling a provider used by active pipeline
+        if (!newEnabled) {
+            const pipelines = config.pipelines || {};
+            const activePipeline = config.active_pipeline;
+            
+            if (activePipeline && pipelines[activePipeline]) {
+                const ap = pipelines[activePipeline] as any;
+                if (ap.stt === name || ap.llm === name || ap.tts === name) {
+                    const role = ap.stt === name ? 'STT' : ap.llm === name ? 'LLM' : 'TTS';
+                    alert(`Cannot disable provider "${name}" because it is the ${role} provider for the active pipeline "${activePipeline}".\n\nDisabling will break all calls. Please update the active pipeline first.`);
+                    return;
+                }
+            }
+
+            // Check if it's the default provider
+            if (config.default_provider === name) {
+                alert(`Cannot disable provider "${name}" because it is the default provider.\n\nPlease set a different default provider first.`);
+                return;
+            }
+        }
+
+        const newProviders = { ...config.providers };
+        newProviders[name] = { ...providerData, enabled: newEnabled };
         await saveConfig({ ...config, providers: newProviders });
     };
 
@@ -635,11 +697,7 @@ const ProvidersPage: React.FC = () => {
                                                 type="checkbox"
                                                 className="sr-only peer"
                                                 checked={providerData.enabled ?? true}
-                                                onChange={async (e) => {
-                                                    const newProviders = { ...config.providers };
-                                                    newProviders[name] = { ...providerData, enabled: e.target.checked };
-                                                    await saveConfig({ ...config, providers: newProviders });
-                                                }}
+                                                onChange={(e) => handleToggleProvider(name, providerData, e.target.checked)}
                                             />
                                             <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                                         </label>
@@ -734,11 +792,7 @@ const ProvidersPage: React.FC = () => {
                                             type="checkbox"
                                             className="sr-only peer"
                                             checked={providerData.enabled ?? true}
-                                            onChange={async (e) => {
-                                                const newProviders = { ...config.providers };
-                                                newProviders[name] = { ...providerData, enabled: e.target.checked };
-                                                await saveConfig({ ...config, providers: newProviders });
-                                            }}
+                                            onChange={(e) => handleToggleProvider(name, providerData, e.target.checked)}
                                         />
                                         <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                                     </label>
