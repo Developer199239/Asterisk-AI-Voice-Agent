@@ -199,7 +199,24 @@ const PipelinesPage = () => {
     };
 
     const handleDeletePipeline = async (name: string) => {
-        if (!confirm(`Are you sure you want to delete pipeline "${name}"?`)) return;
+        // P0 Guard: Check if this is the active pipeline
+        if (config.active_pipeline === name) {
+            alert(`Cannot delete pipeline "${name}" because it is the currently active pipeline.\n\nPlease set a different active pipeline first.`);
+            return;
+        }
+
+        // P1 Guard: Check if any contexts reference this pipeline
+        const contexts = config.contexts || {};
+        const usingContexts = Object.entries(contexts)
+            .filter(([_, ctx]) => (ctx as any).pipeline === name)
+            .map(([ctxName]) => ctxName);
+        
+        let confirmMessage = `Are you sure you want to delete pipeline "${name}"?`;
+        if (usingContexts.length > 0) {
+            confirmMessage = `Pipeline "${name}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nThose contexts will fall back to the default pipeline.\n\nAre you sure you want to delete it?`;
+        }
+
+        if (!confirm(confirmMessage)) return;
         const newPipelines = { ...config.pipelines };
         delete newPipelines[name];
         await saveConfig({ ...config, pipelines: newPipelines });

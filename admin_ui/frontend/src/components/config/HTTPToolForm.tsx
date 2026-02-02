@@ -9,6 +9,7 @@ interface HTTPToolFormProps {
     config: any;
     onChange: (newConfig: any) => void;
     phase: 'pre_call' | 'in_call' | 'post_call';
+    contexts?: Record<string, any>;  // P1: For in-use check on delete
 }
 
 interface ToolParameter {
@@ -80,7 +81,7 @@ const DEFAULT_TEST_VALUES: Record<string, string> = {
     lead_id: 'test-lead-123',
 };
 
-const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
+const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) => {
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
     const [toolForm, setToolForm] = useState<any>({});
@@ -169,7 +170,40 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     };
 
     const handleDeleteTool = (key: string) => {
-        if (!confirm(`Delete ${key}?`)) return;
+        const toolData = config[key] as HTTPToolConfig;
+        
+        // P2 Fix: Check if tool is global - affects ALL contexts
+        if (toolData?.is_global) {
+            const contextCountText = contexts ? `${Object.keys(contexts).length} context(s)` : 'all contexts';
+            const warningMsg = `⚠️ Global Tool Warning\n\nHTTP tool "${key}" is marked as GLOBAL and automatically applies to ${contextCountText}.\n\nDeleting this tool will affect every context. Continue?`;
+            if (!confirm(warningMsg)) return;
+        } else if (contexts) {
+            // P1: Check if tool is used by any context (for all phases)
+            // Map phase to the context config key
+            const phaseToContextKey: Record<string, string> = {
+                'pre_call': 'pre_call_tools',
+                'in_call': 'in_call_http_tools',
+                'post_call': 'post_call_tools'
+            };
+            const contextKey = phaseToContextKey[phase];
+            
+            const usingContexts = Object.entries(contexts)
+                .filter(([_, ctx]) => {
+                    const tools = (ctx as any)[contextKey] || [];
+                    return tools.includes(key);
+                })
+                .map(([ctxName]) => ctxName);
+            
+            if (usingContexts.length > 0) {
+                const warningMsg = `HTTP tool "${key}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nDeleting will remove it from those contexts. Continue?`;
+                if (!confirm(warningMsg)) return;
+            } else {
+                if (!confirm(`Delete ${key}?`)) return;
+            }
+        } else {
+            if (!confirm(`Delete ${key}?`)) return;
+        }
+
         const updated = { ...config };
         delete updated[key];
         onChange(updated);
