@@ -174,8 +174,8 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
         
         // P2 Fix: Check if tool is global - affects ALL contexts
         if (toolData?.is_global) {
-            const contextCount = contexts ? Object.keys(contexts).length : 0;
-            const warningMsg = `⚠️ Global Tool Warning\n\nHTTP tool "${key}" is marked as GLOBAL and automatically applies to ALL ${contextCount} context(s).\n\nDeleting this tool will affect every context. Continue?`;
+            const contextCountText = contexts ? `${Object.keys(contexts).length} context(s)` : 'all contexts';
+            const warningMsg = `⚠️ Global Tool Warning\n\nHTTP tool "${key}" is marked as GLOBAL and automatically applies to ${contextCountText}.\n\nDeleting this tool will affect every context. Continue?`;
             if (!confirm(warningMsg)) return;
         } else if (contexts) {
             // P1: Check if tool is used by any context (for all phases)
