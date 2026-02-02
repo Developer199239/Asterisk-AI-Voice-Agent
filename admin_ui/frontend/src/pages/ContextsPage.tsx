@@ -356,11 +356,17 @@ const ContextsPage = () => {
                         {applyMethod === 'hot_reload' ? 'Changes saved. Apply to make them active.' : 'Changes saved. Restart required to make them active.'}
                     </div>
                     <button
-                        onClick={() => {
+                        onClick={async () => {
                             const msg = applyMethod === 'hot_reload'
                                 ? 'Apply changes via hot reload now? Active calls should continue, new calls use updated config.'
                                 : 'Restart AI Engine now? This may disconnect active calls.';
-                            if (window.confirm(msg)) {
+                            const confirmed = await confirm({
+                                title: applyMethod === 'hot_reload' ? 'Apply Changes?' : 'Restart AI Engine?',
+                                description: msg,
+                                confirmText: applyMethod === 'hot_reload' ? 'Apply' : 'Restart',
+                                variant: 'default'
+                            });
+                            if (confirmed) {
                                 handleApplyChanges(false);
                             }
                         }}

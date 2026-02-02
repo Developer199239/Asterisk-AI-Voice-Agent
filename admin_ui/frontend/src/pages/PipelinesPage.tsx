@@ -207,7 +207,7 @@ const PipelinesPage = () => {
     const handleDeletePipeline = async (name: string) => {
         // P0 Guard: Check if this is the active pipeline
         if (config.active_pipeline === name) {
-            alert(`Cannot delete pipeline "${name}" because it is the currently active pipeline.\n\nPlease set a different active pipeline first.`);
+            toast.error(`Cannot delete pipeline "${name}"`, { description: 'Please set a different active pipeline first.' });
             return;
         }
 
