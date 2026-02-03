@@ -538,9 +538,9 @@ export const SystemTopology = () => {
           </div>
 
           {/* Arrow: Pipelines ← Local AI */}
-          <div className="flex items-center justify-center self-center rotate-180">
-            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
-              activePipelines.size > 0 ? 'border-l-green-500' : 'border-l-border'
+          <div className="flex items-center justify-center self-center">
+            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-r-[8px] ${
+              activePipelines.size > 0 ? 'border-r-green-500' : 'border-r-border'
             } border-t-transparent border-b-transparent`} />
             <div className={`w-6 h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
           </div>
