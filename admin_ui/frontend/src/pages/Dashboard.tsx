@@ -228,10 +228,7 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Live System Topology */}
-            <SystemTopology />
-
-            {/* Compact Resource Strip */}
+            {/* Compact Resource Strip - At-a-glance system metrics */}
             <div className="rounded-lg border border-border bg-card shadow-sm">
                 <div className="flex flex-wrap divide-x divide-border">
                     <CompactMetric
@@ -283,6 +280,9 @@ const Dashboard = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Live System Topology */}
+            <SystemTopology />
 
             {/* Health Widget */}
             <HealthWidget />
