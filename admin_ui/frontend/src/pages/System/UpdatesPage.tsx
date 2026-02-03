@@ -141,6 +141,15 @@ const UpdatesPage = () => {
       setSelectedBranch(localDef === 'detached' ? 'main' : localDef);
       setInitialized(true);
 
+      // Persist update status for Dashboard/SystemStatus widget
+      const updateInfo = {
+        checked_at: new Date().toISOString(),
+        update_available: statusRes.data.update_available ?? null,
+        local_version: statusRes.data.local?.deployed_tag || statusRes.data.local?.describe || null,
+        remote_version: statusRes.data.remote?.latest_tag || null,
+      };
+      localStorage.setItem('aava_update_status', JSON.stringify(updateInfo));
+
       // Best-effort: load recent history after a check.
       fetchHistory();
 
