@@ -405,42 +405,41 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* === ROW 2: T-junction arrows from AI Engine to Pipelines and Local AI === */}
+          {/* === ROW 2: Clean div-based arrows from AI Engine === */}
           
-          {/* Down arrow to Pipelines */}
-          <div className="flex flex-col items-center justify-end h-12">
-            <div className={`w-0.5 h-4 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
-            <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
+          {/* Column 1: Vertical arrow down to Pipelines */}
+          <div className="flex flex-col items-center h-14">
+            <div className={`w-0.5 flex-1 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+            <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
               activePipelines.size > 0 ? 'border-t-green-500' : 'border-t-border'
             } border-l-transparent border-r-transparent`} />
           </div>
           
-          {/* Horizontal line connecting to center */}
-          <div className="flex items-start justify-center h-12 pt-1">
-            <div className={`w-full h-0.5 ${activePipelines.size > 0 || hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
+          {/* Column 2: Horizontal connector (left part of T) */}
+          <div className="flex items-start h-14 pt-1">
+            <div className={`w-full h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
           </div>
           
-          {/* Center T-junction: vertical from AI Engine, horizontal branches */}
-          <div className="flex flex-col items-center h-12">
-            {/* Vertical line down from AI Engine */}
+          {/* Column 3: T-junction center - vertical down to Local AI */}
+          <div className="flex flex-col items-center h-14">
+            {/* Top connector to horizontal bar */}
             <div className={`w-0.5 h-1 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
-            {/* Horizontal bar for T-junction */}
-            <div className="flex items-center w-full">
-              <div className={`flex-1 h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
-              <div className={`w-0.5 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
-              <div className={`flex-1 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
+            {/* Horizontal bar spanning left */}
+            <div className="relative w-full">
+              <div className={`absolute right-1/2 w-1/2 h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} style={{ transform: 'translateX(-24px)' }} />
             </div>
-            {/* Vertical line down to Local AI */}
-            <div className={`w-0.5 h-4 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
-            <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
+            {/* Vertical line down */}
+            <div className={`w-0.5 flex-1 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
+            {/* Arrowhead */}
+            <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
               hasActiveCalls ? 'border-t-green-500' : 'border-t-border'
             } border-l-transparent border-r-transparent`} />
           </div>
           
-          {/* Empty cell */}
+          {/* Column 4: Empty */}
           <div></div>
           
-          {/* Empty cell */}
+          {/* Column 5: Empty */}
           <div></div>
 
           {/* === ROW 3: Pipelines ← Local AI Server → Models === */}
