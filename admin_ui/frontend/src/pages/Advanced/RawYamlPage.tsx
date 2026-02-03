@@ -6,6 +6,7 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Save, AlertCircle, Download, Upload } from 'lucide-react';
 
 const RawYamlPage = () => {
+    const { confirm } = useConfirmDialog();
     const [yamlContent, setYamlContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -53,13 +54,13 @@ const RawYamlPage = () => {
         try {
             await axios.post('/api/config/yaml', { content: yamlContent });
             setDirty(false);
-            alert('Configuration saved successfully');
+            toast.success('Configuration saved successfully');
             window.location.reload();
         } catch (err: any) {
             console.error(err);
             const msg = err.response?.data?.detail || 'Failed to save configuration';
             setError(msg);
-            alert(msg);
+            toast.error(msg);
         } finally {
             setSaving(false);
         }
@@ -69,7 +70,13 @@ const RawYamlPage = () => {
         const file = event.target.files?.[0];
         if (!file) return;
 
-        if (!confirm('This will overwrite your current configuration. A backup will be created. Continue?')) {
+        const confirmed = await confirm({
+            title: 'Import Configuration?',
+            description: 'This will overwrite your current configuration. A backup will be created.',
+            confirmText: 'Import',
+            variant: 'destructive'
+        });
+        if (!confirmed) {
             if (fileInputRef.current) fileInputRef.current.value = '';
             return;
         }
@@ -82,11 +89,11 @@ const RawYamlPage = () => {
             await axios.post('/api/config/import', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
-            alert('Configuration imported successfully. The page will reload.');
+            toast.success('Configuration imported successfully. The page will reload.');
             window.location.reload();
         } catch (err: any) {
             console.error(err);
-            alert('Failed to import configuration: ' + (err.response?.data?.detail || err.message));
+            toast.error('Failed to import configuration', { description: err.response?.data?.detail || err.message });
         } finally {
             setSaving(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -142,10 +149,10 @@ const RawYamlPage = () => {
                                 document.body.appendChild(link);
                                 link.click();
                                 link.remove();
-                                alert('Configuration exported successfully');
+                                toast.success('Configuration exported successfully');
                             } catch (err: any) {
                                 console.error(err);
-                                alert('Failed to export configuration');
+                                toast.error('Failed to export configuration');
                             }
                         }}
                         className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2"

@@ -104,15 +104,16 @@ const Dashboard = () => {
                 const dirHealthRes = await axios.get('/api/system/directories');
                 setDirectoryHealth(dirHealthRes.data);
                 if (res.data.restart_required) {
-                    alert('Fixes applied! Container restart may be required for changes to take effect.');
+                    toast.success('Fixes applied!', { description: 'Container restart may be required for changes to take effect.' });
+                } else {
+                    toast.success('Fixes applied!');
                 }
             } else {
-                const errors = Array.isArray(res.data.errors) ? res.data.errors.join('\n') : 'Unknown error';
-                const manualSteps = Array.isArray(res.data.manual_steps) ? res.data.manual_steps.join('\n') : '';
-                alert(`Some fixes failed:\n${errors}${manualSteps ? `\n\nManual steps:\n${manualSteps}` : ''}`);
+                const errors = Array.isArray(res.data.errors) ? res.data.errors.join(', ') : 'Unknown error';
+                toast.error('Some fixes failed', { description: errors });
             }
         } catch (err: any) {
-            alert(`Failed to fix directories: ${err?.message || 'Unknown error'}`);
+            toast.error('Failed to fix directories', { description: err?.message || 'Unknown error' });
         } finally {
             setFixingDirectories(false);
         }
