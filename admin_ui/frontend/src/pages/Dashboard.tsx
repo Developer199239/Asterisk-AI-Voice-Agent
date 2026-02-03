@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, AlertTriangle, CheckCircle, XCircle, Wrench } from 'lucide-react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { HealthWidget } from '../components/HealthWidget';
 import { SystemStatus } from '../components/SystemStatus';
 import { ApiErrorInfo, buildDockerAccessHints, describeApiError } from '../utils/apiErrors';

@@ -1,6 +1,7 @@
 import axios from 'axios';
-
+import { toast } from 'sonner';
 import { useState, useEffect } from 'react';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Save, Eye, EyeOff, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
@@ -43,6 +44,7 @@ const SecretInput = ({
 );
 
 const EnvPage = () => {
+    const { confirm } = useConfirmDialog();
     const { token, loading: authLoading } = useAuth();
     const [env, setEnv] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(true);
@@ -94,7 +96,7 @@ const EnvPage = () => {
         // Validate ARI Port
         const port = parseInt(env['ASTERISK_ARI_PORT'] || '8088');
         if (isNaN(port) || port < 1 || port > 65535) {
-            alert('Invalid ARI Port. Must be between 1 and 65535.');
+            toast.error('Invalid ARI Port. Must be between 1 and 65535.');
             return;
         }
 
@@ -117,17 +119,17 @@ const EnvPage = () => {
             setChangedKeys(keys);
             setPendingRestart(plan.length > 0);
             const services = Array.from(new Set(plan.map((p) => p.service))).sort();
-            alert(
-                plan.length > 0
-                    ? `Environment saved. Apply changes by restarting: ${services.join(', ')}`
-                    : 'Environment saved.'
-            );
+            if (plan.length > 0) {
+                toast.success('Environment saved', { description: `Apply changes by restarting: ${services.join(', ')}` });
+            } else {
+                toast.success('Environment saved');
+            }
         } catch (err: any) {
             console.error('Failed to save env', err);
             if (err.response && err.response.status === 401) {
-                alert('Session expired. Please login again.');
+                toast.error('Session expired. Please login again.');
             } else {
-                alert('Failed to save environment variables');
+                toast.error('Failed to save environment variables');
             }
         } finally {
             setSaving(false);
@@ -154,9 +156,15 @@ const EnvPage = () => {
             const jwtChanged = changedKeys.includes('JWT_SECRET');
             if (touchesAdminUI) {
                 const msg = jwtChanged
-                    ? 'This will restart Admin UI and JWT_SECRET changed. You will be logged out. Continue?'
-                    : 'This will restart Admin UI and may interrupt your session. Continue?';
-                if (!window.confirm(msg)) return;
+                    ? 'This will restart Admin UI and JWT_SECRET changed. You will be logged out.'
+                    : 'This will restart Admin UI and may interrupt your session.';
+                const confirmed = await confirm({
+                    title: 'Restart Admin UI?',
+                    description: msg,
+                    confirmText: 'Continue',
+                    variant: 'destructive'
+                });
+                if (!confirmed) return;
             }
 
             for (const service of ordered) {
@@ -170,18 +178,12 @@ const EnvPage = () => {
                     });
 
                     if (response.data.status === 'warning') {
-                        const confirmForce = window.confirm(
-                            `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                        );
-                        if (confirmForce) {
-                            setRestartingEngine(false);
-                            return handleApplyChanges(true);
-                        }
+                        toast.warning(response.data.message, { description: 'Use force restart if needed.' });
                         return;
                     }
 
                     if (response.data.status === 'degraded') {
-                        alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                        toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                         return;
                     }
                 } else if (service === 'local_ai_server') {
@@ -198,9 +200,9 @@ const EnvPage = () => {
 
             setPendingRestart(false);
             setApplyPlan([]);
-            alert('Changes applied.');
+            toast.success('Changes applied');
         } catch (error: any) {
-            alert(`Failed to apply changes: ${error.response?.data?.detail || error.message}`);
+            toast.error('Failed to apply changes', { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
@@ -340,8 +342,14 @@ const EnvPage = () => {
                 </div>
                 <div className="flex gap-2">
                     <button
-                        onClick={() => {
-                            if (window.confirm('Warning: Running the Setup Wizard will overwrite your current configuration. Are you sure you want to continue?')) {
+                        onClick={async () => {
+                            const confirmed = await confirm({
+                                title: 'Run Setup Wizard?',
+                                description: 'Warning: Running the Setup Wizard will overwrite your current configuration.',
+                                confirmText: 'Continue',
+                                variant: 'destructive'
+                            });
+                            if (confirmed) {
                                 window.location.href = '/wizard';
                             }
                         }}
