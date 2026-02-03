@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Globe, Mic, Volume2, Brain, AlertTriangle } from 'lucide-react';
+import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import axios from 'axios';
