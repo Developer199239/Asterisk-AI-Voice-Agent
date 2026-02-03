@@ -412,32 +412,29 @@ export const SystemTopology = () => {
                   const isActive = activeCount > 0;
                   const isDefault = provider.name === state.defaultProvider;
                   
-                  // Status: green=enabled+ready, red=enabled+not ready, orange=not enabled
-                  const getStatusColor = () => {
-                    if (isActive) return 'green';
-                    if (!provider.enabled) return 'orange';
-                    if (provider.enabled && provider.ready) return 'green';
-                    return 'red';
+                  // Icon color: green=enabled+ready, orange=disabled, red=enabled but not ready
+                  const getIconColor = () => {
+                    if (!provider.enabled) return 'text-orange-500';
+                    if (provider.enabled && provider.ready) return 'text-green-500';
+                    return 'text-red-500';
                   };
-                  const statusColor = getStatusColor();
+                  const iconColor = getIconColor();
                   
-                  const colorClasses = {
-                    green: { border: 'border-green-500 bg-green-500/10', icon: 'text-green-500' },
-                    orange: { border: 'border-orange-500 bg-orange-500/10', icon: 'text-orange-500' },
-                    red: { border: 'border-red-500 bg-red-500/10', icon: 'text-red-500' },
-                  };
-                  const colors = colorClasses[statusColor];
+                  // Cell only lights up green when there's an active call on this provider
+                  const cellClass = isActive 
+                    ? 'border-green-500 bg-green-500/10 shadow-md shadow-green-500/20' 
+                    : 'border-border bg-card';
                   
                   return (
                     <div 
                       key={provider.name}
-                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${colors.border}`}
+                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${cellClass}`}
                     >
                       {isActive && (
                         <div className="absolute inset-0 rounded-lg border border-green-500 animate-ping opacity-20" />
                       )}
-                      <Zap className={`w-4 h-4 flex-shrink-0 ${colors.icon}`} />
-                      <span className={`text-xs font-medium truncate ${colors.icon}`}>
+                      <Zap className={`w-4 h-4 flex-shrink-0 ${iconColor}`} />
+                      <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
                         {provider.displayName}
                       </span>
                       {isDefault && <span className="text-yellow-500 text-[10px] ml-auto flex-shrink-0">⭐</span>}
