@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { HealthWidget } from '../components/HealthWidget';
-import { SystemStatus } from '../components/SystemStatus';
 import { SystemTopology } from '../components/SystemTopology';
 import { ApiErrorInfo, buildDockerAccessHints, describeApiError } from '../utils/apiErrors';
 
@@ -60,7 +59,7 @@ interface PlatformResponse {
 }
 
 const Dashboard = () => {
-    const [containers, setContainers] = useState<Container[]>([]);
+    const [, setContainers] = useState<Container[]>([]);
     const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
     const [directoryHealth, setDirectoryHealth] = useState<DirectoryHealth | null>(null);
     const [loading, setLoading] = useState(true);
@@ -154,11 +153,11 @@ const Dashboard = () => {
 
     // Compact metric display for the resource strip
     const CompactMetric = ({ title, value, subValue, icon: Icon, color }: any) => (
-        <div className="flex items-center gap-3 px-4 py-2">
-            <Icon className={`w-4 h-4 ${color} flex-shrink-0`} />
+        <div className="flex items-center gap-3 px-4 py-3">
+            <Icon className={`w-5 h-5 ${color} flex-shrink-0`} />
             <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">{title}</div>
-                <div className="text-sm font-semibold">{value}</div>
+                <div className="text-lg font-bold">{value}</div>
                 {subValue && <div className="text-[10px] text-muted-foreground truncate">{subValue}</div>}
             </div>
         </div>
@@ -298,7 +297,7 @@ const Dashboard = () => {
                 </div>
                 
                 {/* Row 2: Resource Metrics */}
-                <div className="flex flex-wrap divide-x divide-border">
+                <div className="grid grid-cols-4 divide-x divide-border">
                     <CompactMetric
                         title="CPU"
                         value={metrics?.cpu?.percent != null ? `${metrics.cpu.percent.toFixed(1)}%` : '--'}
@@ -321,7 +320,7 @@ const Dashboard = () => {
                         color="text-orange-500"
                     />
                     {/* Compact Directory Health */}
-                    <div className="flex items-center gap-3 px-4 py-2">
+                    <div className="flex items-center gap-3 px-4 py-3">
                         <FolderCheck className={`w-4 h-4 flex-shrink-0 ${
                             directoryHealth?.overall === 'healthy' ? 'text-green-500' : 
                             directoryHealth?.overall === 'warning' ? 'text-yellow-500' : 'text-red-500'
@@ -354,9 +353,6 @@ const Dashboard = () => {
 
             {/* Health Widget */}
             <HealthWidget />
-
-            {/* System Status - Platform & Cross-Platform Checks (AAVA-126) */}
-            <SystemStatus />
         </div>
     );
 };
