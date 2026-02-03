@@ -405,20 +405,35 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* === ROW 2: Vertical arrows from Row 1 === */}
+          {/* === ROW 2: Arrows from AI Engine branching to Pipelines and Local AI === */}
           
-          {/* Down arrow from Asterisk (empty - no arrow needed) */}
-          <div></div>
-          
-          {/* Empty cell */}
-          <div></div>
-          
-          {/* Down arrow from AI Engine to Local AI Server */}
+          {/* Down arrow to Pipelines (from AI Engine, diagonal path) */}
           <div className="flex flex-col items-center justify-center py-1">
             <div className={`w-0.5 h-6 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
             <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
               activePipelines.size > 0 ? 'border-t-green-500' : 'border-t-border'
             } border-l-transparent border-r-transparent`} />
+          </div>
+          
+          {/* Horizontal connector from AI Engine to Pipelines arrow */}
+          <div className="flex items-start justify-center pt-1">
+            <div className={`w-full h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+          </div>
+          
+          {/* AI Engine branching point - two arrows going down-left and down */}
+          <div className="flex flex-col items-center justify-start py-1">
+            {/* Vertical line from AI Engine */}
+            <div className="flex items-start gap-0">
+              {/* Left branch to Pipelines */}
+              <div className={`w-[70px] h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+              {/* Down branch to Local AI */}
+              <div className="flex flex-col items-center">
+                <div className={`w-0.5 h-6 ${hasActiveCalls && !activePipelines.size ? 'bg-green-500' : 'bg-border'}`} />
+                <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
+                  hasActiveCalls && !activePipelines.size ? 'border-t-green-500' : 'border-t-border'
+                } border-l-transparent border-r-transparent`} />
+              </div>
+            </div>
           </div>
           
           {/* Empty cell */}
@@ -429,7 +444,7 @@ export const SystemTopology = () => {
 
           {/* === ROW 3: Pipelines ← Local AI Server → Models === */}
           
-          {/* Pipelines */}
+          {/* Pipelines with sub-components */}
           <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Pipelines</div>
             {state.configuredPipelines.length === 0 ? (
@@ -437,26 +452,54 @@ export const SystemTopology = () => {
                 No pipelines
               </div>
             ) : (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-3">
                 {state.configuredPipelines.map(pipeline => {
                   const activeCount = activePipelines.get(pipeline.name) || 0;
                   const isActive = activeCount > 0;
                   const isDefault = pipeline.name === state.activePipeline;
                   
                   return (
-                    <div 
-                      key={pipeline.name}
-                      className={`relative flex items-center gap-2 p-2 rounded-lg border transition-all ${
-                        isActive 
-                          ? 'border-green-500 bg-green-500/10' 
-                          : 'border-border bg-card'
-                      }`}
-                    >
-                      <Layers className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
-                      <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
-                        {pipeline.name.replace(/_/g, ' ')}
-                      </span>
-                      {isDefault && <span className="text-yellow-500 text-[10px] ml-auto flex-shrink-0">⭐</span>}
+                    <div key={pipeline.name} className="flex flex-col">
+                      {/* Pipeline name header */}
+                      <div 
+                        className={`relative flex items-center gap-2 p-2 rounded-t-lg border border-b-0 transition-all ${
+                          isActive 
+                            ? 'border-green-500 bg-green-500/10' 
+                            : 'border-border bg-card'
+                        }`}
+                      >
+                        <Layers className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                        <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
+                          {pipeline.name.replace(/_/g, ' ')}
+                        </span>
+                        {isDefault && <span className="text-yellow-500 text-[10px] ml-auto flex-shrink-0">⭐</span>}
+                      </div>
+                      {/* Pipeline components (STT/LLM/TTS) */}
+                      <div className={`flex flex-col gap-0.5 p-1.5 rounded-b-lg border transition-all ${
+                        isActive ? 'border-green-500 bg-green-500/5' : 'border-border bg-muted/30'
+                      }`}>
+                        {/* STT */}
+                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${
+                          isActive ? 'text-green-500' : 'text-muted-foreground'
+                        }`}>
+                          <Mic className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                          <span className="truncate">{pipeline.stt || 'N/A'}</span>
+                        </div>
+                        {/* LLM */}
+                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${
+                          isActive ? 'text-green-500' : 'text-muted-foreground'
+                        }`}>
+                          <MessageSquare className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                          <span className="truncate">{pipeline.llm || 'N/A'}</span>
+                        </div>
+                        {/* TTS */}
+                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${
+                          isActive ? 'text-green-500' : 'text-muted-foreground'
+                        }`}>
+                          <Volume2 className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                          <span className="truncate">{pipeline.tts || 'N/A'}</span>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
