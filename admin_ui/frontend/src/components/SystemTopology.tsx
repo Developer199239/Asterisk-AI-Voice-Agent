@@ -405,31 +405,38 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* === ROW 2: Branching arrows using col-span with proper alignment === */}
+          {/* === ROW 2: T-junction arrows from AI Engine === */}
           
           {/* Spans columns 1-3 for the branching arrow structure */}
           <div className="col-span-3 flex justify-center h-14">
-            <div className="flex">
-              {/* Left branch to Pipelines - positioned over column 1 center */}
-              <div className="flex flex-col items-center" style={{ width: '140px' }}>
-                <div className={`w-0.5 flex-1 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
-                <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
-                  activePipelines.size > 0 ? 'border-t-green-500' : 'border-t-border'
-                } border-l-transparent border-r-transparent`} />
+            <div className="flex flex-col" style={{ width: `${140 + 48 + 140}px` }}>
+              {/* Top horizontal bar connecting both branches */}
+              <div className="flex">
+                <div style={{ width: '70px' }} /> {/* Left padding to center of col 1 */}
+                <div className={`h-0.5 ${activePipelines.size > 0 || hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} style={{ width: `${70 + 48 + 70}px` }} />
+                <div style={{ width: '70px' }} /> {/* Right padding */}
               </div>
               
-              {/* Horizontal connector bar (column 2 width) */}
-              <div className="flex items-start" style={{ width: '48px' }}>
-                <div className={`w-full h-0.5 mt-0 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
-              </div>
-              
-              {/* Center T-junction over AI Engine (column 3) */}
-              <div className="flex flex-col items-center" style={{ width: '140px' }}>
-                {/* Vertical line down to Local AI */}
-                <div className={`w-0.5 flex-1 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
-                <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
-                  hasActiveCalls ? 'border-t-green-500' : 'border-t-border'
-                } border-l-transparent border-r-transparent`} />
+              {/* Two vertical branches going down */}
+              <div className="flex flex-1">
+                {/* Left branch to Pipelines */}
+                <div className="flex flex-col items-center" style={{ width: '140px' }}>
+                  <div className={`w-0.5 flex-1 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+                  <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
+                    activePipelines.size > 0 ? 'border-t-green-500' : 'border-t-border'
+                  } border-l-transparent border-r-transparent`} />
+                </div>
+                
+                {/* Gap for column 2 */}
+                <div style={{ width: '48px' }} />
+                
+                {/* Center branch to Local AI */}
+                <div className="flex flex-col items-center" style={{ width: '140px' }}>
+                  <div className={`w-0.5 flex-1 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
+                  <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
+                    hasActiveCalls ? 'border-t-green-500' : 'border-t-border'
+                  } border-l-transparent border-r-transparent`} />
+                </div>
               </div>
             </div>
           </div>
