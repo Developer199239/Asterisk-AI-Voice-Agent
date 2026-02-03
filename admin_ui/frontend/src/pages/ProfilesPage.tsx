@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Settings, Radio, Star, AlertCircle, RefreshCw, Loader2, Plus, Trash2 } from 'lucide-react';
@@ -11,6 +12,7 @@ import { Modal } from '../components/ui/Modal';
 import { FormInput, FormSelect } from '../components/ui/FormComponents';
 
 const ProfilesPage = () => {
+	const { confirm } = useConfirmDialog();
 	const [config, setConfig] = useState<any>({});
 	const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -91,13 +93,7 @@ const ProfilesPage = () => {
 	            const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
 	            const status = response.data?.status ?? (response.status === 200 ? 'success' : undefined);
 	            if (status === 'warning') {
-	                const confirmForce = window.confirm(
-	                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-	                );
-	                if (confirmForce) {
-	                    setApplying(false);
-	                    return applyChanges(true);
-	                }
+	                toast.warning(response.data.message, { description: 'Use force restart if needed.' });
 	                return;
 	            }
 	            if (status === 'degraded') {
@@ -153,15 +149,15 @@ const ProfilesPage = () => {
 
 		const profileKey = isNewProfile ? newProfileName.trim() : editingProfile;
 		if (!profileKey) {
-			alert('Profile name is required');
+			toast.error('Profile name is required');
 			return;
 		}
 		if (profileKey === 'default') {
-			alert("Profile name 'default' is reserved (profiles.default selects the default profile).");
+			toast.error("Profile name 'default' is reserved", { description: 'profiles.default selects the default profile' });
 			return;
 		}
 		if (isNewProfile && (config.profiles?.[profileKey] != null)) {
-			alert(`Profile '${profileKey}' already exists.`);
+			toast.error(`Profile '${profileKey}' already exists`);
 			return;
 		}
 
@@ -214,7 +210,7 @@ const ProfilesPage = () => {
         const currentDefaultProfile = currentProfiles.default || 'telephony_ulaw_8k';
 
         if (currentProfileKeys.length <= 1) {
-            alert('Cannot delete the last remaining audio profile.');
+            toast.error('Cannot delete the last remaining audio profile');
             return;
         }
 
@@ -225,18 +221,22 @@ const ProfilesPage = () => {
 
         const isDefault = currentDefaultProfile === profileName || currentProfiles.default === profileName;
 
-        const lines: string[] = [`Delete audio profile "${profileName}"?`];
+        const lines: string[] = [];
         if (isDefault) {
-            lines.push('', `This profile is currently set as the default (profiles.default).`);
-            lines.push(`Default will be changed to "${fallbackDefault}".`);
+            lines.push(`This profile is currently set as the default. Default will be changed to "${fallbackDefault}".`);
         }
         if (contextsUsing.length > 0) {
-            lines.push('', `This profile is used by ${contextsUsing.length} context(s): ${contextsUsing.join(', ')}`);
-            lines.push('Those contexts will fall back to the default profile.');
+            lines.push(`Used by ${contextsUsing.length} context(s): ${contextsUsing.join(', ')}. They will fall back to the default profile.`);
         }
-        lines.push('', 'This cannot be undone.');
+        lines.push('This cannot be undone.');
 
-        if (!window.confirm(lines.join('\n'))) return;
+        const confirmed = await confirm({
+            title: `Delete audio profile "${profileName}"?`,
+            description: lines.join('\n\n'),
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
 
         const newConfig = { ...config };
         newConfig.profiles = { ...(newConfig.profiles || {}) };
@@ -291,11 +291,17 @@ const ProfilesPage = () => {
 						{applyMethod === 'hot_reload' ? 'Changes saved. Apply to make them active.' : 'Changes saved. Restart required to make them active.'}
 					</div>
 					<button
-						onClick={() => {
+						onClick={async () => {
 							const msg = applyMethod === 'hot_reload'
 								? 'Apply profile changes via hot reload now? Active calls should continue, new calls use updated config.'
 								: 'Restart AI Engine now? This may disconnect active calls.';
-							if (window.confirm(msg)) {
+							const confirmed = await confirm({
+								title: applyMethod === 'hot_reload' ? 'Apply Changes?' : 'Restart AI Engine?',
+								description: msg,
+								confirmText: applyMethod === 'hot_reload' ? 'Apply' : 'Restart',
+								variant: 'default'
+							});
+							if (confirmed) {
 								applyChanges(false);
 							}
 						}}
