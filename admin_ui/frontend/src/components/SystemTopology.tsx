@@ -129,16 +129,16 @@ export const SystemTopology = () => {
           }
         }
 
-        // Extract pipelines
+        // Extract pipelines - note: stt/llm/tts are direct string properties, not nested
         const pipelines: PipelineConfig[] = [];
         if (parsed?.pipelines && typeof parsed.pipelines === 'object') {
           for (const [name, config] of Object.entries(parsed.pipelines)) {
             const cfg = config as any;
             pipelines.push({
               name,
-              stt: cfg?.stt?.provider,
-              llm: cfg?.llm?.provider,
-              tts: cfg?.tts?.provider,
+              stt: typeof cfg?.stt === 'string' ? cfg.stt : cfg?.stt?.provider,
+              llm: typeof cfg?.llm === 'string' ? cfg.llm : cfg?.llm?.provider,
+              tts: typeof cfg?.tts === 'string' ? cfg.tts : cfg?.tts?.provider,
             });
           }
         }
@@ -405,35 +405,36 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* === ROW 2: Arrows from AI Engine branching to Pipelines and Local AI === */}
+          {/* === ROW 2: T-junction arrows from AI Engine to Pipelines and Local AI === */}
           
-          {/* Down arrow to Pipelines (from AI Engine, diagonal path) */}
-          <div className="flex flex-col items-center justify-center py-1">
-            <div className={`w-0.5 h-6 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+          {/* Down arrow to Pipelines */}
+          <div className="flex flex-col items-center justify-end h-12">
+            <div className={`w-0.5 h-4 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
             <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
               activePipelines.size > 0 ? 'border-t-green-500' : 'border-t-border'
             } border-l-transparent border-r-transparent`} />
           </div>
           
-          {/* Horizontal connector from AI Engine to Pipelines arrow */}
-          <div className="flex items-start justify-center pt-1">
-            <div className={`w-full h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+          {/* Horizontal line connecting to center */}
+          <div className="flex items-start justify-center h-12 pt-1">
+            <div className={`w-full h-0.5 ${activePipelines.size > 0 || hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
           </div>
           
-          {/* AI Engine branching point - two arrows going down-left and down */}
-          <div className="flex flex-col items-center justify-start py-1">
-            {/* Vertical line from AI Engine */}
-            <div className="flex items-start gap-0">
-              {/* Left branch to Pipelines */}
-              <div className={`w-[70px] h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
-              {/* Down branch to Local AI */}
-              <div className="flex flex-col items-center">
-                <div className={`w-0.5 h-6 ${hasActiveCalls && !activePipelines.size ? 'bg-green-500' : 'bg-border'}`} />
-                <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
-                  hasActiveCalls && !activePipelines.size ? 'border-t-green-500' : 'border-t-border'
-                } border-l-transparent border-r-transparent`} />
-              </div>
+          {/* Center T-junction: vertical from AI Engine, horizontal branches */}
+          <div className="flex flex-col items-center h-12">
+            {/* Vertical line down from AI Engine */}
+            <div className={`w-0.5 h-1 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
+            {/* Horizontal bar for T-junction */}
+            <div className="flex items-center w-full">
+              <div className={`flex-1 h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+              <div className={`w-0.5 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
+              <div className={`flex-1 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
             </div>
+            {/* Vertical line down to Local AI */}
+            <div className={`w-0.5 h-4 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
+            <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
+              hasActiveCalls ? 'border-t-green-500' : 'border-t-border'
+            } border-l-transparent border-r-transparent`} />
           </div>
           
           {/* Empty cell */}
