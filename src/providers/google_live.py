@@ -693,6 +693,16 @@ class GoogleLiveProvider(AIProviderInterface):
 
         if tools:
             setup_msg["setup"]["tools"] = tools
+            # Add toolConfig with function calling configuration
+            # Per Google docs: https://ai.google.dev/gemini-api/docs/function-calling
+            # mode options: AUTO (default), ANY (force tool call), NONE (disable)
+            # Using AUTO allows model to choose between function call or natural response
+            # The system prompt guides when to use hangup_call specifically
+            setup_msg["setup"]["toolConfig"] = {
+                "functionCallingConfig": {
+                    "mode": "AUTO"
+                }
+            }
         
         # Enable transcriptions for conversation history tracking (configurable)
         # This allows us to populate email summaries and transcripts
