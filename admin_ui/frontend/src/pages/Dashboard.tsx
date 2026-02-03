@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { HealthWidget } from '../components/HealthWidget';
 import { SystemTopology } from '../components/SystemTopology';
 import { ApiErrorInfo, buildDockerAccessHints, describeApiError } from '../utils/apiErrors';
 
@@ -350,9 +349,6 @@ const Dashboard = () => {
 
             {/* Live System Topology */}
             <SystemTopology />
-
-            {/* Health Widget */}
-            <HealthWidget />
         </div>
     );
 };

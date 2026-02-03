@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle, Server } from 'lucide-react';
+import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle, Cpu, Terminal, Settings, Play } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import axios from 'axios';
@@ -76,6 +77,7 @@ const ModelsPage = () => {
     const [serverStatus, setServerStatus] = useState<'connected' | 'error' | 'loading'>('loading');
     const [restarting, setRestarting] = useState(false);
     const [pendingChanges, setPendingChanges] = useState<{ stt?: string; tts?: string; llm?: string }>({});
+    const [startingServer, setStartingServer] = useState(false);
 
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         const id = Date.now();
@@ -374,33 +376,60 @@ const ModelsPage = () => {
                 ))}
             </div>
 
-            {/* Active Models Section */}
-            <ConfigCard className="mb-6">
-                <div className="flex justify-between items-center mb-4">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-green-500/10 rounded-lg">
-                            <Server className="w-5 h-5 text-green-500" />
+            {/* Local AI Server Section */}
+            <ConfigCard className="mb-6 p-6">
+                <div className="flex justify-between items-start mb-6">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-blue-500/10 rounded-xl">
+                            <Cpu className="w-6 h-6 text-blue-500" />
                         </div>
                         <div>
-                            <h3 className="font-semibold">Active Models</h3>
-                            <p className="text-xs text-muted-foreground">Currently loaded in Local AI Server</p>
+                            <h3 className="font-semibold text-lg">Local AI Server</h3>
+                            <div className="mt-1">
+                                <span className={`font-medium flex items-center gap-1 ${
+                                    serverStatus === 'connected' ? 'text-green-500' : 
+                                    serverStatus === 'error' ? 'text-red-500' : 'text-yellow-500'
+                                }`}>
+                                    {serverStatus === 'connected' ? (
+                                        <><CheckCircle2 className="w-4 h-4" /> Connected</>
+                                    ) : serverStatus === 'error' ? (
+                                        <><XCircle className="w-4 h-4" /> Error</>
+                                    ) : (
+                                        'Loading...'
+                                    )}
+                                </span>
+                            </div>
                         </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            serverStatus === 'connected' ? 'bg-green-500/10 text-green-500' : 
-                            serverStatus === 'error' ? 'bg-red-500/10 text-red-500' : 'bg-yellow-500/10 text-yellow-500'
-                        }`}>
-                            {serverStatus === 'connected' ? 'Connected' : serverStatus === 'error' ? 'Disconnected' : 'Loading...'}
-                        </span>
+                    <div className="flex gap-2">
+                        <Link
+                            to="/env"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
+                            title="Configure"
+                        >
+                            <Settings className="w-4 h-4" />
+                        </Link>
                         <button
-                            onClick={fetchActiveModels}
+                            onClick={() => {
+                                if (!window.confirm('Are you sure you want to restart the Local AI Server?')) return;
+                                setRestarting(true);
+                                axios.post('/api/system/containers/local_ai_server/restart')
+                                    .then(() => setTimeout(() => { fetchActiveModels(); setRestarting(false); }, 5000))
+                                    .catch(() => setRestarting(false));
+                            }}
                             disabled={restarting}
                             className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
-                            title="Refresh"
+                            title="Restart"
                         >
                             <RefreshCw className={`w-4 h-4 ${restarting ? 'animate-spin' : ''}`} />
                         </button>
+                        <Link
+                            to="/logs?container=local_ai_server"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
+                            title="View Logs"
+                        >
+                            <Terminal className="w-4 h-4" />
+                        </Link>
                     </div>
                 </div>
 
@@ -503,8 +532,32 @@ const ModelsPage = () => {
                 )}
 
                 {serverStatus === 'error' && (
-                    <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-600 dark:text-red-400">
-                        Local AI Server is not connected. Start the server to manage models.
+                    <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                        <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
+                            Local AI Server is not reachable. The container may still be running.
+                        </p>
+                        <button
+                            onClick={() => {
+                                setStartingServer(true);
+                                axios.post('/api/system/containers/local_ai_server/start')
+                                    .then(() => setTimeout(() => { fetchActiveModels(); setStartingServer(false); }, 5000))
+                                    .catch(() => setStartingServer(false));
+                            }}
+                            disabled={startingServer}
+                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+                        >
+                            {startingServer ? (
+                                <>
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Starting...
+                                </>
+                            ) : (
+                                <>
+                                    <Play className="w-4 h-4" />
+                                    Start Local AI Server
+                                </>
+                            )}
+                        </button>
                     </div>
                 )}
 
