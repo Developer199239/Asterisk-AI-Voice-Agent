@@ -447,7 +447,7 @@ export const SystemTopology = () => {
               {/* Horizontal bar from col 1 center (70) to col 3 center (258) */}
               <line 
                 x1="80" y1="12" x2="288" y2="12" 
-                stroke={activePipelines.size > 0 || hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
+                stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'} 
                 strokeWidth="2"
               />
               
@@ -466,13 +466,13 @@ export const SystemTopology = () => {
               {/* Center vertical line down to Local AI (col 3 center = 258) */}
               <line 
                 x1="288" y1="12" x2="288" y2="48" 
-                stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
+                stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'} 
                 strokeWidth="2"
               />
               {/* Center arrowhead */}
               <polygon 
                 points="288,56 282,46 294,46" 
-                fill={hasActiveCalls ? '#22c55e' : '#e5e7eb'}
+                fill={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'}
               />
             </svg>
           </div>
