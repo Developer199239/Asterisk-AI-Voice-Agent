@@ -14,6 +14,8 @@ interface CallState {
 interface ProviderConfig {
   name: string;
   displayName: string;
+  enabled: boolean;
+  ready: boolean;  // Will be determined from health check
 }
 
 interface PipelineConfig {
@@ -109,12 +111,19 @@ export const SystemTopology = () => {
         // Extract only full agent providers (not modular pipeline components)
         const providers: ProviderConfig[] = [];
         if (parsed?.providers && typeof parsed.providers === 'object') {
-          for (const [name] of Object.entries(parsed.providers)) {
+          for (const [name, config] of Object.entries(parsed.providers)) {
             // Only include full agent providers, skip modular components like local_stt, groq_llm, etc.
             if (FULL_AGENT_PROVIDERS.has(name)) {
+              const cfg = config as any;
+              // Check if enabled - defaults to true if not specified
+              const enabled = cfg?.enabled !== false;
+              // Provider is ready if AI Engine is connected (we'll refine this with actual provider health later)
+              const ready = true; // Will be updated from health check
               providers.push({
                 name,
                 displayName: PROVIDER_DISPLAY_NAMES[name] || name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+                enabled,
+                ready,
               });
             }
           }
@@ -403,20 +412,32 @@ export const SystemTopology = () => {
                   const isActive = activeCount > 0;
                   const isDefault = provider.name === state.defaultProvider;
                   
+                  // Status: green=enabled+ready, red=enabled+not ready, orange=not enabled
+                  const getStatusColor = () => {
+                    if (isActive) return 'green';
+                    if (!provider.enabled) return 'orange';
+                    if (provider.enabled && provider.ready) return 'green';
+                    return 'red';
+                  };
+                  const statusColor = getStatusColor();
+                  
+                  const colorClasses = {
+                    green: { border: 'border-green-500 bg-green-500/10', icon: 'text-green-500' },
+                    orange: { border: 'border-orange-500 bg-orange-500/10', icon: 'text-orange-500' },
+                    red: { border: 'border-red-500 bg-red-500/10', icon: 'text-red-500' },
+                  };
+                  const colors = colorClasses[statusColor];
+                  
                   return (
                     <div 
                       key={provider.name}
-                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
-                        isActive 
-                          ? 'border-green-500 bg-green-500/10 shadow-md shadow-green-500/20' 
-                          : 'border-border bg-card'
-                      }`}
+                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${colors.border}`}
                     >
                       {isActive && (
                         <div className="absolute inset-0 rounded-lg border border-green-500 animate-ping opacity-20" />
                       )}
-                      <Zap className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
-                      <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
+                      <Zap className={`w-4 h-4 flex-shrink-0 ${colors.icon}`} />
+                      <span className={`text-xs font-medium truncate ${colors.icon}`}>
                         {provider.displayName}
                       </span>
                       {isDefault && <span className="text-yellow-500 text-[10px] ml-auto flex-shrink-0">⭐</span>}
@@ -433,8 +454,16 @@ export const SystemTopology = () => {
           </div>
         </div>
 
+        {/* Arrow from AI Engine to Pipelines */}
+        <div className="flex justify-center my-2">
+          <div className="flex flex-col items-center">
+            <div className="w-0.5 h-4 bg-border" />
+            <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-t-border border-l-transparent border-r-transparent" />
+          </div>
+        </div>
+
         {/* Bottom Row: Pipelines → Local AI Server → Models */}
-        <div className="flex items-start justify-center gap-3 mt-6 pt-6 border-t border-border">
+        <div className="flex items-start justify-center gap-3">
           {/* Pipelines */}
           <div className="w-[140px]">
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Pipelines</div>
@@ -579,14 +608,18 @@ export const SystemTopology = () => {
         </div>
 
         {/* Legend */}
-        <div className="flex items-center justify-center gap-6 pt-4 mt-4 border-t border-border text-[10px] text-muted-foreground">
+        <div className="flex items-center justify-center gap-4 pt-4 mt-4 border-t border-border text-[10px] text-muted-foreground flex-wrap">
           <div className="flex items-center gap-1.5">
-            <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
-            <span>Active</span>
+            <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
+            <span>Ready</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-2.5 h-2.5 rounded-full border border-border bg-card" />
-            <span>Ready</span>
+            <div className="w-2.5 h-2.5 rounded-full bg-orange-500" />
+            <span>Disabled</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
+            <span>Not Ready</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-yellow-500">⭐</span>
