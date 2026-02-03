@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Activity, Phone, Cpu, Server, Mic, MessageSquare, Volume2, Zap, Radio } from 'lucide-react';
+import { Activity, Phone, Cpu, Server, Mic, MessageSquare, Volume2, Zap, Radio, CheckCircle2, XCircle, Layers } from 'lucide-react';
 import axios from 'axios';
 import yaml from 'js-yaml';
 
@@ -13,7 +13,7 @@ interface CallState {
 
 interface ProviderConfig {
   name: string;
-  type: 'monolithic' | 'pipeline_component';
+  displayName: string;
 }
 
 interface PipelineConfig {
@@ -24,13 +24,14 @@ interface PipelineConfig {
 }
 
 interface LocalAIModels {
-  stt?: { backend: string; loaded: boolean; path?: string };
-  llm?: { loaded: boolean; path?: string };
-  tts?: { backend: string; loaded: boolean; path?: string };
+  stt?: { backend: string; loaded: boolean; path?: string; display?: string };
+  llm?: { loaded: boolean; path?: string; display?: string };
+  tts?: { backend: string; loaded: boolean; path?: string; display?: string };
 }
 
 interface TopologyState {
   aiEngineStatus: 'connected' | 'error' | 'unknown';
+  ariConnected: boolean;
   localAIStatus: 'connected' | 'error' | 'unknown';
   localAIModels: LocalAIModels | null;
   configuredProviders: ProviderConfig[];
@@ -40,12 +41,19 @@ interface TopologyState {
   activeCalls: Map<string, CallState>;
 }
 
-// Known monolithic providers (full agents that handle STT+LLM+TTS internally)
-const MONOLITHIC_PROVIDERS = ['deepgram', 'openai_realtime', 'google_live', 'elevenlabs_agent'];
+// Provider display name mapping
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  'openai_realtime': 'OpenAI',
+  'google_live': 'Google',
+  'deepgram': 'Deepgram',
+  'elevenlabs_agent': 'ElevenLabs',
+  'local': 'Local',
+};
 
 export const SystemTopology = () => {
   const [state, setState] = useState<TopologyState>({
     aiEngineStatus: 'unknown',
+    ariConnected: false,
     localAIStatus: 'unknown',
     localAIModels: null,
     configuredProviders: [],
@@ -61,9 +69,11 @@ export const SystemTopology = () => {
     const fetchHealth = async () => {
       try {
         const res = await axios.get('/api/system/health');
+        const aiEngineDetails = res.data.ai_engine?.details || {};
         setState(prev => ({
           ...prev,
           aiEngineStatus: res.data.ai_engine?.status === 'connected' ? 'connected' : 'error',
+          ariConnected: aiEngineDetails.ari_connected ?? aiEngineDetails.asterisk?.connected ?? false,
           localAIStatus: res.data.local_ai_server?.status === 'connected' ? 'connected' : 'error',
           localAIModels: res.data.local_ai_server?.details?.models || null,
         }));
@@ -71,6 +81,7 @@ export const SystemTopology = () => {
         setState(prev => ({
           ...prev,
           aiEngineStatus: 'error',
+          ariConnected: false,
           localAIStatus: 'error',
         }));
       }
@@ -87,13 +98,13 @@ export const SystemTopology = () => {
         const res = await axios.get('/api/config/yaml');
         const parsed = yaml.load(res.data.content) as any;
         
-        // Extract providers
+        // Extract configured providers only
         const providers: ProviderConfig[] = [];
         if (parsed?.providers && typeof parsed.providers === 'object') {
           for (const [name] of Object.entries(parsed.providers)) {
             providers.push({
               name,
-              type: MONOLITHIC_PROVIDERS.includes(name) ? 'monolithic' : 'pipeline_component',
+              displayName: PROVIDER_DISPLAY_NAMES[name] || name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
             });
           }
         }
@@ -162,7 +173,7 @@ export const SystemTopology = () => {
           }
           
           // Detect provider assignment
-          if (msg.includes('audio profile resolved') || msg.includes('provider selected')) {
+          if (msg.includes('audio profile resolved') || msg.includes('provider selected') || msg.includes('using provider')) {
             const call = calls.get(callId);
             if (call) {
               call.provider = event.provider || call.provider;
@@ -179,7 +190,7 @@ export const SystemTopology = () => {
           }
           
           // Detect call end
-          if (msg.includes('stasis ended') || msg.includes('call cleanup') || msg.includes('channel destroyed')) {
+          if (msg.includes('stasis ended') || msg.includes('call cleanup') || msg.includes('channel destroyed') || msg.includes('hangup')) {
             endedCalls.add(callId);
             calls.delete(callId);
           }
@@ -228,98 +239,17 @@ export const SystemTopology = () => {
   const totalActiveCalls = state.activeCalls.size;
   const hasActiveCalls = totalActiveCalls > 0;
 
-  // Node component
-  const Node = ({ 
-    label, 
-    icon: Icon, 
-    status, 
-    count, 
-    isDefault,
-    subLabel,
-    size = 'normal'
-  }: { 
-    label: string; 
-    icon: any; 
-    status: 'active' | 'ready' | 'error' | 'idle';
-    count?: number;
-    isDefault?: boolean;
-    subLabel?: string;
-    size?: 'small' | 'normal';
-  }) => {
-    const statusColors = {
-      active: 'border-green-500 bg-green-500/10 shadow-green-500/20',
-      ready: 'border-border bg-card',
-      error: 'border-red-500 bg-red-500/10',
-      idle: 'border-border bg-muted/50',
-    };
-    
-    const iconColors = {
-      active: 'text-green-500',
-      ready: 'text-muted-foreground',
-      error: 'text-red-500',
-      idle: 'text-muted-foreground/50',
-    };
-
-    const pulseClass = status === 'active' ? 'animate-pulse' : '';
-    const sizeClass = size === 'small' ? 'p-2 min-w-[80px]' : 'p-3 min-w-[100px]';
-
-    return (
-      <div className={`relative flex flex-col items-center ${sizeClass} rounded-lg border-2 ${statusColors[status]} shadow-sm transition-all duration-300 ${pulseClass}`}>
-        {isDefault && (
-          <div className="absolute -top-2 -right-2 text-yellow-500 text-xs">⭐</div>
-        )}
-        <Icon className={`w-5 h-5 ${iconColors[status]} mb-1`} />
-        <span className={`text-xs font-medium ${status === 'active' ? 'text-green-500' : 'text-foreground'}`}>
-          {label}
-        </span>
-        {subLabel && (
-          <span className="text-[10px] text-muted-foreground truncate max-w-[80px]">{subLabel}</span>
-        )}
-        {count !== undefined && count > 0 && (
-          <span className="mt-1 px-1.5 py-0.5 rounded-full bg-green-500 text-white text-[10px] font-bold">
-            {count}
-          </span>
-        )}
-        {status === 'active' && (
-          <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
-        )}
-      </div>
-    );
-  };
-
-  // Edge/connection line
-  const Edge = ({ animated = false, vertical = false }: { animated?: boolean; vertical?: boolean }) => {
-    if (vertical) {
-      return (
-        <div className="flex flex-col items-center h-6">
-          <div className={`w-0.5 h-full ${animated ? 'bg-gradient-to-b from-green-500 to-green-300' : 'bg-border'}`}>
-            {animated && (
-              <div className="w-full h-2 bg-green-400 animate-bounce" style={{ animationDuration: '1s' }} />
-            )}
-          </div>
-          <div className={`w-0 h-0 border-l-4 border-r-4 border-t-4 ${animated ? 'border-t-green-500' : 'border-t-border'} border-l-transparent border-r-transparent`} />
-        </div>
-      );
-    }
-    
-    return (
-      <div className="flex items-center mx-1">
-        <div className={`w-8 h-0.5 ${animated ? 'bg-gradient-to-r from-green-500 to-green-300' : 'bg-border'} relative overflow-hidden`}>
-          {animated && (
-            <div 
-              className="absolute inset-y-0 w-3 bg-green-300 animate-flow"
-              style={{ animation: 'flow 1s linear infinite' }}
-            />
-          )}
-        </div>
-        <div className={`w-0 h-0 border-t-4 border-b-4 border-l-4 ${animated ? 'border-l-green-500' : 'border-l-border'} border-t-transparent border-b-transparent`} />
-      </div>
-    );
+  // Get model display name
+  const getModelDisplayName = (model: any, type: string): string => {
+    if (!model) return type;
+    if (model.display) return model.display;
+    if (model.backend) return model.backend.charAt(0).toUpperCase() + model.backend.slice(1);
+    return type;
   };
 
   if (loading) {
     return (
-      <div className="rounded-lg border border-border bg-card p-6">
+      <div className="rounded-lg border border-border bg-card p-6 mb-6">
         <div className="animate-pulse flex items-center gap-3">
           <div className="h-6 w-6 bg-muted rounded" />
           <div className="h-4 w-48 bg-muted rounded" />
@@ -329,52 +259,138 @@ export const SystemTopology = () => {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card overflow-hidden">
+    <div className="rounded-lg border border-border bg-card overflow-hidden mb-6">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
         <div className="flex items-center gap-2">
           <Radio className={`w-4 h-4 ${hasActiveCalls ? 'text-green-500 animate-pulse' : 'text-muted-foreground'}`} />
           <span className="text-sm font-medium">Live System Topology</span>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <Phone className={`w-3.5 h-3.5 ${hasActiveCalls ? 'text-green-500' : 'text-muted-foreground'}`} />
-          <span className={hasActiveCalls ? 'text-green-500 font-medium' : 'text-muted-foreground'}>
-            {totalActiveCalls} active call{totalActiveCalls !== 1 ? 's' : ''}
-          </span>
+        <div className="flex items-center gap-3 text-xs">
+          <div className="flex items-center gap-1">
+            <Phone className={`w-3.5 h-3.5 ${hasActiveCalls ? 'text-green-500' : 'text-muted-foreground'}`} />
+            <span className={hasActiveCalls ? 'text-green-500 font-medium' : 'text-muted-foreground'}>
+              {totalActiveCalls} call{totalActiveCalls !== 1 ? 's' : ''}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="p-4 space-y-6">
-        {/* Main Flow: Asterisk → AI Engine → Providers */}
-        <div className="flex items-center justify-center gap-1 flex-wrap">
-          {/* Asterisk PBX */}
-          <Node
-            label="Asterisk"
-            icon={Phone}
-            status={hasActiveCalls ? 'active' : 'ready'}
-            count={totalActiveCalls}
-            subLabel="PBX"
-          />
+      <div className="p-4">
+        {/* Main Grid Layout */}
+        <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] gap-4 items-start">
           
-          <Edge animated={hasActiveCalls} />
-          
-          {/* AI Engine */}
-          <Node
-            label="AI Engine"
-            icon={Cpu}
-            status={state.aiEngineStatus === 'connected' ? (hasActiveCalls ? 'active' : 'ready') : 'error'}
-            count={totalActiveCalls}
-            subLabel="Core"
-          />
-          
-          <Edge animated={hasActiveCalls} />
-          
-          {/* Providers Section */}
-          <div className="flex flex-col gap-2 p-3 rounded-lg border border-dashed border-border bg-muted/20">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Providers</div>
-            <div className="flex flex-wrap gap-2 justify-center">
+          {/* Column 1: Asterisk PBX */}
+          <div className="flex flex-col items-center">
+            <div className={`relative w-full max-w-[140px] p-4 rounded-lg border-2 transition-all duration-300 ${
+              hasActiveCalls 
+                ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
+                : 'border-border bg-card'
+            }`}>
+              {hasActiveCalls && (
+                <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
+              )}
+              <div className="flex flex-col items-center gap-2">
+                <Phone className={`w-8 h-8 ${hasActiveCalls ? 'text-green-500' : 'text-muted-foreground'}`} />
+                <div className="text-center">
+                  <div className={`font-semibold ${hasActiveCalls ? 'text-green-500' : 'text-foreground'}`}>Asterisk</div>
+                  <div className="text-xs text-muted-foreground">PBX</div>
+                </div>
+                <div className="w-full pt-2 mt-2 border-t border-border/50 space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">ARI</span>
+                    {state.ariConnected ? (
+                      <span className="flex items-center gap-1 text-green-500">
+                        <CheckCircle2 className="w-3 h-3" /> Connected
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-red-500">
+                        <XCircle className="w-3 h-3" /> Disconnected
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Calls</span>
+                    <span className={`font-medium ${hasActiveCalls ? 'text-green-500' : 'text-foreground'}`}>
+                      {totalActiveCalls}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Arrow 1 */}
+          <div className="flex items-center h-full pt-12">
+            <div className={`w-8 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
+              {hasActiveCalls && (
+                <div className="absolute inset-y-0 w-4 bg-green-300 animate-flow" />
+              )}
+            </div>
+            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
+              hasActiveCalls ? 'border-l-green-500' : 'border-l-border'
+            } border-t-transparent border-b-transparent`} />
+          </div>
+
+          {/* Column 2: AI Engine Core */}
+          <div className="flex flex-col items-center">
+            <div className={`relative w-full max-w-[140px] p-4 rounded-lg border-2 transition-all duration-300 ${
+              state.aiEngineStatus === 'error'
+                ? 'border-red-500 bg-red-500/10'
+                : hasActiveCalls 
+                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
+                  : 'border-border bg-card'
+            }`}>
+              {hasActiveCalls && state.aiEngineStatus === 'connected' && (
+                <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
+              )}
+              <div className="flex flex-col items-center gap-2">
+                <Cpu className={`w-8 h-8 ${
+                  state.aiEngineStatus === 'error' ? 'text-red-500' : hasActiveCalls ? 'text-green-500' : 'text-muted-foreground'
+                }`} />
+                <div className="text-center">
+                  <div className={`font-semibold ${
+                    state.aiEngineStatus === 'error' ? 'text-red-500' : hasActiveCalls ? 'text-green-500' : 'text-foreground'
+                  }`}>AI Engine</div>
+                  <div className="text-xs text-muted-foreground">Core</div>
+                </div>
+                <div className="w-full pt-2 mt-2 border-t border-border/50">
+                  <div className="flex items-center justify-center text-xs">
+                    {state.aiEngineStatus === 'connected' ? (
+                      <span className="flex items-center gap-1 text-green-500">
+                        <CheckCircle2 className="w-3 h-3" /> Healthy
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-red-500">
+                        <XCircle className="w-3 h-3" /> Error
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Arrow 2 */}
+          <div className="flex items-center h-full pt-12">
+            <div className={`w-8 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
+              {hasActiveCalls && (
+                <div className="absolute inset-y-0 w-4 bg-green-300 animate-flow" />
+              )}
+            </div>
+            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
+              hasActiveCalls ? 'border-l-green-500' : 'border-l-border'
+            } border-t-transparent border-b-transparent`} />
+          </div>
+
+          {/* Column 3: Providers */}
+          <div className="flex flex-col">
+            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Providers</div>
+            <div className="flex flex-col gap-2">
               {state.configuredProviders.length === 0 ? (
-                <span className="text-xs text-muted-foreground">No providers configured</span>
+                <div className="p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center">
+                  No providers configured
+                </div>
               ) : (
                 state.configuredProviders.map(provider => {
                   const activeCount = activeProviders.get(provider.name) || 0;
@@ -382,15 +398,28 @@ export const SystemTopology = () => {
                   const isDefault = provider.name === state.defaultProvider;
                   
                   return (
-                    <Node
+                    <div 
                       key={provider.name}
-                      label={provider.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).substring(0, 12)}
-                      icon={provider.type === 'monolithic' ? Zap : Server}
-                      status={isActive ? 'active' : 'ready'}
-                      count={activeCount || undefined}
-                      isDefault={isDefault}
-                      size="small"
-                    />
+                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
+                        isActive 
+                          ? 'border-green-500 bg-green-500/10 shadow-md shadow-green-500/20' 
+                          : 'border-border bg-card'
+                      }`}
+                    >
+                      {isActive && (
+                        <div className="absolute inset-0 rounded-lg border border-green-500 animate-ping opacity-20" />
+                      )}
+                      <Zap className={`w-4 h-4 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                      <span className={`text-sm font-medium ${isActive ? 'text-green-500' : 'text-foreground'}`}>
+                        {provider.displayName}
+                      </span>
+                      {isDefault && <span className="text-yellow-500 text-xs ml-auto">⭐</span>}
+                      {isActive && (
+                        <span className="ml-auto px-1.5 py-0.5 rounded-full bg-green-500 text-white text-[10px] font-bold">
+                          {activeCount}
+                        </span>
+                      )}
+                    </div>
                   );
                 })
               )}
@@ -398,102 +427,163 @@ export const SystemTopology = () => {
           </div>
         </div>
 
-        {/* Pipelines Section */}
-        {state.configuredPipelines.length > 0 && (
+        {/* Bottom Row: Pipelines → Local AI Server → STT/LLM/TTS */}
+        <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] gap-4 items-start mt-6 pt-6 border-t border-border">
+          
+          {/* Pipelines (below Asterisk) */}
           <div className="flex flex-col items-center">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-2">Pipelines</div>
-            <div className="flex flex-wrap gap-3 justify-center">
-              {state.configuredPipelines.map(pipeline => {
-                const activeCount = activePipelines.get(pipeline.name) || 0;
-                const isActive = activeCount > 0;
-                const isDefault = pipeline.name === state.activePipeline;
-                
-                return (
-                  <div 
-                    key={pipeline.name}
-                    className={`flex items-center gap-1 p-2 rounded-lg border ${
-                      isActive ? 'border-green-500 bg-green-500/10' : 'border-border bg-card'
-                    } ${isActive ? 'animate-pulse' : ''}`}
-                  >
-                    {isDefault && <span className="text-yellow-500 text-xs mr-1">⭐</span>}
-                    <div className="flex items-center gap-1">
-                      <div className={`p-1 rounded ${isActive ? 'bg-green-500/20' : 'bg-muted'}`}>
-                        <Mic className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">→</span>
-                      <div className={`p-1 rounded ${isActive ? 'bg-green-500/20' : 'bg-muted'}`}>
-                        <MessageSquare className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">→</span>
-                      <div className={`p-1 rounded ${isActive ? 'bg-green-500/20' : 'bg-muted'}`}>
-                        <Volume2 className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
-                      </div>
-                    </div>
-                    <div className="ml-2">
-                      <div className={`text-xs font-medium ${isActive ? 'text-green-500' : 'text-foreground'}`}>
+            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Pipelines</div>
+            {state.configuredPipelines.length === 0 ? (
+              <div className="w-full max-w-[140px] p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center">
+                No pipelines
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 w-full max-w-[140px]">
+                {state.configuredPipelines.map(pipeline => {
+                  const activeCount = activePipelines.get(pipeline.name) || 0;
+                  const isActive = activeCount > 0;
+                  const isDefault = pipeline.name === state.activePipeline;
+                  
+                  return (
+                    <div 
+                      key={pipeline.name}
+                      className={`relative flex items-center gap-2 p-2 rounded-lg border transition-all ${
+                        isActive 
+                          ? 'border-green-500 bg-green-500/10' 
+                          : 'border-border bg-card'
+                      }`}
+                    >
+                      <Layers className={`w-4 h-4 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                      <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
                         {pipeline.name.replace(/_/g, ' ')}
-                      </div>
-                      {activeCount > 0 && (
-                        <span className="text-[10px] text-green-500">{activeCount} active</span>
-                      )}
+                      </span>
+                      {isDefault && <span className="text-yellow-500 text-[10px] ml-auto">⭐</span>}
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Local AI Server Section */}
-        <div className="flex flex-col items-center pt-2 border-t border-border">
-          <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-2">Local AI Server</div>
-          <div className={`flex items-center gap-2 p-3 rounded-lg border ${
-            state.localAIStatus === 'connected' ? 'border-border bg-card' : 'border-red-500 bg-red-500/10'
-          }`}>
-            <Activity className={`w-4 h-4 ${state.localAIStatus === 'connected' ? 'text-green-500' : 'text-red-500'}`} />
-            <span className={`text-xs font-medium ${state.localAIStatus === 'connected' ? 'text-green-500' : 'text-red-500'}`}>
-              {state.localAIStatus === 'connected' ? 'Connected' : 'Disconnected'}
-            </span>
-            
-            {state.localAIStatus === 'connected' && state.localAIModels && (
-              <div className="flex items-center gap-2 ml-3 pl-3 border-l border-border">
-                {/* STT */}
-                <div className="flex items-center gap-1">
-                  <Mic className={`w-3 h-3 ${state.localAIModels.stt?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
-                  <span className="text-[10px] text-muted-foreground">
-                    {state.localAIModels.stt?.backend || 'STT'}
-                  </span>
-                </div>
-                <span className="text-muted-foreground">→</span>
-                {/* LLM */}
-                <div className="flex items-center gap-1">
-                  <MessageSquare className={`w-3 h-3 ${state.localAIModels.llm?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
-                  <span className="text-[10px] text-muted-foreground">LLM</span>
-                </div>
-                <span className="text-muted-foreground">→</span>
-                {/* TTS */}
-                <div className="flex items-center gap-1">
-                  <Volume2 className={`w-3 h-3 ${state.localAIModels.tts?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
-                  <span className="text-[10px] text-muted-foreground">
-                    {state.localAIModels.tts?.backend || 'TTS'}
-                  </span>
-                </div>
+                  );
+                })}
               </div>
             )}
+          </div>
+
+          {/* Arrow to Local AI */}
+          <div className="flex items-center h-full pt-8">
+            <div className="w-8 h-0.5 bg-border" />
+            <div className="w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] border-l-border border-t-transparent border-b-transparent" />
+          </div>
+
+          {/* Local AI Server (same size as AI Engine) */}
+          <div className="flex flex-col items-center">
+            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Local AI Server</div>
+            <div className={`relative w-full max-w-[140px] p-4 rounded-lg border-2 transition-all duration-300 ${
+              state.localAIStatus === 'error'
+                ? 'border-red-500 bg-red-500/10'
+                : 'border-border bg-card'
+            }`}>
+              <div className="flex flex-col items-center gap-2">
+                <Server className={`w-8 h-8 ${
+                  state.localAIStatus === 'error' ? 'text-red-500' : 'text-muted-foreground'
+                }`} />
+                <div className="text-center">
+                  <div className={`font-semibold ${
+                    state.localAIStatus === 'error' ? 'text-red-500' : 'text-foreground'
+                  }`}>Local AI</div>
+                  <div className="text-xs text-muted-foreground">Server</div>
+                </div>
+                <div className="w-full pt-2 mt-2 border-t border-border/50">
+                  <div className="flex items-center justify-center text-xs">
+                    {state.localAIStatus === 'connected' ? (
+                      <span className="flex items-center gap-1 text-green-500">
+                        <CheckCircle2 className="w-3 h-3" /> Connected
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-red-500">
+                        <XCircle className="w-3 h-3" /> Disconnected
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Arrow to STT/LLM/TTS */}
+          <div className="flex items-center h-full pt-8">
+            <div className="w-8 h-0.5 bg-border" />
+            <div className="w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] border-l-border border-t-transparent border-b-transparent" />
+          </div>
+
+          {/* STT / LLM / TTS Components */}
+          <div className="flex flex-col">
+            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Models</div>
+            <div className="flex flex-col gap-2">
+              {/* STT */}
+              <div className={`flex items-center gap-2 p-2 px-3 rounded-lg border ${
+                state.localAIModels?.stt?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
+              }`}>
+                <Mic className={`w-4 h-4 ${state.localAIModels?.stt?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
+                <div className="flex-1">
+                  <div className="text-xs font-medium">STT</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {getModelDisplayName(state.localAIModels?.stt, 'Not loaded')}
+                  </div>
+                </div>
+                {state.localAIModels?.stt?.loaded ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                )}
+              </div>
+
+              {/* LLM */}
+              <div className={`flex items-center gap-2 p-2 px-3 rounded-lg border ${
+                state.localAIModels?.llm?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
+              }`}>
+                <MessageSquare className={`w-4 h-4 ${state.localAIModels?.llm?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
+                <div className="flex-1">
+                  <div className="text-xs font-medium">LLM</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {getModelDisplayName(state.localAIModels?.llm, 'Not loaded')}
+                  </div>
+                </div>
+                {state.localAIModels?.llm?.loaded ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                )}
+              </div>
+
+              {/* TTS */}
+              <div className={`flex items-center gap-2 p-2 px-3 rounded-lg border ${
+                state.localAIModels?.tts?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
+              }`}>
+                <Volume2 className={`w-4 h-4 ${state.localAIModels?.tts?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
+                <div className="flex-1">
+                  <div className="text-xs font-medium">TTS</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {getModelDisplayName(state.localAIModels?.tts, 'Not loaded')}
+                  </div>
+                </div>
+                {state.localAIModels?.tts?.loaded ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Legend */}
-        <div className="flex items-center justify-center gap-4 pt-2 text-[10px] text-muted-foreground">
-          <div className="flex items-center gap-1">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+        <div className="flex items-center justify-center gap-6 pt-4 mt-4 border-t border-border text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
             <span>Active</span>
           </div>
-          <div className="flex items-center gap-1">
-            <div className="w-2 h-2 rounded-full bg-border" />
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full border border-border bg-card" />
             <span>Ready</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <span className="text-yellow-500">⭐</span>
             <span>Default</span>
           </div>
@@ -503,11 +593,11 @@ export const SystemTopology = () => {
       {/* CSS for flow animation */}
       <style>{`
         @keyframes flow {
-          0% { transform: translateX(-12px); }
+          0% { transform: translateX(-16px); }
           100% { transform: translateX(32px); }
         }
         .animate-flow {
-          animation: flow 1s linear infinite;
+          animation: flow 0.8s linear infinite;
         }
       `}</style>
     </div>
