@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench } from 'lucide-react';
+import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { HealthWidget } from '../components/HealthWidget';
@@ -47,6 +47,18 @@ interface DirectoryHealth {
     };
 }
 
+interface PlatformInfo {
+    project?: { version: string };
+    os: { id: string; version: string };
+    docker: { version: string | null };
+    compose: { version: string | null };
+}
+
+interface PlatformResponse {
+    platform: PlatformInfo;
+    summary: { ready: boolean; passed: number };
+}
+
 const Dashboard = () => {
     const [containers, setContainers] = useState<Container[]>([]);
     const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
@@ -57,6 +69,7 @@ const Dashboard = () => {
 
     const [containersError, setContainersError] = useState<ApiErrorInfo | null>(null);
     const [metricsError, setMetricsError] = useState<ApiErrorInfo | null>(null);
+    const [platformData, setPlatformData] = useState<PlatformResponse | null>(null);
 
     const fetchData = async () => {
         setContainersError(null);
@@ -66,9 +79,10 @@ const Dashboard = () => {
             axios.get('/api/system/containers'),
             axios.get('/api/system/metrics'),
             axios.get('/api/system/directories'),
+            axios.get('/api/system/platform'),
         ]);
 
-        const [containersRes, metricsRes, dirHealthRes] = results;
+        const [containersRes, metricsRes, dirHealthRes, platformRes] = results;
 
         if (containersRes.status === 'fulfilled') {
             setContainers(containersRes.value.data);
@@ -90,6 +104,10 @@ const Dashboard = () => {
             setDirectoryHealth(dirHealthRes.value.data);
         } else {
             setDirectoryHealth(null);
+        }
+
+        if (platformRes.status === 'fulfilled') {
+            setPlatformData(platformRes.value.data);
         }
 
         setLoading(false);
@@ -228,8 +246,58 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Compact Resource Strip - At-a-glance system metrics */}
+            {/* Compact Status Bar - Platform info + Resources */}
             <div className="rounded-lg border border-border bg-card shadow-sm">
+                {/* Row 1: Platform Info + System Ready */}
+                <div className="flex flex-wrap items-center justify-between px-4 py-2 border-b border-border bg-muted/30">
+                    <div className="flex flex-wrap items-center gap-6">
+                        {/* System Ready Status */}
+                        <div className="flex items-center gap-2">
+                            {platformData?.summary?.ready ? (
+                                <CheckCircle2 className="w-4 h-4 text-green-500" />
+                            ) : (
+                                <XCircle className="w-4 h-4 text-red-500" />
+                            )}
+                            <span className={`text-sm font-medium ${platformData?.summary?.ready ? 'text-green-500' : 'text-red-500'}`}>
+                                {platformData?.summary?.ready ? 'System Ready' : 'Action Required'}
+                            </span>
+                            {platformData?.summary?.passed != null && (
+                                <span className="text-xs text-muted-foreground">
+                                    {platformData.summary.passed} passed
+                                </span>
+                            )}
+                        </div>
+                        
+                        {/* Divider */}
+                        <div className="h-4 w-px bg-border hidden sm:block" />
+                        
+                        {/* Platform Info */}
+                        <div className="flex flex-wrap items-center gap-4 text-xs">
+                            <div className="flex items-center gap-1.5">
+                                <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">OS:</span>
+                                <span className="font-medium">{platformData?.platform?.os?.id} {platformData?.platform?.os?.version}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <Tag className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">AAVA:</span>
+                                <span className="font-medium">{platformData?.platform?.project?.version || '--'}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <Box className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">Docker:</span>
+                                <span className="font-medium">{platformData?.platform?.docker?.version || '--'}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <HardDrive className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">Compose:</span>
+                                <span className="font-medium">{platformData?.platform?.compose?.version || '--'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {/* Row 2: Resource Metrics */}
                 <div className="flex flex-wrap divide-x divide-border">
                     <CompactMetric
                         title="CPU"
