@@ -4,6 +4,7 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { HealthWidget } from '../components/HealthWidget';
 import { SystemStatus } from '../components/SystemStatus';
+import { SystemTopology } from '../components/SystemTopology';
 import { ApiErrorInfo, buildDockerAccessHints, describeApiError } from '../utils/apiErrors';
 
 interface Container {
@@ -310,6 +311,9 @@ const Dashboard = () => {
                     </details>
                 </div>
             )}
+
+            {/* Live System Topology */}
+            <SystemTopology />
 
             {/* Health Widget */}
             <HealthWidget />
