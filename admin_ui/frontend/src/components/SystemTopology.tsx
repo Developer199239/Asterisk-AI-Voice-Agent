@@ -405,47 +405,57 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* === ROW 2: T-junction arrows from AI Engine === */}
+          {/* === ROW 2: SVG-based T-junction from AI Engine === */}
           
-          {/* Spans columns 1-3 for the branching arrow structure */}
-          <div className="col-span-3 flex justify-center h-14">
-            <div className="flex flex-col" style={{ width: `${140 + 48 + 140}px` }}>
-              {/* Top horizontal bar connecting both branches */}
-              <div className="flex">
-                <div style={{ width: '70px' }} /> {/* Left padding to center of col 1 */}
-                <div className={`h-0.5 ${activePipelines.size > 0 || hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} style={{ width: `${70 + 48 + 70}px` }} />
-                <div style={{ width: '70px' }} /> {/* Right padding */}
-              </div>
+          {/* Full width SVG spanning columns 1-5 for precise arrow drawing */}
+          <div className="col-span-5 h-14 relative">
+            <svg 
+              className="absolute inset-0 w-full h-full"
+              viewBox="0 0 536 56"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              {/* Grid columns: 140 + 48 + 140 + 48 + 160 = 536 total */}
+              {/* Col 1 center: 70, Col 3 center: 140+48+70 = 258 */}
               
-              {/* Two vertical branches going down */}
-              <div className="flex flex-1">
-                {/* Left branch to Pipelines */}
-                <div className="flex flex-col items-center" style={{ width: '140px' }}>
-                  <div className={`w-0.5 flex-1 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
-                  <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
-                    activePipelines.size > 0 ? 'border-t-green-500' : 'border-t-border'
-                  } border-l-transparent border-r-transparent`} />
-                </div>
-                
-                {/* Gap for column 2 */}
-                <div style={{ width: '48px' }} />
-                
-                {/* Center branch to Local AI */}
-                <div className="flex flex-col items-center" style={{ width: '140px' }}>
-                  <div className={`w-0.5 flex-1 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'}`} />
-                  <div className={`w-0 h-0 border-l-[5px] border-r-[5px] border-t-[6px] ${
-                    hasActiveCalls ? 'border-t-green-500' : 'border-t-border'
-                  } border-l-transparent border-r-transparent`} />
-                </div>
-              </div>
-            </div>
+              {/* Vertical line from AI Engine (col 3 center = 258) */}
+              <line 
+                x1="258" y1="0" x2="258" y2="12" 
+                stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
+                strokeWidth="2"
+              />
+              
+              {/* Horizontal bar from col 1 center (70) to col 3 center (258) */}
+              <line 
+                x1="70" y1="12" x2="258" y2="12" 
+                stroke={activePipelines.size > 0 || hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
+                strokeWidth="2"
+              />
+              
+              {/* Left vertical line down to Pipelines (col 1 center = 70) */}
+              <line 
+                x1="70" y1="12" x2="70" y2="48" 
+                stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'} 
+                strokeWidth="2"
+              />
+              {/* Left arrowhead */}
+              <polygon 
+                points="70,56 64,46 76,46" 
+                fill={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'}
+              />
+              
+              {/* Center vertical line down to Local AI (col 3 center = 258) */}
+              <line 
+                x1="258" y1="12" x2="258" y2="48" 
+                stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
+                strokeWidth="2"
+              />
+              {/* Center arrowhead */}
+              <polygon 
+                points="258,56 252,46 264,46" 
+                fill={hasActiveCalls ? '#22c55e' : '#e5e7eb'}
+              />
+            </svg>
           </div>
-          
-          {/* Column 4: Empty */}
-          <div></div>
-          
-          {/* Column 5: Empty */}
-          <div></div>
 
           {/* === ROW 3: Pipelines ← Local AI Server → Models === */}
           
