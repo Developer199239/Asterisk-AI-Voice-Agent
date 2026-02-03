@@ -160,78 +160,32 @@ export const SystemTopology = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Poll for active calls from logs
+  // Poll for active calls from sessions API (more reliable than log parsing)
   useEffect(() => {
-    const fetchCallEvents = async () => {
+    const fetchActiveSessions = async () => {
       try {
-        const res = await axios.get('/api/logs/ai_engine/events', {
-          params: { limit: 100, since: '60s' }
-        });
+        const res = await axios.get('/api/system/sessions');
+        const sessions = res.data.sessions || [];
         
-        const events = res.data.events || [];
-        const calls = new Map<string, CallState>(state.activeCalls);
-        const now = new Date();
-        
-        // Track which calls we've seen end
-        const endedCalls = new Set<string>();
-        
-        for (const event of events) {
-          const msg = (event.msg || '').toLowerCase();
-          const callId = event.call_id;
-          
-          if (!callId) continue;
-          
-          // Detect call start
-          if (msg.includes('stasisstart') || msg.includes('stasis start')) {
-            if (!calls.has(callId) && !endedCalls.has(callId)) {
-              calls.set(callId, {
-                call_id: callId,
-                started_at: event.ts ? new Date(event.ts) : now,
-                state: 'arriving',
-              });
-            }
-          }
-          
-          // Detect provider assignment
-          if (msg.includes('audio profile resolved') || msg.includes('provider selected') || msg.includes('using provider')) {
-            const call = calls.get(callId);
-            if (call) {
-              call.provider = event.provider || call.provider;
-              call.state = 'connected';
-            }
-          }
-          
-          // Detect pipeline usage
-          if (msg.includes('pipeline') && event.pipeline) {
-            const call = calls.get(callId);
-            if (call) {
-              call.pipeline = event.pipeline;
-            }
-          }
-          
-          // Detect call end
-          if (msg.includes('stasis ended') || msg.includes('call cleanup') || msg.includes('channel destroyed') || msg.includes('hangup')) {
-            endedCalls.add(callId);
-            calls.delete(callId);
-          }
-        }
-        
-        // Clean up stale calls (older than 5 minutes)
-        const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
-        for (const [callId, call] of calls) {
-          if (call.started_at < fiveMinutesAgo) {
-            calls.delete(callId);
-          }
+        const calls = new Map<string, CallState>();
+        for (const session of sessions) {
+          calls.set(session.call_id, {
+            call_id: session.call_id,
+            started_at: new Date(),
+            provider: session.provider,
+            pipeline: session.pipeline,
+            state: session.conversation_state === 'greeting' ? 'arriving' : 'connected',
+          });
         }
         
         setState(prev => ({ ...prev, activeCalls: calls }));
       } catch (err) {
-        console.error('Failed to fetch call events', err);
+        console.error('Failed to fetch active sessions', err);
       }
     };
     
-    fetchCallEvents();
-    const interval = setInterval(fetchCallEvents, 2000);
+    fetchActiveSessions();
+    const interval = setInterval(fetchActiveSessions, 2000);
     return () => clearInterval(interval);
   }, []);
 

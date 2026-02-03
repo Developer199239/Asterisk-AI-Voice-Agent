@@ -247,13 +247,26 @@ class SessionStore:
                 count += 1
             return count
     
-    async def get_session_stats(self) -> Dict[str, int]:
-        """Get statistics about active sessions."""
+    async def get_session_stats(self) -> Dict[str, any]:
+        """Get statistics about active sessions including per-call details."""
         async with self._lock:
+            # Build list of active call details for Admin UI topology
+            active_sessions = []
+            for call_id, session in self._sessions_by_call_id.items():
+                active_sessions.append({
+                    "call_id": call_id,
+                    "provider": session.provider_name,
+                    "pipeline": session.pipeline_name,
+                    "context": session.context_name,
+                    "status": session.status,
+                    "conversation_state": session.conversation_state,
+                })
+            
             return {
                 "active_calls": len(self._sessions_by_call_id),
                 "active_playbacks": len(self._playbacks),
-                "provider_sessions": len(self._provider_sessions)
+                "provider_sessions": len(self._provider_sessions),
+                "sessions": active_sessions,
             }
     
     async def cleanup_expired_sessions(self, max_age_seconds: float = 3600) -> int:
