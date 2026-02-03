@@ -252,7 +252,7 @@ export const SystemTopology = () => {
 
       <div className="p-4">
         {/* Grid Layout for proper alignment */}
-        <div className="relative grid grid-cols-[140px_48px_140px_48px_160px] gap-y-4 justify-center items-start">
+        <div className="relative grid grid-cols-[160px_48px_160px_48px_200px] gap-y-4 justify-center items-start">
           
           {/* === ROW 1: Asterisk → AI Engine → Providers === */}
           
@@ -411,47 +411,47 @@ export const SystemTopology = () => {
           <div className="col-span-5 h-14 relative">
             <svg 
               className="absolute inset-0 w-full h-full"
-              viewBox="0 0 536 56"
+              viewBox="0 0 616 56"
               preserveAspectRatio="xMidYMid meet"
             >
-              {/* Grid columns: 140 + 48 + 140 + 48 + 160 = 536 total */}
-              {/* Col 1 center: 70, Col 3 center: 140+48+70 = 258 */}
+              {/* Grid columns: 160 + 48 + 160 + 48 + 200 = 616 total */}
+              {/* Col 1 center: 80, Col 3 center: 160+48+80 = 288 */}
               
               {/* Vertical line from AI Engine (col 3 center = 258) */}
               <line 
-                x1="258" y1="0" x2="258" y2="12" 
+                x1="288" y1="0" x2="288" y2="12" 
                 stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
                 strokeWidth="2"
               />
               
               {/* Horizontal bar from col 1 center (70) to col 3 center (258) */}
               <line 
-                x1="70" y1="12" x2="258" y2="12" 
+                x1="80" y1="12" x2="288" y2="12" 
                 stroke={activePipelines.size > 0 || hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
                 strokeWidth="2"
               />
               
               {/* Left vertical line down to Pipelines (col 1 center = 70) */}
               <line 
-                x1="70" y1="12" x2="70" y2="48" 
+                x1="80" y1="12" x2="80" y2="48" 
                 stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'} 
                 strokeWidth="2"
               />
               {/* Left arrowhead */}
               <polygon 
-                points="70,56 64,46 76,46" 
+                points="80,56 74,46 86,46" 
                 fill={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'}
               />
               
               {/* Center vertical line down to Local AI (col 3 center = 258) */}
               <line 
-                x1="258" y1="12" x2="258" y2="48" 
+                x1="288" y1="12" x2="288" y2="48" 
                 stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
                 strokeWidth="2"
               />
               {/* Center arrowhead */}
               <polygon 
-                points="258,56 252,46 264,46" 
+                points="288,56 282,46 294,46" 
                 fill={hasActiveCalls ? '#22c55e' : '#e5e7eb'}
               />
             </svg>
@@ -582,7 +582,7 @@ export const SystemTopology = () => {
                 <Mic className={`w-4 h-4 ${state.localAIModels?.stt?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">STT</div>
-                  <div className="text-[10px] text-muted-foreground truncate">
+                  <div className="text-[10px] text-muted-foreground" title={getModelDisplayName(state.localAIModels?.stt, 'Not loaded')}>
                     {getModelDisplayName(state.localAIModels?.stt, 'Not loaded')}
                   </div>
                 </div>
@@ -600,7 +600,7 @@ export const SystemTopology = () => {
                 <MessageSquare className={`w-4 h-4 ${state.localAIModels?.llm?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">LLM</div>
-                  <div className="text-[10px] text-muted-foreground truncate">
+                  <div className="text-[10px] text-muted-foreground" title={getModelDisplayName(state.localAIModels?.llm, 'Not loaded')}>
                     {getModelDisplayName(state.localAIModels?.llm, 'Not loaded')}
                   </div>
                 </div>
@@ -618,7 +618,7 @@ export const SystemTopology = () => {
                 <Volume2 className={`w-4 h-4 ${state.localAIModels?.tts?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">TTS</div>
-                  <div className="text-[10px] text-muted-foreground truncate">
+                  <div className="text-[10px] text-muted-foreground" title={getModelDisplayName(state.localAIModels?.tts, 'Not loaded')}>
                     {getModelDisplayName(state.localAIModels?.tts, 'Not loaded')}
                   </div>
                 </div>
