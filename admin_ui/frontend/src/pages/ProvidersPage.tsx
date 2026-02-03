@@ -642,25 +642,25 @@ const ProvidersPage: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {Object.entries(config.providers || {}).filter(([_, p]) => isFullAgentProvider(p)).map(([name, providerData]: [string, any]) => (
                         <ConfigCard key={name} className="group relative hover:border-primary/50 transition-colors">
-                            <div className="flex items-start justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className={`p-2 rounded-md ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
-                                        <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                            {/* Row 1: Provider info */}
+                            <div className="flex items-start gap-3">
+                                <div className={`p-2 rounded-md flex-shrink-0 ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
+                                    <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
+                                        {config.default_provider === name && (
+                                            <span className="text-xs bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0">
+                                                <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                                                Default
+                                            </span>
+                                        )}
+                                        {!providerData.enabled && (
+                                            <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
+                                        )}
                                     </div>
-                                    <div>
-                                        <div className="flex items-center gap-2">
-                                            <h4 className={`font-semibold text-lg ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
-                                            {config.default_provider === name && (
-                                                <span className="text-xs bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
-                                                    Default
-                                                </span>
-                                            )}
-                                            {!providerData.enabled && (
-                                                <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">Disabled</span>
-                                            )}
-                                        </div>
-                                        <div className="flex flex-wrap gap-2 mt-1">
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
                                             {(providerData.model || providerData.voice || providerData.tts_model || providerData.llm_model || providerData.tts_voice_name || providerData.agent_id || providerData.voice_id || providerData.model_id) && (
                                                 <>
                                                     {providerData.model && (
@@ -708,57 +708,61 @@ const ProvidersPage: React.FC = () => {
                                         </div>
                                     </div>
                                 </div>
+                            </div>
+                            {/* Row 2: Actions */}
+                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
                                 <div className="flex items-center gap-2">
-                                    <div className="flex items-center space-x-2 mr-2">
-                                        <label className="relative inline-flex items-center cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                className="sr-only peer"
-                                                checked={providerData.enabled ?? true}
-                                                onChange={(e) => handleToggleProvider(name, providerData, e.target.checked)}
-                                            />
-                                            <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
-                                        </label>
-                                    </div>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        {config.default_provider !== name && (
-                                            <button
-                                                onClick={() => handleSetAsDefault(name)}
-                                                className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
-                                                title="Set as Default"
-                                            >
-                                                <Star className="w-4 h-4" />
-                                            </button>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={providerData.enabled ?? true}
+                                            onChange={(e) => handleToggleProvider(name, providerData, e.target.checked)}
+                                        />
+                                        <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                                    </label>
+                                    <span className="text-xs text-muted-foreground">{providerData.enabled !== false ? 'Enabled' : 'Disabled'}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    {config.default_provider !== name && (
+                                        <button
+                                            onClick={() => handleSetAsDefault(name)}
+                                            className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                                            title="Set as Default"
+                                        >
+                                            <Star className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => handleTestConnection(name, providerData)}
+                                        disabled={testingProvider === name}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+                                        title="Test Connection"
+                                    >
+                                        {testingProvider === name ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : testResults[name]?.success ? (
+                                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                        ) : testResults[name]?.success === false ? (
+                                            <AlertCircle className="w-4 h-4 text-destructive" />
+                                        ) : (
+                                            <Server className="w-4 h-4" />
                                         )}
-                                        <button
-                                            onClick={() => handleTestConnection(name, providerData)}
-                                            disabled={testingProvider === name}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
-                                            title="Test Connection"
-                                        >
-                                            {testingProvider === name ? (
-                                                <Loader2 className="w-4 h-4 animate-spin" />
-                                            ) : testResults[name]?.success ? (
-                                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                            ) : testResults[name]?.success === false ? (
-                                                <AlertCircle className="w-4 h-4 text-destructive" />
-                                            ) : (
-                                                <Server className="w-4 h-4" />
-                                            )}
-                                        </button>
-                                        <button
-                                            onClick={() => handleEditProvider(name)}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
-                                        >
-                                            <Settings className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => handleDeleteProvider(name)}
-                                            className="p-2 hover:bg-destructive/10 rounded-md text-destructive"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
+                                    </button>
+                                    <button
+                                        onClick={() => handleEditProvider(name)}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                                        title="Settings"
+                                    >
+                                        <Settings className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteProvider(name)}
+                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive transition-colors"
+                                        title="Delete"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
                                 </div>
                             </div>
                             {testResults[name] && (
@@ -783,29 +787,31 @@ const ProvidersPage: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {Object.entries(config.providers || {}).filter(([_, p]) => !isFullAgentProvider(p)).map(([name, providerData]: [string, any]) => (
                         <ConfigCard key={name} className="group relative hover:border-primary/50 transition-colors">
-                            <div className="flex items-start justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className={`p-2 rounded-md ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
-                                        <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                            {/* Row 1: Provider info */}
+                            <div className="flex items-start gap-3">
+                                <div className={`p-2 rounded-md flex-shrink-0 ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
+                                    <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
+                                        {!providerData.enabled && (
+                                            <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
+                                        )}
                                     </div>
-                                    <div>
-                                        <div className="flex items-center gap-2">
-                                            <h4 className={`font-semibold text-lg ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
-                                            {!providerData.enabled && (
-                                                <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">Disabled</span>
-                                            )}
-                                        </div>
-                                        <div className="flex flex-wrap gap-2 mt-1">
-                                            {(providerData.capabilities || []).map((cap: string) => (
-                                                <span key={cap} className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                    {cap.toUpperCase()}
-                                                </span>
-                                            ))}
-                                        </div>
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                        {(providerData.capabilities || []).map((cap: string) => (
+                                            <span key={cap} className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold text-muted-foreground">
+                                                {cap.toUpperCase()}
+                                            </span>
+                                        ))}
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                    <label className="relative inline-flex items-center cursor-pointer mr-2">
+                            </div>
+                            {/* Row 2: Actions */}
+                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
+                                <div className="flex items-center gap-2">
+                                    <label className="relative inline-flex items-center cursor-pointer">
                                         <input
                                             type="checkbox"
                                             className="sr-only peer"
@@ -814,10 +820,13 @@ const ProvidersPage: React.FC = () => {
                                         />
                                         <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                                     </label>
+                                    <span className="text-xs text-muted-foreground">{providerData.enabled !== false ? 'Enabled' : 'Disabled'}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
                                     <button
                                         onClick={() => handleTestConnection(name, providerData)}
                                         disabled={testingProvider === name}
-                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
                                         title="Test Connection"
                                     >
                                         {testingProvider === name ? (
@@ -832,14 +841,14 @@ const ProvidersPage: React.FC = () => {
                                     </button>
                                     <button
                                         onClick={() => handleEditProvider(name)}
-                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
                                         title="Settings"
                                     >
                                         <Settings className="w-4 h-4" />
                                     </button>
                                     <button
                                         onClick={() => handleDeleteProvider(name)}
-                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive"
+                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive transition-colors"
                                         title="Delete"
                                     >
                                         <Trash2 className="w-4 h-4" />
