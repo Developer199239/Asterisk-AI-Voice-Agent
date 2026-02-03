@@ -708,7 +708,6 @@ const ProvidersPage: React.FC = () => {
                                         </div>
                                     </div>
                                 </div>
-                            </div>
                             {/* Row 2: Actions */}
                             <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
                                 <div className="flex items-center gap-2">
