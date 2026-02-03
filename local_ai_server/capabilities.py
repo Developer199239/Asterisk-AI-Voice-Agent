@@ -8,15 +8,22 @@ from config import LocalAIConfig
 
 def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
     capabilities: Dict[str, Any] = {
-        "vosk": True,
+        "vosk": False,
         "sherpa": False,
         "kroko_embedded": False,
         "faster_whisper": False,
-        "piper": True,
+        "whisper_cpp": False,
+        "piper": False,
         "kokoro": False,
         "melotts": False,
-        "llama": True,
+        "llama": False,
     }
+
+    try:
+        import vosk  # noqa: F401
+        capabilities["vosk"] = True
+    except ImportError:
+        pass
 
     try:
         import sherpa_onnx  # noqa: F401
@@ -29,6 +36,24 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
         capabilities["kroko_embedded"] = True
 
     try:
+        from faster_whisper import WhisperModel  # noqa: F401
+        capabilities["faster_whisper"] = True
+    except ImportError:
+        pass
+
+    try:
+        from pywhispercpp.model import Model  # noqa: F401
+        capabilities["whisper_cpp"] = True
+    except ImportError:
+        pass
+
+    try:
+        from piper import PiperVoice  # noqa: F401
+        capabilities["piper"] = True
+    except ImportError:
+        pass
+
+    try:
         import kokoro  # noqa: F401
         capabilities["kokoro"] = True
     except ImportError:
@@ -38,16 +63,15 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
             capabilities["kokoro"] = True
 
     try:
-        from faster_whisper import WhisperModel  # noqa: F401
-        capabilities["faster_whisper"] = True
-    except ImportError:
-        pass
-
-    try:
         from melo.api import TTS  # noqa: F401
         capabilities["melotts"] = True
     except ImportError:
         pass
 
-    return capabilities
+    try:
+        from llama_cpp import Llama  # noqa: F401
+        capabilities["llama"] = True
+    except ImportError:
+        pass
 
+    return capabilities

@@ -34,6 +34,7 @@ interface LocalAIModels {
 interface TopologyState {
   aiEngineStatus: 'connected' | 'error' | 'unknown';
   ariConnected: boolean;
+  asteriskChannels: number;  // Pre-stasis + in-stasis calls (for Asterisk PBX indicator)
   localAIStatus: 'connected' | 'error' | 'unknown';
   localAIModels: LocalAIModels | null;
   configuredProviders: ProviderConfig[];
@@ -64,6 +65,7 @@ export const SystemTopology = () => {
   const [state, setState] = useState<TopologyState>({
     aiEngineStatus: 'unknown',
     ariConnected: false,
+    asteriskChannels: 0,
     localAIStatus: 'unknown',
     localAIModels: null,
     configuredProviders: [],
@@ -84,6 +86,7 @@ export const SystemTopology = () => {
           ...prev,
           aiEngineStatus: res.data.ai_engine?.status === 'connected' ? 'connected' : 'error',
           ariConnected: aiEngineDetails.ari_connected ?? aiEngineDetails.asterisk?.connected ?? false,
+          asteriskChannels: aiEngineDetails.asterisk_channels ?? 0,
           localAIStatus: res.data.local_ai_server?.status === 'connected' ? 'connected' : 'error',
           localAIModels: res.data.local_ai_server?.details?.models || null,
         }));
@@ -92,6 +95,7 @@ export const SystemTopology = () => {
           ...prev,
           aiEngineStatus: 'error',
           ariConnected: false,
+          asteriskChannels: 0,
           localAIStatus: 'error',
         }));
       }
@@ -212,6 +216,7 @@ export const SystemTopology = () => {
 
   const totalActiveCalls = state.activeCalls.size;
   const hasActiveCalls = totalActiveCalls > 0;
+  const hasAsteriskChannels = state.asteriskChannels > 0;  // Pre-stasis + in-stasis
 
   // Determine which local models are being used by active pipelines
   const activeLocalModels = useMemo(() => {
@@ -273,17 +278,17 @@ export const SystemTopology = () => {
           
           {/* Asterisk PBX */}
           <div className={`relative p-4 rounded-lg border-2 transition-all duration-300 ${
-            hasActiveCalls 
+            hasAsteriskChannels 
               ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
               : 'border-border bg-card'
           }`}>
-            {hasActiveCalls && (
+            {hasAsteriskChannels && (
               <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
             )}
             <div className="flex flex-col items-center gap-2">
-              <Phone className={`w-8 h-8 ${hasActiveCalls ? 'text-green-500' : 'text-muted-foreground'}`} />
+              <Phone className={`w-8 h-8 ${hasAsteriskChannels ? 'text-green-500' : 'text-muted-foreground'}`} />
               <div className="text-center">
-                <div className={`font-semibold ${hasActiveCalls ? 'text-green-500' : 'text-foreground'}`}>Asterisk</div>
+                <div className={`font-semibold ${hasAsteriskChannels ? 'text-green-500' : 'text-foreground'}`}>Asterisk</div>
                 <div className="text-xs text-muted-foreground">PBX</div>
               </div>
               <div className="w-full pt-2 mt-2 border-t border-border/50 space-y-1">
