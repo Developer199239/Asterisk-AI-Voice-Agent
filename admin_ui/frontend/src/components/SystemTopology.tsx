@@ -213,6 +213,21 @@ export const SystemTopology = () => {
   const totalActiveCalls = state.activeCalls.size;
   const hasActiveCalls = totalActiveCalls > 0;
 
+  // Determine which local models are being used by active pipelines
+  const activeLocalModels = useMemo(() => {
+    const active = { stt: false, llm: false, tts: false };
+    for (const [pipelineName] of activePipelines) {
+      const pipeline = state.configuredPipelines.find(p => p.name === pipelineName);
+      if (pipeline) {
+        // Check if pipeline uses local components
+        if (pipeline.stt?.toLowerCase().includes('local')) active.stt = true;
+        if (pipeline.llm?.toLowerCase().includes('local')) active.llm = true;
+        if (pipeline.tts?.toLowerCase().includes('local')) active.tts = true;
+      }
+    }
+    return active;
+  }, [activePipelines, state.configuredPipelines]);
+
   // Get model display name
   const getModelDisplayName = (model: any, type: string): string => {
     if (!model) return type;
@@ -576,10 +591,15 @@ export const SystemTopology = () => {
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Models</div>
             <div className="flex flex-col gap-2">
               {/* STT */}
-              <div className={`flex items-center gap-2 p-2 px-3 rounded-lg border ${
-                state.localAIModels?.stt?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
+              <div className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
+                activeLocalModels.stt && state.localAIModels?.stt?.loaded
+                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
+                  : state.localAIModels?.stt?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
               }`}>
-                <Mic className={`w-4 h-4 ${state.localAIModels?.stt?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
+                {activeLocalModels.stt && state.localAIModels?.stt?.loaded && (
+                  <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
+                )}
+                <Mic className={`w-4 h-4 ${activeLocalModels.stt && state.localAIModels?.stt?.loaded ? 'text-green-500 animate-pulse' : state.localAIModels?.stt?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">STT</div>
                   <div className="text-[10px] text-muted-foreground" title={getModelDisplayName(state.localAIModels?.stt, 'Not loaded')}>
@@ -594,10 +614,15 @@ export const SystemTopology = () => {
               </div>
 
               {/* LLM */}
-              <div className={`flex items-center gap-2 p-2 px-3 rounded-lg border ${
-                state.localAIModels?.llm?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
+              <div className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
+                activeLocalModels.llm && state.localAIModels?.llm?.loaded
+                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
+                  : state.localAIModels?.llm?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
               }`}>
-                <MessageSquare className={`w-4 h-4 ${state.localAIModels?.llm?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
+                {activeLocalModels.llm && state.localAIModels?.llm?.loaded && (
+                  <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
+                )}
+                <MessageSquare className={`w-4 h-4 ${activeLocalModels.llm && state.localAIModels?.llm?.loaded ? 'text-green-500 animate-pulse' : state.localAIModels?.llm?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">LLM</div>
                   <div className="text-[10px] text-muted-foreground" title={getModelDisplayName(state.localAIModels?.llm, 'Not loaded')}>
@@ -612,10 +637,15 @@ export const SystemTopology = () => {
               </div>
 
               {/* TTS */}
-              <div className={`flex items-center gap-2 p-2 px-3 rounded-lg border ${
-                state.localAIModels?.tts?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
+              <div className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
+                activeLocalModels.tts && state.localAIModels?.tts?.loaded
+                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
+                  : state.localAIModels?.tts?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
               }`}>
-                <Volume2 className={`w-4 h-4 ${state.localAIModels?.tts?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
+                {activeLocalModels.tts && state.localAIModels?.tts?.loaded && (
+                  <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
+                )}
+                <Volume2 className={`w-4 h-4 ${activeLocalModels.tts && state.localAIModels?.tts?.loaded ? 'text-green-500 animate-pulse' : state.localAIModels?.tts?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">TTS</div>
                   <div className="text-[10px] text-muted-foreground" title={getModelDisplayName(state.localAIModels?.tts, 'Not loaded')}>
