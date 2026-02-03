@@ -251,10 +251,13 @@ export const SystemTopology = () => {
       </div>
 
       <div className="p-4">
-        {/* Top Row: Asterisk → AI Engine → Providers */}
-        <div className="flex items-start justify-center gap-3">
+        {/* Grid Layout for proper alignment */}
+        <div className="grid grid-cols-[140px_48px_140px_48px_160px] gap-y-4 justify-center items-start">
+          
+          {/* === ROW 1: Asterisk → AI Engine → Providers === */}
+          
           {/* Asterisk PBX */}
-          <div className={`relative w-[140px] p-4 rounded-lg border-2 transition-all duration-300 ${
+          <div className={`relative p-4 rounded-lg border-2 transition-all duration-300 ${
             hasActiveCalls 
               ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
               : 'border-border bg-card'
@@ -291,9 +294,9 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* Arrow 1 */}
-          <div className="flex items-center self-center mt-8">
-            <div className={`w-8 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
+          {/* Arrow 1: Asterisk → AI Engine */}
+          <div className="flex items-center justify-center self-center">
+            <div className={`w-6 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
               {hasActiveCalls && (
                 <div className="absolute inset-y-0 w-4 bg-green-300 animate-flow" />
               )}
@@ -304,7 +307,7 @@ export const SystemTopology = () => {
           </div>
 
           {/* AI Engine Core */}
-          <div className={`relative w-[140px] p-4 rounded-lg border-2 transition-all duration-300 ${
+          <div className={`relative p-4 rounded-lg border-2 transition-all duration-300 ${
             state.aiEngineStatus === 'error'
               ? 'border-red-500 bg-red-500/10'
               : hasActiveCalls 
@@ -340,9 +343,9 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* Arrow 2 */}
-          <div className="flex items-center self-center mt-8">
-            <div className={`w-8 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
+          {/* Arrow 2: AI Engine → Providers */}
+          <div className="flex items-center justify-center self-center">
+            <div className={`w-6 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
               {hasActiveCalls && (
                 <div className="absolute inset-y-0 w-4 bg-green-300 animate-flow" />
               )}
@@ -353,7 +356,7 @@ export const SystemTopology = () => {
           </div>
 
           {/* Providers (Full Agents Only) */}
-          <div className="w-[140px]">
+          <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Providers</div>
             <div className="flex flex-col gap-2">
               {state.configuredProviders.length === 0 ? (
@@ -366,7 +369,6 @@ export const SystemTopology = () => {
                   const isActive = activeCount > 0;
                   const isDefault = provider.name === state.defaultProvider;
                   
-                  // Icon color: green=enabled+ready, orange=disabled, red=enabled but not ready
                   const getIconColor = () => {
                     if (!provider.enabled) return 'text-orange-500';
                     if (provider.enabled && provider.ready) return 'text-green-500';
@@ -374,7 +376,6 @@ export const SystemTopology = () => {
                   };
                   const iconColor = getIconColor();
                   
-                  // Cell only lights up green when there's an active call on this provider
                   const cellClass = isActive 
                     ? 'border-green-500 bg-green-500/10 shadow-md shadow-green-500/20' 
                     : 'border-border bg-card';
@@ -403,20 +404,33 @@ export const SystemTopology = () => {
               )}
             </div>
           </div>
-        </div>
 
-        {/* Arrow from AI Engine to Pipelines */}
-        <div className="flex justify-center my-2">
-          <div className="flex flex-col items-center">
-            <div className="w-0.5 h-4 bg-border" />
-            <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-t-border border-l-transparent border-r-transparent" />
+          {/* === ROW 2: Vertical arrows from Row 1 === */}
+          
+          {/* Down arrow from Asterisk (empty - no arrow needed) */}
+          <div></div>
+          
+          {/* Empty cell */}
+          <div></div>
+          
+          {/* Down arrow from AI Engine to Local AI Server */}
+          <div className="flex flex-col items-center justify-center py-1">
+            <div className={`w-0.5 h-6 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+            <div className={`w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] ${
+              activePipelines.size > 0 ? 'border-t-green-500' : 'border-t-border'
+            } border-l-transparent border-r-transparent`} />
           </div>
-        </div>
+          
+          {/* Empty cell */}
+          <div></div>
+          
+          {/* Empty cell */}
+          <div></div>
 
-        {/* Bottom Row: Pipelines → Local AI Server → Models */}
-        <div className="flex items-start justify-center gap-3">
+          {/* === ROW 3: Pipelines ← Local AI Server → Models === */}
+          
           {/* Pipelines */}
-          <div className="w-[140px]">
+          <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Pipelines</div>
             {state.configuredPipelines.length === 0 ? (
               <div className="p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center">
@@ -450,14 +464,16 @@ export const SystemTopology = () => {
             )}
           </div>
 
-          {/* Arrow to Local AI */}
-          <div className="flex items-center self-center mt-6">
-            <div className="w-8 h-0.5 bg-border" />
-            <div className="w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] border-l-border border-t-transparent border-b-transparent" />
+          {/* Arrow: Pipelines ← Local AI */}
+          <div className="flex items-center justify-center self-center rotate-180">
+            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
+              activePipelines.size > 0 ? 'border-l-green-500' : 'border-l-border'
+            } border-t-transparent border-b-transparent`} />
+            <div className={`w-6 h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
           </div>
 
-          {/* Local AI Server (same size as AI Engine) */}
-          <div className="w-[140px]">
+          {/* Local AI Server (aligned with AI Engine above) */}
+          <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Local AI Server</div>
             <div className={`relative p-4 rounded-lg border-2 transition-all duration-300 ${
               state.localAIStatus === 'error'
@@ -491,14 +507,14 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* Arrow to STT/LLM/TTS */}
-          <div className="flex items-center h-full pt-8">
-            <div className="w-8 h-0.5 bg-border" />
+          {/* Arrow: Local AI → Models */}
+          <div className="flex items-center justify-center self-center">
+            <div className="w-6 h-0.5 bg-border" />
             <div className="w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] border-l-border border-t-transparent border-b-transparent" />
           </div>
 
-          {/* STT / LLM / TTS Components */}
-          <div className="flex flex-col">
+          {/* STT / LLM / TTS Models */}
+          <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Models</div>
             <div className="flex flex-col gap-2">
               {/* STT */}
@@ -506,16 +522,16 @@ export const SystemTopology = () => {
                 state.localAIModels?.stt?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
               }`}>
                 <Mic className={`w-4 h-4 ${state.localAIModels?.stt?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">STT</div>
-                  <div className="text-[10px] text-muted-foreground">
+                  <div className="text-[10px] text-muted-foreground truncate">
                     {getModelDisplayName(state.localAIModels?.stt, 'Not loaded')}
                   </div>
                 </div>
                 {state.localAIModels?.stt?.loaded ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                 ) : (
-                  <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                 )}
               </div>
 
@@ -524,16 +540,16 @@ export const SystemTopology = () => {
                 state.localAIModels?.llm?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
               }`}>
                 <MessageSquare className={`w-4 h-4 ${state.localAIModels?.llm?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">LLM</div>
-                  <div className="text-[10px] text-muted-foreground">
+                  <div className="text-[10px] text-muted-foreground truncate">
                     {getModelDisplayName(state.localAIModels?.llm, 'Not loaded')}
                   </div>
                 </div>
                 {state.localAIModels?.llm?.loaded ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                 ) : (
-                  <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                 )}
               </div>
 
@@ -542,16 +558,16 @@ export const SystemTopology = () => {
                 state.localAIModels?.tts?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
               }`}>
                 <Volume2 className={`w-4 h-4 ${state.localAIModels?.tts?.loaded ? 'text-green-500' : 'text-muted-foreground'}`} />
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium">TTS</div>
-                  <div className="text-[10px] text-muted-foreground">
+                  <div className="text-[10px] text-muted-foreground truncate">
                     {getModelDisplayName(state.localAIModels?.tts, 'Not loaded')}
                   </div>
                 </div>
                 {state.localAIModels?.tts?.loaded ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                 ) : (
-                  <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                 )}
               </div>
             </div>
