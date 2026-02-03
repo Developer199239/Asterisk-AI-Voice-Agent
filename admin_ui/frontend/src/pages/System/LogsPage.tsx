@@ -921,7 +921,25 @@ const LogsPage = () => {
                     </div>
                 ) : (
                     <pre className="whitespace-pre-wrap break-all">
-                        {logs ? parseAnsi(logs) : "No logs available..."}
+                        {logs ? parseAnsi(logs) : (
+                            rawLevels.length === 1 && rawLevels[0] === 'debug' ? (
+                                <span className="text-gray-400">
+                                    No debug logs found.{'\n\n'}
+                                    <span className="text-gray-500">
+                                        Debug logging may be disabled. To enable:{'\n'}
+                                        1. Set <span className="text-blue-400">LOG_LEVEL=DEBUG</span> in your .env file{'\n'}
+                                        2. Restart the container: <span className="text-blue-400">docker compose up -d --force-recreate {container}</span>
+                                    </span>
+                                </span>
+                            ) : rawLevels.length > 0 && !rawLevels.includes('info') && !rawLevels.includes('warning') && !rawLevels.includes('error') ? (
+                                <span className="text-gray-400">
+                                    No logs found for selected level(s): {rawLevels.join(', ')}{'\n\n'}
+                                    <span className="text-gray-500">
+                                        Try selecting additional levels like 'info' or 'warning'.
+                                    </span>
+                                </span>
+                            ) : "No logs available..."
+                        )}
                     </pre>
                 )}
                 <div ref={logsEndRef} />
