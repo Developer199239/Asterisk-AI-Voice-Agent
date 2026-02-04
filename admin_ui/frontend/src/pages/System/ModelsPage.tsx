@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle, Cpu, Terminal, Settings, Play } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import axios from 'axios';
 
@@ -376,35 +375,29 @@ const ModelsPage = () => {
                 ))}
             </div>
 
-            {/* Local AI Server Section */}
-            <ConfigCard className="mb-6 p-6">
-                <div className="flex justify-between items-start mb-6">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 bg-blue-500/10 rounded-xl">
-                            <Cpu className="w-6 h-6 text-blue-500" />
-                        </div>
-                        <div>
-                            <h3 className="font-semibold text-lg">Local AI Server</h3>
-                            <div className="mt-1">
-                                <span className={`font-medium flex items-center gap-1 ${
-                                    serverStatus === 'connected' ? 'text-green-500' : 
-                                    serverStatus === 'error' ? 'text-red-500' : 'text-yellow-500'
-                                }`}>
-                                    {serverStatus === 'connected' ? (
-                                        <><CheckCircle2 className="w-4 h-4" /> Connected</>
-                                    ) : serverStatus === 'error' ? (
-                                        <><XCircle className="w-4 h-4" /> Error</>
-                                    ) : (
-                                        'Loading...'
-                                    )}
-                                </span>
-                            </div>
-                        </div>
+            {/* Local AI Server Section - Compact Header */}
+            <div className="rounded-lg border border-border bg-card">
+                <div className="flex justify-between items-center px-4 py-3 border-b border-border">
+                    <div className="flex items-center gap-3">
+                        <Cpu className="w-5 h-5 text-blue-500" />
+                        <h3 className="font-semibold">Local AI Server</h3>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex items-center gap-1 ${
+                            serverStatus === 'connected' ? 'bg-green-500/10 text-green-500' : 
+                            serverStatus === 'error' ? 'bg-red-500/10 text-red-500' : 'bg-yellow-500/10 text-yellow-500'
+                        }`}>
+                            {serverStatus === 'connected' ? (
+                                <><CheckCircle2 className="w-3 h-3" /> Connected</>
+                            ) : serverStatus === 'error' ? (
+                                <><XCircle className="w-3 h-3" /> Error</>
+                            ) : (
+                                'Loading...'
+                            )}
+                        </span>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-1">
                         <Link
                             to="/env"
-                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
                             title="Configure"
                         >
                             <Settings className="w-4 h-4" />
@@ -425,7 +418,7 @@ const ModelsPage = () => {
                         </button>
                         <Link
                             to="/logs?container=local_ai_server"
-                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
                             title="View Logs"
                         >
                             <Terminal className="w-4 h-4" />
@@ -434,7 +427,7 @@ const ModelsPage = () => {
                 </div>
 
                 {serverStatus === 'connected' && activeModels && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
                         {/* STT Model */}
                         <div className="p-4 rounded-lg border border-border bg-muted/30">
                             <div className="flex items-center gap-2 mb-2">
@@ -601,84 +594,87 @@ const ModelsPage = () => {
                         </button>
                     </div>
                 )}
-            </ConfigCard>
+            </div>
 
-            <ConfigSection
-                title="Model Library"
-                description="Download and manage STT, TTS, and LLM models"
-            >
-                {/* Header with tabs and refresh */}
-                <div className="flex justify-between items-center mb-6">
-                    <div className="flex gap-2">
-                        <button
-                            onClick={() => setSelectedTab('installed')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                selectedTab === 'installed'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            Installed ({installedModels.length})
-                        </button>
-                        <button
-                            onClick={() => setSelectedTab('stt')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                                selectedTab === 'stt'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            <Mic className="w-4 h-4" /> STT ({catalog.stt.length})
-                        </button>
-                        <button
-                            onClick={() => setSelectedTab('tts')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                                selectedTab === 'tts'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            <Volume2 className="w-4 h-4" /> TTS ({catalog.tts.length})
-                        </button>
-                        <button
-                            onClick={() => setSelectedTab('llm')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                                selectedTab === 'llm'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            <Brain className="w-4 h-4" /> LLM ({catalog.llm.length})
-                        </button>
+            {/* Model Library Section - Full Width */}
+            <div className="rounded-lg border border-border bg-card">
+                <div className="flex justify-between items-center px-4 py-3 border-b border-border">
+                    <div>
+                        <h3 className="font-semibold">Model Library</h3>
+                        <p className="text-sm text-muted-foreground">Download and manage STT, TTS, and LLM models</p>
                     </div>
-                    <div className="flex gap-2 items-center">
-                        {selectedTab !== 'installed' && selectedTab !== 'llm' && (
-                            <select
-                                value={selectedRegion}
-                                onChange={e => setSelectedRegion(e.target.value)}
-                                className="px-3 py-2 rounded-md border border-input bg-background text-sm"
-                            >
-                                <option value="all">All Regions</option>
-                                {getUniqueRegions().map(region => (
-                                    <option key={region} value={region}>
-                                        {regionNames[region] || region}
-                                    </option>
-                                ))}
-                            </select>
-                        )}
-                        <button
-                            onClick={fetchModels}
-                            disabled={loading}
-                            className="p-2 rounded-md bg-muted hover:bg-muted/80 transition-colors"
+                    <button
+                        onClick={fetchModels}
+                        disabled={loading}
+                        className="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                        title="Refresh"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
+                </div>
+                {/* Tabs and Region Filter */}
+                <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border">
+                    <button
+                        onClick={() => setSelectedTab('installed')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                            selectedTab === 'installed'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        Installed ({installedModels.length})
+                    </button>
+                    <button
+                        onClick={() => setSelectedTab('stt')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                            selectedTab === 'stt'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        <Mic className="w-3.5 h-3.5" /> STT ({catalog.stt.length})
+                    </button>
+                    <button
+                        onClick={() => setSelectedTab('tts')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                            selectedTab === 'tts'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        <Volume2 className="w-3.5 h-3.5" /> TTS ({catalog.tts.length})
+                    </button>
+                    <button
+                        onClick={() => setSelectedTab('llm')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                            selectedTab === 'llm'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        <Brain className="w-3.5 h-3.5" /> LLM ({catalog.llm.length})
+                    </button>
+                    {selectedTab !== 'installed' && selectedTab !== 'llm' && (
+                        <select
+                            value={selectedRegion}
+                            onChange={e => setSelectedRegion(e.target.value)}
+                            className="ml-auto px-3 py-1.5 rounded-md border border-input bg-background text-sm"
                         >
-                            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                        </button>
-                    </div>
+                            <option value="all">All Regions</option>
+                            {getUniqueRegions().map(region => (
+                                <option key={region} value={region}>
+                                    {regionNames[region] || region}
+                                </option>
+                            ))}
+                        </select>
+                    )}
                 </div>
 
-                {/* Download Progress Bar */}
-                {downloadingModel && downloadProgress && (
-                    <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                {/* Content Area */}
+                <div className="p-4">
+                    {/* Download Progress Bar */}
+                    {downloadingModel && downloadProgress && (
+                        <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
                                 Downloading: {downloadProgress.current_file || downloadingModel}
@@ -926,7 +922,8 @@ const ModelsPage = () => {
                         )}
                     </>
                 )}
-            </ConfigSection>
+                </div>
+            </div>
         </div>
     );
 };
