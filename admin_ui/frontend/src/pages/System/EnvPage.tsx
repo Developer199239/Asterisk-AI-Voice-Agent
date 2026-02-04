@@ -2,12 +2,14 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { useState, useEffect } from 'react';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
-import { Save, Eye, EyeOff, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Save, Eye, EyeOff, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, XCircle, Loader2, Cpu, Server, Settings } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
 
 import { useAuth } from '../../auth/AuthContext';
+
+type EnvTab = 'ai-engine' | 'local-ai' | 'system';
 
 // SecretInput defined OUTSIDE EnvPage to prevent re-creation on every render
 const SecretInput = ({ 
@@ -59,6 +61,32 @@ const EnvPage = () => {
     const [showAdvancedKokoro, setShowAdvancedKokoro] = useState(false);
 
     const [error, setError] = useState<string | null>(null);
+
+    // Tab state with URL hash support
+    const getInitialTab = (): EnvTab => {
+        const hash = window.location.hash.replace('#', '');
+        if (hash === 'local-ai' || hash === 'system') return hash;
+        return 'ai-engine';
+    };
+    const [activeTab, setActiveTab] = useState<EnvTab>(getInitialTab);
+
+    // Update URL hash when tab changes
+    const handleTabChange = (tab: EnvTab) => {
+        setActiveTab(tab);
+        window.history.replaceState(null, '', `#${tab}`);
+    };
+
+    // Listen for hash changes (back/forward navigation)
+    useEffect(() => {
+        const handleHashChange = () => {
+            const hash = window.location.hash.replace('#', '');
+            if (hash === 'ai-engine' || hash === 'local-ai' || hash === 'system') {
+                setActiveTab(hash);
+            }
+        };
+        window.addEventListener('hashchange', handleHashChange);
+        return () => window.removeEventListener('hashchange', handleHashChange);
+    }, []);
 
     const kokoroMode = (env['KOKORO_MODE'] || 'local').toLowerCase();
     const showHfKokoroMode = showAdvancedKokoro || kokoroMode === 'hf';
@@ -309,6 +337,7 @@ const EnvPage = () => {
 
     return (
         <div className="space-y-6">
+            {/* Global Restart Banner */}
             <div className={`${pendingRestart ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
                 <div className="flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />
@@ -333,6 +362,8 @@ const EnvPage = () => {
                     {restartingEngine ? 'Applying...' : 'Apply Changes'}
                 </button>
             </div>
+
+            {/* Header */}
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Environment Variables</h1>
@@ -356,7 +387,7 @@ const EnvPage = () => {
                         className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2"
                     >
                         <RefreshCw className="w-4 h-4 mr-2" />
-                        Run Setup Wizard
+                        Setup Wizard
                     </button>
                     <button
                         onClick={fetchEnv}
@@ -376,8 +407,50 @@ const EnvPage = () => {
                 </div>
             </div>
 
-            {/* Asterisk Settings */}
-            <ConfigSection title="Asterisk Settings" description="Connection details for the Asterisk server.">
+            {/* Tab Navigation */}
+            <div className="border-b border-border">
+                <div className="flex space-x-1">
+                    <button
+                        onClick={() => handleTabChange('ai-engine')}
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                            activeTab === 'ai-engine'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                        }`}
+                    >
+                        <Cpu className="w-4 h-4" />
+                        AI Engine
+                    </button>
+                    <button
+                        onClick={() => handleTabChange('local-ai')}
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                            activeTab === 'local-ai'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                        }`}
+                    >
+                        <Server className="w-4 h-4" />
+                        Local AI Server
+                    </button>
+                    <button
+                        onClick={() => handleTabChange('system')}
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                            activeTab === 'system'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                        }`}
+                    >
+                        <Settings className="w-4 h-4" />
+                        System
+                    </button>
+                </div>
+            </div>
+
+            {/* ===== AI ENGINE TAB ===== */}
+            {activeTab === 'ai-engine' && (
+                <>
+                    {/* Asterisk Settings */}
+                    <ConfigSection title="Asterisk Settings" description="Connection details for the Asterisk server.">
                 <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormInput
@@ -470,11 +543,11 @@ const EnvPage = () => {
                             )}
                         </div>
                     </div>
-                </ConfigCard>
-            </ConfigSection>
+                    </ConfigCard>
+                    </ConfigSection>
 
-            {/* API Keys */}
-            <ConfigSection title="API Keys" description="Securely manage API keys for external services.">
+                    {/* Cloud Provider API Keys */}
+                    <ConfigSection title="Cloud Provider API Keys" description="API keys for cloud AI services used by AI Engine.">
                 <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {renderSecretInput('OpenAI API Key', 'OPENAI_API_KEY', 'sk-...')}
@@ -484,47 +557,44 @@ const EnvPage = () => {
                         {renderSecretInput('ElevenLabs API Key', 'ELEVENLABS_API_KEY', 'xi-...')}
                         {renderSecretInput('Cartesia API Key', 'CARTESIA_API_KEY', 'Token...')}
                         {renderSecretInput('Resend API Key', 'RESEND_API_KEY', 're_...')}
-                        {renderSecretInput('JWT Secret', 'JWT_SECRET', 'Secret for auth tokens')}
                     </div>
-                </ConfigCard>
-            </ConfigSection>
+                    </ConfigCard>
+                    </ConfigSection>
 
-            {/* AI Persona */}
-            <ConfigSection title="Default Persona" description="Global identity settings for the AI agent.">
+                    {/* Local AI Server Connection (Client-side) */}
+                    <ConfigSection title="Local AI Connection" description="How AI Engine connects to Local AI Server.">
                 <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormInput
-                            label="AI Name"
-                            value={env['AI_NAME'] || ''}
-                            onChange={(e) => updateEnv('AI_NAME', e.target.value)}
-                            placeholder="Asterisk"
+                            label="WebSocket URL"
+                            value={env['LOCAL_WS_URL'] || 'ws://local_ai_server:8765'}
+                            onChange={(e) => updateEnv('LOCAL_WS_URL', e.target.value)}
+                            tooltip="URL ai_engine uses to connect to local_ai_server."
                         />
                         <FormInput
-                            label="AI Role"
-                            value={env['AI_ROLE'] || ''}
-                            onChange={(e) => updateEnv('AI_ROLE', e.target.value)}
-                            placeholder="Voice Assistant"
+                            label="Connect Timeout (s)"
+                            type="number"
+                            value={env['LOCAL_WS_CONNECT_TIMEOUT'] || '2.0'}
+                            onChange={(e) => updateEnv('LOCAL_WS_CONNECT_TIMEOUT', e.target.value)}
                         />
-                    </div>
-                </ConfigCard>
-            </ConfigSection>
-
-            <ConfigSection title="Time Zone" description="Timezone used for timestamps and scheduling.">
-                <ConfigCard>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormInput
-                            label="TZ"
-                            tooltip="IANA timezone name used inside containers (e.g., America/Phoenix). Leave empty to use UTC. Requires restart to take effect."
-                            value={env['TZ'] || ''}
-                            onChange={(e) => updateEnv('TZ', e.target.value)}
-                            placeholder="America/Phoenix"
+                            label="Response Timeout (s)"
+                            type="number"
+                            value={env['LOCAL_WS_RESPONSE_TIMEOUT'] || '5.0'}
+                            onChange={(e) => updateEnv('LOCAL_WS_RESPONSE_TIMEOUT', e.target.value)}
+                        />
+                        <FormInput
+                            label="Chunk Size (ms)"
+                            type="number"
+                            value={env['LOCAL_WS_CHUNK_MS'] || '320'}
+                            onChange={(e) => updateEnv('LOCAL_WS_CHUNK_MS', e.target.value)}
                         />
                     </div>
-                </ConfigCard>
-            </ConfigSection>
+                    </ConfigCard>
+                    </ConfigSection>
 
-            {/* Logging Section */}
-            <ConfigSection title="Logging" description="System logging configuration.">
+                    {/* Logging Section */}
+                    <ConfigSection title="Logging" description="System logging configuration.">
                 <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormSelect
@@ -590,12 +660,12 @@ const EnvPage = () => {
 	                            />
 	                        </div>
                     </div>
-                </ConfigCard>
-            </ConfigSection>
+                    </ConfigCard>
+                    </ConfigSection>
 
-            {/* Streaming Logging Section */}
-            <ConfigSection title="Streaming Logging" description="Logging settings for streaming operations.">
-                <ConfigCard>
+                    {/* Streaming Logging Section */}
+                    <ConfigSection title="Streaming Logging" description="Logging settings for streaming operations.">
+                        <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormSelect
                             label="Streaming Log Level"
@@ -609,12 +679,12 @@ const EnvPage = () => {
                             ]}
                         />
                     </div>
-                </ConfigCard>
-            </ConfigSection>
+                    </ConfigCard>
+                    </ConfigSection>
 
-            {/* Diagnostics */}
-            <ConfigSection title="Diagnostics" description="Advanced debugging and diagnostic output settings.">
-                <ConfigCard>
+                    {/* Diagnostics */}
+                    <ConfigSection title="Diagnostics" description="Advanced debugging and diagnostic output settings.">
+                        <ConfigCard>
                     <div className="space-y-6">
                         <FormSwitch
                             id="diag-enable-taps"
@@ -669,67 +739,47 @@ const EnvPage = () => {
                                 />
                             </div>
                         )}
-                    </div>
-                </ConfigCard>
-            </ConfigSection>
+                        </div>
+                        </ConfigCard>
+                    </ConfigSection>
+                </>
+            )}
 
-            {/* Local AI Server Connection Settings */}
-            <ConfigSection title="Local AI Server" description="Connection and model settings for local AI services.">
-                {/* Connection Settings */}
-	                <ConfigCard>
-	                    <h3 className="text-sm font-semibold text-muted-foreground mb-4">Connection Settings</h3>
-	                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-	                        <FormInput
-	                            label="WebSocket URL"
-	                            value={env['LOCAL_WS_URL'] || 'ws://127.0.0.1:8765'}
-	                            onChange={(e) => updateEnv('LOCAL_WS_URL', e.target.value)}
-	                            tooltip="Client URL used by ai_engine to reach local_ai_server."
-	                        />
-	                        <FormInput
-	                            label="Bind Host (local_ai_server)"
-	                            value={env['LOCAL_WS_HOST'] || '0.0.0.0'}
-	                            onChange={(e) => updateEnv('LOCAL_WS_HOST', e.target.value)}
-	                            tooltip="Address local_ai_server binds to (default 0.0.0.0)."
-	                        />
-	                        <FormInput
-	                            label="Bind Port (local_ai_server)"
-	                            type="number"
-	                            value={env['LOCAL_WS_PORT'] || '8765'}
-	                            onChange={(e) => updateEnv('LOCAL_WS_PORT', e.target.value)}
-	                            tooltip="Port local_ai_server listens on; update LOCAL_WS_URL to match if changed."
-	                        />
-	                        <FormInput
-	                            label="Auth Token (optional)"
-	                            type="password"
-	                            value={env['LOCAL_WS_AUTH_TOKEN'] || ''}
-	                            onChange={(e) => updateEnv('LOCAL_WS_AUTH_TOKEN', e.target.value)}
-	                            tooltip="If set, local_ai_server requires an auth handshake. Must match providers.local*.auth_token."
-	                        />
-	                        <FormInput
-	                            label="Connect Timeout (s)"
-	                            type="number"
-	                            value={env['LOCAL_WS_CONNECT_TIMEOUT'] || '2.0'}
-	                            onChange={(e) => updateEnv('LOCAL_WS_CONNECT_TIMEOUT', e.target.value)}
-                        />
-                        <FormInput
-                            label="Response Timeout (s)"
-                            type="number"
-                            value={env['LOCAL_WS_RESPONSE_TIMEOUT'] || '5.0'}
-                            onChange={(e) => updateEnv('LOCAL_WS_RESPONSE_TIMEOUT', e.target.value)}
-                        />
-                        <FormInput
-                            label="Chunk Size (ms)"
-                            type="number"
-                            value={env['LOCAL_WS_CHUNK_MS'] || '320'}
-                            onChange={(e) => updateEnv('LOCAL_WS_CHUNK_MS', e.target.value)}
-                        />
-                    </div>
-                </ConfigCard>
+            {/* ===== LOCAL AI SERVER TAB ===== */}
+            {activeTab === 'local-ai' && (
+                <>
+                    {/* Server Bind Settings */}
+                    <ConfigSection title="Server Bind Settings" description="How Local AI Server listens for connections.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="Bind Host"
+                                    value={env['LOCAL_WS_HOST'] || '0.0.0.0'}
+                                    onChange={(e) => updateEnv('LOCAL_WS_HOST', e.target.value)}
+                                    tooltip="Address local_ai_server binds to (default 0.0.0.0 for all interfaces)."
+                                />
+                                <FormInput
+                                    label="Bind Port"
+                                    type="number"
+                                    value={env['LOCAL_WS_PORT'] || '8765'}
+                                    onChange={(e) => updateEnv('LOCAL_WS_PORT', e.target.value)}
+                                    tooltip="Port local_ai_server listens on."
+                                />
+                                <FormInput
+                                    label="Auth Token (optional)"
+                                    type="password"
+                                    value={env['LOCAL_WS_AUTH_TOKEN'] || ''}
+                                    onChange={(e) => updateEnv('LOCAL_WS_AUTH_TOKEN', e.target.value)}
+                                    tooltip="If set, local_ai_server requires an auth handshake."
+                                />
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
 
-                {/* STT Backend Settings */}
-                <ConfigCard>
-                    <h3 className="text-sm font-semibold text-muted-foreground mb-4">STT (Speech-to-Text)</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* STT Backend Settings */}
+                    <ConfigSection title="STT (Speech-to-Text)" description="Speech recognition model and backend settings.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormSelect
                             label="STT Backend"
                             value={env['LOCAL_STT_BACKEND'] || 'vosk'}
@@ -807,13 +857,14 @@ const EnvPage = () => {
                                 onChange={(e) => updateEnv('SHERPA_MODEL_PATH', e.target.value)}
                             />
                         )}
-                    </div>
-                </ConfigCard>
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
 
-                {/* TTS Backend Settings */}
-                <ConfigCard>
-                    <h3 className="text-sm font-semibold text-muted-foreground mb-4">TTS (Text-to-Speech)</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* TTS Backend Settings */}
+                    <ConfigSection title="TTS (Text-to-Speech)" description="Text-to-speech model and voice settings.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormSelect
                             label="TTS Backend"
                             value={env['LOCAL_TTS_BACKEND'] || 'piper'}
@@ -901,98 +952,135 @@ const EnvPage = () => {
                                 )}
                             </>
                         )}
-                    </div>
-                </ConfigCard>
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
 
-                {/* LLM Settings */}
-                <ConfigCard>
-                    <h3 className="text-sm font-semibold text-muted-foreground mb-4">LLM (Large Language Model)</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="col-span-full">
-	                            <FormInput
-	                                label="LLM Model Path"
-	                                value={env['LOCAL_LLM_MODEL_PATH'] || '/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf'}
-	                                onChange={(e) => updateEnv('LOCAL_LLM_MODEL_PATH', e.target.value)}
-	                            />
-	                        </div>
-                        <FormInput
-                            label="Context Size"
-                            type="number"
-                            value={env['LOCAL_LLM_CONTEXT'] || '4096'}
-                            onChange={(e) => updateEnv('LOCAL_LLM_CONTEXT', e.target.value)}
-                        />
-                        <FormInput
-                            label="Batch Size"
-                            type="number"
-                            value={env['LOCAL_LLM_BATCH'] || '256'}
-                            onChange={(e) => updateEnv('LOCAL_LLM_BATCH', e.target.value)}
-                        />
-                        <FormInput
-                            label="Max Tokens"
-                            type="number"
-                            value={env['LOCAL_LLM_MAX_TOKENS'] || '128'}
-                            onChange={(e) => updateEnv('LOCAL_LLM_MAX_TOKENS', e.target.value)}
-                        />
-                        <FormInput
-                            label="Temperature"
-                            type="number"
-                            step="0.1"
-                            value={env['LOCAL_LLM_TEMPERATURE'] || '0.7'}
-                            onChange={(e) => updateEnv('LOCAL_LLM_TEMPERATURE', e.target.value)}
-                        />
-                        <FormInput
-                            label="Threads"
-                            type="number"
-                            value={env['LOCAL_LLM_THREADS'] || '4'}
-                            onChange={(e) => updateEnv('LOCAL_LLM_THREADS', e.target.value)}
-                        />
-                        <FormInput
-                            label="Infer Timeout (s)"
-                            type="number"
-                            value={env['LOCAL_LLM_INFER_TIMEOUT_SEC'] || '30'}
-                            onChange={(e) => updateEnv('LOCAL_LLM_INFER_TIMEOUT_SEC', e.target.value)}
-                        />
-                    </div>
-                </ConfigCard>
-            </ConfigSection>
-
-
-
-            {/* Health Checks */}
-	            <ConfigSection title="Health Checks" description="URLs used for system health monitoring.">
-	                <ConfigCard>
-	                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-	                        <FormInput
-	                            label="Local AI Health URL"
-	                            value={env['HEALTH_CHECK_LOCAL_AI_URL'] || 'ws://127.0.0.1:8765'}
-	                            onChange={(e) => updateEnv('HEALTH_CHECK_LOCAL_AI_URL', e.target.value)}
-	                            placeholder="ws://127.0.0.1:8765"
-	                        />
-                        <FormInput
-                            label="AI Engine Health URL"
-                            value={env['HEALTH_CHECK_AI_ENGINE_URL'] || 'http://ai_engine:15000/health'}
-                            onChange={(e) => updateEnv('HEALTH_CHECK_AI_ENGINE_URL', e.target.value)}
-                            placeholder="http://ai_engine:15000/health"
-                        />
-                    </div>
-                </ConfigCard>
-            </ConfigSection>
-
-            {otherSettings.length > 0 && (
-                <ConfigSection title="Other Variables" description="Additional environment variables found in .env file.">
-                    <ConfigCard>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {otherSettings.map(key => (
+                    {/* LLM Settings */}
+                    <ConfigSection title="LLM (Large Language Model)" description="Local language model for pipeline-based processing.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="col-span-full">
+                                    <FormInput
+                                        label="LLM Model Path"
+                                        value={env['LOCAL_LLM_MODEL_PATH'] || '/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf'}
+                                        onChange={(e) => updateEnv('LOCAL_LLM_MODEL_PATH', e.target.value)}
+                                    />
+                                </div>
                                 <FormInput
-                                    key={key}
-                                    label={key}
-                                    value={env[key] || ''}
-                                    onChange={(e) => updateEnv(key, e.target.value)}
+                                    label="Context Size"
+                                    type="number"
+                                    value={env['LOCAL_LLM_CONTEXT'] || '4096'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_CONTEXT', e.target.value)}
                                 />
-                            ))}
-                        </div>
-                    </ConfigCard>
-                </ConfigSection>
+                                <FormInput
+                                    label="Batch Size"
+                                    type="number"
+                                    value={env['LOCAL_LLM_BATCH'] || '256'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_BATCH', e.target.value)}
+                                />
+                                <FormInput
+                                    label="Max Tokens"
+                                    type="number"
+                                    value={env['LOCAL_LLM_MAX_TOKENS'] || '128'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_MAX_TOKENS', e.target.value)}
+                                />
+                                <FormInput
+                                    label="Temperature"
+                                    type="number"
+                                    step="0.1"
+                                    value={env['LOCAL_LLM_TEMPERATURE'] || '0.7'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_TEMPERATURE', e.target.value)}
+                                />
+                                <FormInput
+                                    label="Threads"
+                                    type="number"
+                                    value={env['LOCAL_LLM_THREADS'] || '4'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_THREADS', e.target.value)}
+                                />
+                                <FormInput
+                                    label="Infer Timeout (s)"
+                                    type="number"
+                                    value={env['LOCAL_LLM_INFER_TIMEOUT_SEC'] || '30'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_INFER_TIMEOUT_SEC', e.target.value)}
+                                />
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
+                </>
+            )}
+
+            {/* ===== SYSTEM TAB ===== */}
+            {activeTab === 'system' && (
+                <>
+                    {/* Time Zone */}
+                    <ConfigSection title="Time Zone" description="Timezone used for timestamps and scheduling.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="TZ"
+                                    tooltip="IANA timezone name (e.g., America/Phoenix). Leave empty for UTC."
+                                    value={env['TZ'] || ''}
+                                    onChange={(e) => updateEnv('TZ', e.target.value)}
+                                    placeholder="America/Phoenix"
+                                />
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-3">
+                                <strong>Affects:</strong> AI Engine, Local AI Server, Admin UI
+                            </p>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Authentication */}
+                    <ConfigSection title="Authentication" description="Security settings for Admin UI.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {renderSecretInput('JWT Secret', 'JWT_SECRET', 'Secret key for auth tokens')}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-3">
+                                Changing JWT Secret will invalidate all active sessions.
+                            </p>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Health Check URLs */}
+                    <ConfigSection title="Health Check URLs" description="Internal URLs used for system health monitoring.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="Local AI Health URL"
+                                    value={env['HEALTH_CHECK_LOCAL_AI_URL'] || 'ws://local_ai_server:8765'}
+                                    onChange={(e) => updateEnv('HEALTH_CHECK_LOCAL_AI_URL', e.target.value)}
+                                    placeholder="ws://local_ai_server:8765"
+                                />
+                                <FormInput
+                                    label="AI Engine Health URL"
+                                    value={env['HEALTH_CHECK_AI_ENGINE_URL'] || 'http://ai_engine:15000/health'}
+                                    onChange={(e) => updateEnv('HEALTH_CHECK_AI_ENGINE_URL', e.target.value)}
+                                    placeholder="http://ai_engine:15000/health"
+                                />
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Other Variables */}
+                    {otherSettings.length > 0 && (
+                        <ConfigSection title="Other Variables" description="Additional environment variables found in .env file.">
+                            <ConfigCard>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {otherSettings.map(key => (
+                                        <FormInput
+                                            key={key}
+                                            label={key}
+                                            value={env[key] || ''}
+                                            onChange={(e) => updateEnv(key, e.target.value)}
+                                        />
+                                    ))}
+                                </div>
+                            </ConfigCard>
+                        </ConfigSection>
+                    )}
+                </>
             )}
         </div>
     );
