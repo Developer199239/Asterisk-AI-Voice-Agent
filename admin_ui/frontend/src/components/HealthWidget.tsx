@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, AlertCircle, Box, Play } from 'lucide-react';
+import { toast } from 'sonner';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
 
@@ -74,7 +75,7 @@ export const HealthWidget = () => {
             }, 5000);
         } catch (err: any) {
             console.error('Failed to start container', err);
-            alert(`Failed to start ${containerName}: ${err.response?.data?.detail || err.message}`);
+            toast.error(`Failed to start ${containerName}`, { description: err.response?.data?.detail || err.message });
             setStarting(false);
         }
     };
@@ -252,7 +253,7 @@ export const HealthWidget = () => {
             }, 30000);  // 30 seconds UI timeout (API handles the actual wait)
         } catch (err: any) {
             console.error('Failed to apply changes', err);
-            alert(err.message || 'Failed to apply changes');
+            toast.error(err.message || 'Failed to apply changes');
             setApplyingChanges(false);
             setRestarting(false);
         }

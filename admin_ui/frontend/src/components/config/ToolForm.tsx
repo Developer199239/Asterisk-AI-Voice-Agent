@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { toast } from 'sonner';
 import { Plus, Trash2, Settings } from 'lucide-react';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { Modal } from '../ui/Modal';
@@ -92,14 +93,14 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
     const renameInternalExtensionKey = (fromKey: string, toKeyRaw: string) => {
         const toKey = (toKeyRaw || '').trim();
         if (!toKey) {
-            alert('Extension key cannot be empty.');
+            toast.error('Extension key cannot be empty.');
             return;
         }
         if (toKey === fromKey) return;
 
         const existing = { ...(config.extensions?.internal || {}) };
         if (Object.prototype.hasOwnProperty.call(existing, toKey)) {
-            alert(`An extension with key '${toKey}' already exists.`);
+            toast.error(`An extension with key '${toKey}' already exists.`);
             return;
         }
 

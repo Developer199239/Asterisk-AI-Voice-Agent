@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { RefreshCw, Pause, Play, Terminal } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { parseAnsi } from '../../utils/ansi';
@@ -443,7 +444,7 @@ const LogsPage = () => {
                                 link.remove();
                             } catch (err) {
                                 console.error('Failed to export logs', err);
-                                alert('Failed to export logs');
+                                toast.error('Failed to export logs');
                             }
                         }}
                         className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3"

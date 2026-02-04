@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpCircle, RefreshCw, Play, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import axios from 'axios';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 
@@ -58,6 +59,7 @@ interface UpdateHistoryResponse {
 }
 
 const UpdatesPage = () => {
+  const { confirm } = useConfirmDialog();
   const [copiedJobId, setCopiedJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<UpdatesStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -217,19 +219,12 @@ const UpdatesPage = () => {
 
     const preBranch = sourceJob?.pre_update_branch || 'unknown';
     const backupRel = sourceJob?.backup_dir_rel || 'unknown';
-    const ok = window.confirm(
-      [
-        'Start rollback?',
-        '',
-        `Source job: ${fromJobId}`,
-        `Pre-update branch: ${preBranch}`,
-        `Backup: ${backupRel}`,
-        '',
-        'Notes:',
-        '- This will checkout the pre-update branch and restore operator config from the backup.',
-        '- Services may rebuild/restart (including admin_ui if it was included in the original update).',
-      ].join('\n')
-    );
+    const ok = await confirm({
+      title: 'Start Rollback?',
+      description: `Source job: ${fromJobId}\nPre-update branch: ${preBranch}\nBackup: ${backupRel}\n\nThis will checkout the pre-update branch and restore operator config from the backup. Services may rebuild/restart.`,
+      confirmText: 'Start Rollback',
+      variant: 'destructive'
+    });
     if (!ok) return;
 
     setRunError(null);
@@ -293,25 +288,12 @@ const UpdatesPage = () => {
             .join(', ')
         : 'none';
 
-    const ok = window.confirm(
-      [
-        'Proceed with update?',
-        '',
-        `Target: ${targetRef || 'unknown'}`,
-        `Update UI too: ${includeUI ? 'yes' : 'no'}`,
-        `Update agent CLI too: ${updateCliHost ? 'yes' : 'no'}`,
-        updateCliHost ? `Agent CLI install path: ${cliInstallPath.trim() || 'auto'}` : '',
-        `Will rebuild: ${rebuild}`,
-        `Will restart: ${restart}`,
-        `Skipped: ${skipped}`,
-        `Files changed: ${plan.changed_file_count ?? 'unknown'}`,
-        '',
-        'Notes:',
-        '- The updater will stash local changes first (may conflict on restore).',
-        '- Services may restart during update.',
-        '- Update logs are retained (last 10 runs) and visible in the UI after completion.',
-      ].join('\n')
-    );
+    const ok = await confirm({
+      title: 'Proceed with Update?',
+      description: `Target: ${targetRef || 'unknown'}\nUpdate UI: ${includeUI ? 'yes' : 'no'}\nUpdate CLI: ${updateCliHost ? 'yes' : 'no'}\nWill rebuild: ${rebuild}\nWill restart: ${restart}\nFiles changed: ${plan.changed_file_count ?? 'unknown'}\n\nThe updater will stash local changes first. Services may restart during update.`,
+      confirmText: 'Start Update',
+      variant: 'default'
+    });
     if (!ok) return;
 
     try {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { Plus, Trash2, AlertTriangle } from 'lucide-react';
 import HelpTooltip from '../../ui/HelpTooltip';
 import { FormInput, FormSelect, FormLabel, FormSwitch } from '../../ui/FormComponents';
@@ -153,12 +154,12 @@ const GenericProviderForm: React.FC<GenericProviderFormProps> = ({ config, onCha
     const handleCapabilityChange = (cap: Capability) => {
         // If editing existing modular provider, do not allow capability change
         if (!isNew && config.capabilities && config.capabilities.length === 1 && config.type !== 'full') {
-            alert('Modular capability cannot be changed after save. Please delete and recreate the provider with the desired capability.');
+            toast.error('Modular capability cannot be changed after save. Please delete and recreate the provider with the desired capability.');
             return;
         }
         // Require a base name before selecting capability
         if (!config.name || config.name.trim() === '') {
-            alert('Please enter a provider name before selecting a capability.');
+            toast.error('Please enter a provider name before selecting a capability.');
             return;
         }
         const updates: any = { capabilities: [cap] };
