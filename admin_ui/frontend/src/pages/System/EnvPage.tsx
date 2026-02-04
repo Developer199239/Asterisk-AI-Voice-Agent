@@ -312,7 +312,7 @@ const EnvPage = () => {
         'LOCAL_LLM_MODEL_PATH', 'LOCAL_LLM_THREADS',
         'LOCAL_LLM_CONTEXT', 'LOCAL_LLM_BATCH', 'LOCAL_LLM_MAX_TOKENS', 'LOCAL_LLM_TEMPERATURE', 'LOCAL_LLM_INFER_TIMEOUT_SEC',
         // Other
-        'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'CARTESIA_API_KEY', 'JWT_SECRET',
+        'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID', 'JWT_SECRET',
         'AI_NAME', 'AI_ROLE', 'ASTERISK_ARI_PORT', 'ASTERISK_ARI_WEBSOCKET_SCHEME',
         'HEALTH_CHECK_LOCAL_AI_URL', 'HEALTH_CHECK_AI_ENGINE_URL'
     ];
@@ -555,7 +555,13 @@ const EnvPage = () => {
                         {renderSecretInput('Deepgram API Key', 'DEEPGRAM_API_KEY', 'Token...')}
                         {renderSecretInput('Google API Key', 'GOOGLE_API_KEY', 'AIza...')}
                         {renderSecretInput('ElevenLabs API Key', 'ELEVENLABS_API_KEY', 'xi-...')}
-                        {renderSecretInput('Cartesia API Key', 'CARTESIA_API_KEY', 'Token...')}
+                        <FormInput
+                            label="ElevenLabs Agent ID"
+                            value={env['ELEVENLABS_AGENT_ID'] || ''}
+                            onChange={(e) => updateEnv('ELEVENLABS_AGENT_ID', e.target.value)}
+                            placeholder="agent_..."
+                            tooltip="Required for ElevenLabs Conversational AI mode."
+                        />
                         {renderSecretInput('Resend API Key', 'RESEND_API_KEY', 're_...')}
                     </div>
                     </ConfigCard>
