@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import axios from 'axios';
 import { toast } from 'sonner';
 import yaml from 'js-yaml';
@@ -53,6 +54,7 @@ const _parseArgLine = (raw: string): string[] => {
 };
 
 const MCPPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
@@ -219,9 +221,13 @@ const MCPPage = () => {
         const unsafeEnv = Object.entries(envObj).filter(([_k, v]) => v && !/^\$\{[A-Za-z0-9_]+\}$/.test(v));
         if (unsafeEnv.length > 0) {
             const names = unsafeEnv.map(([k]) => k).join(', ');
-            if (!confirm(`Some env values are not placeholders like \${VAR} (keys: ${names}). This may expose secrets in YAML/UI. Continue?`)) {
-                return;
-            }
+            const confirmed = await confirm({
+                title: 'Potential Security Risk',
+                description: `Some env values are not placeholders like \${VAR} (keys: ${names}). This may expose secrets in YAML/UI. Continue?`,
+                confirmText: 'Continue Anyway',
+                variant: 'destructive'
+            });
+            if (!confirmed) return;
         }
 
         const toolList = (serverForm.tools || [])
@@ -257,8 +263,14 @@ const MCPPage = () => {
         setServerForm(null);
     };
 
-    const deleteServer = (id: string) => {
-        if (!confirm(`Delete MCP server '${id}' from config?`)) return;
+    const deleteServer = async (id: string) => {
+        const confirmed = await confirm({
+            title: 'Delete MCP Server?',
+            description: `Delete MCP server '${id}' from config?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const nextServers = { ...servers };
         delete nextServers[id];
         updateMcp({ enabled: mcpConfig.enabled ?? false, servers: nextServers });

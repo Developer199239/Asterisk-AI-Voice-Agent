@@ -287,7 +287,7 @@ const ContextsPage = () => {
         if (contextForm.pipeline) {
             const pipeline = config.pipelines?.[contextForm.pipeline];
             if (!pipeline) {
-                alert(`Pipeline '${contextForm.pipeline}' does not exist.\n\nPlease select a valid pipeline or leave blank to use the active pipeline.`);
+                toast.error(`Pipeline '${contextForm.pipeline}' does not exist. Please select a valid pipeline or leave blank to use the active pipeline.`);
                 return;
             }
         }
