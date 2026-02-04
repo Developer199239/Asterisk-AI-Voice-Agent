@@ -189,7 +189,7 @@ const MCPPage = () => {
         setEditing(true);
     };
 
-    const saveServerForm = () => {
+    const saveServerForm = async () => {
         if (!serverForm) return;
         const id = (serverForm.id || '').trim();
         if (!id) {
