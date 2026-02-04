@@ -319,7 +319,9 @@ const ProvidersPage: React.FC = () => {
         if (activePipeline && pipelines[activePipeline]) {
             const ap = pipelines[activePipeline] as any;
             if (ap.stt === name || ap.llm === name || ap.tts === name) {
-                alert(`Cannot delete provider "${name}" because it is used by the active pipeline "${activePipeline}".\n\nPlease update the active pipeline first.`);
+                toast.error(`Cannot delete provider "${name}"`, {
+                    description: `This provider is used by the active pipeline "${activePipeline}". Please update the active pipeline first.`
+                });
                 return;
             }
         }

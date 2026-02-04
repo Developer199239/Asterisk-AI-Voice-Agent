@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { Save, AlertCircle, RefreshCw, Loader2, Phone, Webhook, Search } from 'lucide-react';
 import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
@@ -14,6 +15,7 @@ import { sanitizeConfigForSave } from '../utils/configSanitizers';
 type ToolPhase = 'in_call' | 'pre_call' | 'post_call';
 
 const ToolsPage = () => {
+    const { confirm } = useConfirmDialog();
     const { token } = useAuth();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
@@ -73,9 +75,12 @@ const ToolsPage = () => {
             });
 
             if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleRestartAIEngine(true);

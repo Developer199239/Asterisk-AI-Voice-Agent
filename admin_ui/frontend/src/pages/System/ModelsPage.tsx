@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle, Cpu, Terminal, Settings, Play } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ConfigCard } from '../../components/ui/ConfigCard';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import axios from 'axios';
 
 interface ModelInfo {
@@ -58,6 +59,7 @@ interface AvailableModels {
 }
 
 const ModelsPage = () => {
+    const { confirm } = useConfirmDialog();
     const [catalog, setCatalog] = useState<{ stt: ModelInfo[]; tts: ModelInfo[]; llm: ModelInfo[] }>({ stt: [], tts: [], llm: [] });
     const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
     const [languageNames, setLanguageNames] = useState<Record<string, string>>({});
@@ -294,9 +296,13 @@ const ModelsPage = () => {
     };
 
     const handleDelete = async (model: InstalledModel) => {
-        if (!confirm(`Are you sure you want to delete "${model.name}"? This cannot be undone.`)) {
-            return;
-        }
+        const confirmed = await confirm({
+            title: 'Delete Model?',
+            description: `Are you sure you want to delete "${model.name}"? This cannot be undone.`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
 
         setDeletingModel(model.name);
         try {
@@ -403,8 +409,14 @@ const ModelsPage = () => {
                             <Settings className="w-4 h-4" />
                         </Link>
                         <button
-                            onClick={() => {
-                                if (!window.confirm('Are you sure you want to restart the Local AI Server?')) return;
+                            onClick={async () => {
+                                const confirmed = await confirm({
+                                    title: 'Restart Local AI Server?',
+                                    description: 'Are you sure you want to restart the Local AI Server? This will temporarily interrupt model inference.',
+                                    confirmText: 'Restart',
+                                    variant: 'destructive'
+                                });
+                                if (!confirmed) return;
                                 setRestarting(true);
                                 axios.post('/api/system/containers/local_ai_server/restart')
                                     .then(() => setTimeout(() => { fetchActiveModels(); setRestarting(false); }, 5000))

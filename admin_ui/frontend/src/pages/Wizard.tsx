@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play, RefreshCw, Info, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 interface SetupConfig {
     provider: string;
@@ -52,6 +53,7 @@ type LocalModelsStatus = {
 
 const Wizard = () => {
     const navigate = useNavigate();
+    const { confirm } = useConfirmDialog();
     const [step, setStep] = useState(1);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -338,7 +340,7 @@ const Wizard = () => {
             if (!res.data.valid) {
                 throw new Error(res.data.error || 'Connection failed');
             }
-            alert(res.data.message || 'Successfully connected to Asterisk!');
+            showToast(res.data.message || 'Successfully connected to Asterisk!', 'success');
         } catch (err: any) {
             setError('Connection failed: ' + (err.response?.data?.error || err.message));
         } finally {
@@ -2161,12 +2163,12 @@ const Wizard = () => {
                                         try {
                                             const res = await axios.get('/api/system/health');
                                             if (res.data.local_ai_server?.status === 'connected') {
-                                                alert('Local AI Server is running and connected!');
+                                                showToast('Local AI Server is running and connected!', 'success');
                                             } else {
-                                                alert(`Local AI Server is NOT connected. Status: ${res.data.local_ai_server?.status}`);
+                                                showToast(`Local AI Server is NOT connected. Status: ${res.data.local_ai_server?.status}`, 'error');
                                             }
                                         } catch (err) {
-                                            alert('Failed to contact system health endpoint.');
+                                            showToast('Failed to contact system health endpoint.', 'error');
                                         } finally {
                                             setLoading(false);
                                         }
@@ -2440,13 +2442,22 @@ const Wizard = () => {
                                                     try {
                                                         const res = await axios.post('/api/system/containers/ai_engine/reload');
                                                         if (res.data.restart_required) {
-                                                            if (confirm('New provider detected. A full restart is needed. Restart now?')) {
+                                                            const shouldRestart = await confirm({
+                                                                title: 'Restart Required',
+                                                                description: 'New provider detected. A full restart is needed. Restart now?',
+                                                                confirmText: 'Restart',
+                                                                variant: 'default'
+                                                            });
+                                                            if (shouldRestart) {
                                                                 showToast('Restarting AI Engine...', 'success');
                                                                 const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false');
                                                                 if (restartRes.data?.status === 'warning') {
-                                                                    const confirmForce = confirm(
-                                                                        `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`
-                                                                    );
+                                                                    const confirmForce = await confirm({
+                                                                        title: 'Force Restart?',
+                                                                        description: `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`,
+                                                                        confirmText: 'Force Restart',
+                                                                        variant: 'destructive'
+                                                                    });
                                                                     if (confirmForce) {
                                                                         await axios.post('/api/system/containers/ai_engine/restart?force=true');
                                                                         showToast('AI Engine restarted!', 'success');
@@ -2621,13 +2632,22 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                                 const res = await axios.post('/api/system/containers/ai_engine/reload');
                                                 if (res.data.restart_required) {
                                                     // New provider needs full restart
-                                                    if (confirm('New provider detected. A full restart is needed to load it. Restart now?')) {
+                                                    const shouldRestart = await confirm({
+                                                        title: 'Restart Required',
+                                                        description: 'New provider detected. A full restart is needed to load it. Restart now?',
+                                                        confirmText: 'Restart',
+                                                        variant: 'default'
+                                                    });
+                                                    if (shouldRestart) {
                                                         showToast('Restarting AI Engine...', 'success');
                                                         const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false');
                                                         if (restartRes.data?.status === 'warning') {
-                                                            const confirmForce = confirm(
-                                                                `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`
-                                                            );
+                                                            const confirmForce = await confirm({
+                                                                title: 'Force Restart?',
+                                                                description: `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`,
+                                                                confirmText: 'Force Restart',
+                                                                variant: 'destructive'
+                                                            });
                                                             if (confirmForce) {
                                                                 await axios.post('/api/system/containers/ai_engine/restart?force=true');
                                                                 showToast('AI Engine restarted! New provider is now available.', 'success');
