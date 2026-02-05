@@ -610,8 +610,23 @@ const EnvPage = () => {
                             tooltip="Required for ElevenLabs Conversational AI mode."
                         />
                         {renderSecretInput('Resend API Key', 'RESEND_API_KEY', 're_...')}
-                        <div className="md:col-span-2 border-t border-border pt-4 mt-2">
-                            <div className="text-sm font-medium text-foreground mb-3">Email Delivery (SMTP)</div>
+                        <FormInput
+                            label="Google Service Account"
+                            value={env['GOOGLE_APPLICATION_CREDENTIALS'] || ''}
+                            onChange={(e) => updateEnv('GOOGLE_APPLICATION_CREDENTIALS', e.target.value)}
+                            placeholder="/path/to/service-account-key.json"
+                            tooltip="Path to Google Cloud service account JSON key file (alternative to API key)."
+                        />
+                    </div>
+                    </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Email Delivery (SMTP) */}
+                    <ConfigSection
+                        title="Email Delivery (SMTP)"
+                        description="SMTP settings for sending transcript/summary emails when SMTP is selected as the email provider."
+                    >
+                        <ConfigCard>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <FormInput
                                     label="SMTP Host"
@@ -659,16 +674,7 @@ const EnvPage = () => {
                                     placeholder="10"
                                 />
                             </div>
-                        </div>
-                        <FormInput
-                            label="Google Service Account"
-                            value={env['GOOGLE_APPLICATION_CREDENTIALS'] || ''}
-                            onChange={(e) => updateEnv('GOOGLE_APPLICATION_CREDENTIALS', e.target.value)}
-                            placeholder="/path/to/service-account-key.json"
-                            tooltip="Path to Google Cloud service account JSON key file (alternative to API key)."
-                        />
-                    </div>
-                    </ConfigCard>
+                        </ConfigCard>
                     </ConfigSection>
 
                     {/* Health Endpoint */}
