@@ -519,6 +519,17 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     />
                     {config.send_email_summary?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <FormSelect
+                                label="Email Provider"
+                                options={[
+                                    { value: 'auto', label: 'Auto (SMTP → Resend)' },
+                                    { value: 'smtp', label: 'SMTP (local mail server)' },
+                                    { value: 'resend', label: 'Resend (API)' },
+                                ]}
+                                value={config.send_email_summary?.provider || 'auto'}
+                                onChange={(e) => updateNestedConfig('send_email_summary', 'provider', e.target.value)}
+                                tooltip="Auto uses SMTP if SMTP_HOST is configured; otherwise uses Resend if RESEND_API_KEY is set."
+                            />
                             <FormInput
                                 label="From Email"
                                 value={config.send_email_summary?.from_email || ''}
@@ -549,6 +560,17 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     />
                     {config.request_transcript?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <FormSelect
+                                label="Email Provider"
+                                options={[
+                                    { value: 'auto', label: 'Auto (SMTP → Resend)' },
+                                    { value: 'smtp', label: 'SMTP (local mail server)' },
+                                    { value: 'resend', label: 'Resend (API)' },
+                                ]}
+                                value={config.request_transcript?.provider || 'auto'}
+                                onChange={(e) => updateNestedConfig('request_transcript', 'provider', e.target.value)}
+                                tooltip="Auto uses SMTP if SMTP_HOST is configured; otherwise uses Resend if RESEND_API_KEY is set."
+                            />
                             <FormInput
                                 label="From Email"
                                 value={config.request_transcript?.from_email || ''}

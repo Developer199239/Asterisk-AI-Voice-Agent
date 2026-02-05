@@ -863,24 +863,35 @@ tools:
   # ----------------------------------------------------------------------------
   send_email_summary:
     enabled: true                      # Enable auto-send after calls
-    provider: "resend"
-    api_key: "${RESEND_API_KEY}"       # Set in .env file
+    provider: "auto"                   # auto | smtp | resend
     from_email: "agent@yourdomain.com"
     from_name: "AI Voice Agent"
     admin_email: "admin@yourdomain.com"
+    # Optional: route different contexts to different inboxes
+    # admin_email_by_context:
+    #   support: "support@yourdomain.com"
+    #   sales: "sales@yourdomain.com"
     include_transcript: true
     include_metadata: true
+    # Optional: subject prefix and per-context overrides
+    # subject_prefix: "[AAVA]"
+    # subject_prefix_by_context:
+    #   support: "[Support]"
+    #   sales: "[Sales]"
   
   # ----------------------------------------------------------------------------
   # REQUEST_TRANSCRIPT - Caller-initiated transcript requests
   # ----------------------------------------------------------------------------
   request_transcript:
     enabled: true                      # Allow caller transcript requests
-    provider: "resend"
-    api_key: "${RESEND_API_KEY}"
+    provider: "auto"                   # auto | smtp | resend
     from_email: "agent@yourdomain.com"
     from_name: "AI Voice Agent"
     admin_email: "admin@yourdomain.com"  # Admin receives BCC
+    # Optional: route BCC by context
+    # admin_email_by_context:
+    #   support: "support@yourdomain.com"
+    #   sales: "sales@yourdomain.com"
     confirm_email: true                # AI reads back email
     validate_domain: true              # DNS MX lookup
     max_attempts: 2                    # Retry attempts for invalid email
@@ -915,7 +926,14 @@ contexts:
 # Resend API (for email tools)
 RESEND_API_KEY=re_xxxxxxxxxxxx
 
-# Get API key from: https://resend.com
+# SMTP (optional): local mail server for email tools
+SMTP_HOST=smtp.yourcompany.com
+SMTP_PORT=587
+SMTP_USERNAME=your_user
+SMTP_PASSWORD=your_password
+SMTP_TLS_MODE=starttls  # starttls | smtps | none
+SMTP_TLS_VERIFY=true
+SMTP_TIMEOUT_SECONDS=10
 ```
 
 **Best Practice**: Only `RESEND_API_KEY` goes in `.env` (secret). Email addresses go in `ai-agent.yaml` (configuration, not secret).

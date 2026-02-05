@@ -40,6 +40,20 @@ Provider `api_key` values in YAML are intentionally ignored for safety; set keys
 - Google Live / Google adapters: `GOOGLE_API_KEY` or `GOOGLE_APPLICATION_CREDENTIALS`
 - ElevenLabs: `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`
 
+### Email delivery (Resend or SMTP)
+
+Email tools (`send_email_summary`, `request_transcript`) support:
+
+- Resend: `RESEND_API_KEY`
+- SMTP (local mail server):
+  - `SMTP_HOST`, `SMTP_PORT`
+  - `SMTP_USERNAME`, `SMTP_PASSWORD`
+  - `SMTP_TLS_MODE` (`starttls` / `smtps` / `none`)
+  - `SMTP_TLS_VERIFY` (`true` / `false`)
+  - `SMTP_TIMEOUT_SECONDS`
+
+Secrets (API keys / SMTP passwords) belong in `.env` and should never be committed.
+
 ### Transport / networking
 
 These are used when Asterisk and containers are not on the same host/network (NAT/bridged Docker):

@@ -21,7 +21,7 @@ except Exception:
 from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolParameter
 from src.tools.context import ToolExecutionContext
 from src.utils.email_validator import EmailValidator
-from src.tools.business.resend_client import send_email
+from src.tools.business.email_dispatcher import send_email, resolve_context_value
 
 logger = structlog.get_logger(__name__)
 
@@ -343,6 +343,7 @@ class RequestTranscriptTool(Tool):
         call_id: str
     ) -> Dict[str, Any]:
         """Prepare email data for transcript."""
+        context_name = getattr(session, "context_name", None)
         
         # Extract metadata
         caller_name = getattr(session, "caller_name", None)
@@ -390,12 +391,28 @@ class RequestTranscriptTool(Tool):
         # Build email data
         from_email = config.get("from_email", "agent@company.com")
         from_name = config.get("from_name", "AI Voice Agent")
-        admin_email = config.get("admin_email")
+        admin_email = resolve_context_value(
+            tool_config=config,
+            key="admin_email",
+            context_name=context_name,
+            default=None,
+        )
+
+        subject_prefix = resolve_context_value(
+            tool_config=config,
+            key="subject_prefix",
+            context_name=context_name,
+            default="",
+        )
+        subject_prefix = str(subject_prefix or "").strip()
+        if subject_prefix and not subject_prefix.endswith(" "):
+            subject_prefix = subject_prefix + " "
+        context_tag = f"[{context_name}] " if context_name else ""
         
         email_data = {
             "to": caller_email,
             "from": f"{from_name} <{from_email}>",
-            "subject": f"Your Call Transcript - {start_time.strftime('%Y-%m-%d %H:%M')}",
+            "subject": f"{subject_prefix}{context_tag}Your Call Transcript - {start_time.strftime('%Y-%m-%d %H:%M')}",
             "html": html_content
         }
         
@@ -416,18 +433,18 @@ class RequestTranscriptTool(Tool):
         safe = safe.replace("\r\n", "\n").replace("\r", "\n")
         return safe.replace("\n", "<br/>\n")
     
-    async def _send_transcript_async(self, email_data: Dict[str, Any], call_id: str):
-        """Send transcript email asynchronously via Resend API."""
+    async def _send_transcript_async(self, email_data: Dict[str, Any], call_id: str, tool_config: Dict[str, Any]):
+        """Send transcript email asynchronously via configured provider."""
         try:
-            # Send email
             logger.info(
-                "Sending transcript via Resend",
+                "Sending transcript",
                 call_id=call_id,
                 recipient=email_data["to"],
                 bcc=email_data.get("bcc")
             )
             await send_email(
                 email_data=email_data,
+                tool_config=tool_config,
                 call_id=call_id,
                 log_label="Transcript",
                 recipient=str(email_data.get("to") or ""),

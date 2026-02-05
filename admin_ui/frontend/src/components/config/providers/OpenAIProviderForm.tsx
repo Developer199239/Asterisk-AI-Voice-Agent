@@ -61,7 +61,7 @@ const OpenAIProviderForm: React.FC<OpenAIProviderFormProps> = ({ config, onChang
                             <option value="beta">Beta (legacy)</option>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            GA uses <code>gpt-realtime</code> models. Beta uses <code>gpt-4o-realtime-preview</code> models and the <code>OpenAI-Beta</code> header.
+                            <strong>GA</strong> uses nested audio schema (no beta header). <strong>Beta</strong> uses flat schema with the <code>OpenAI-Beta</code> header. Both support <code>gpt-4o-realtime-preview</code> models.
                         </p>
                     </div>
                 </div>

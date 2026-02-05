@@ -55,11 +55,7 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             onChange={(e) => {
                                 const version = e.target.value;
                                 const updates: any = { ...config, api_version: version };
-                                if (version === 'ga' && config.model?.includes('preview')) {
-                                    updates.model = 'gpt-realtime';
-                                } else if (version === 'beta' && !config.model?.includes('preview')) {
-                                    updates.model = 'gpt-4o-realtime-preview-2024-12-17';
-                                }
+                                // Don't auto-switch model — gpt-4o-realtime-preview works with both GA and Beta
                                 onChange(updates);
                             }}
                         >
@@ -67,8 +63,9 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             <option value="beta">Beta (legacy)</option>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            <strong>GA</strong> uses <code>gpt-realtime</code> models (no beta header).
-                            <strong className="ml-1">Beta</strong> uses <code>gpt-4o-realtime-preview</code> models with the <code>OpenAI-Beta</code> header.
+                            <strong>GA</strong> uses nested audio schema (no beta header).
+                            <strong className="ml-1">Beta</strong> uses flat schema with the <code>OpenAI-Beta</code> header.
+                            Both support <code>gpt-4o-realtime-preview</code> models.
                         </p>
                     </div>
                 </div>
@@ -82,12 +79,16 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                         <label className="text-sm font-medium">Model</label>
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.model || 'gpt-realtime'}
+                            value={config.model || 'gpt-4o-realtime-preview-2024-12-17'}
                             onChange={(e) => handleChange('model', e.target.value)}
                         >
                             {(config.api_version || 'ga') === 'ga' ? (
                                 <>
-                                    <optgroup label="GA Models">
+                                    <optgroup label="GA Models (Recommended)">
+                                        <option value="gpt-4o-realtime-preview-2024-12-17">GPT-4o Realtime (2024-12-17)</option>
+                                        <option value="gpt-4o-realtime-preview">GPT-4o Realtime (Latest)</option>
+                                    </optgroup>
+                                    <optgroup label="GA Native (Limited Availability)">
                                         <option value="gpt-realtime">GPT Realtime</option>
                                         <option value="gpt-realtime-mini">GPT Realtime Mini</option>
                                     </optgroup>

@@ -4565,7 +4565,9 @@ class Engine:
                                             call_id
                                         )
                                         # Send asynchronously (don't block cleanup)
-                                        asyncio.create_task(transcript_tool._send_transcript_async(email_data, call_id))
+                                        asyncio.create_task(
+                                            transcript_tool._send_transcript_async(email_data, call_id, transcript_tool_config)
+                                        )
                                         logger.info(
                                             "📧 Sent end-of-call transcript",
                                             call_id=call_id,

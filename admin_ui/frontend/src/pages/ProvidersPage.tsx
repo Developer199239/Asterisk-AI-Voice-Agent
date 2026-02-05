@@ -173,7 +173,7 @@ const ProvidersPage: React.FC = () => {
             openai_realtime: {
                 enabled: false,
                 api_version: 'ga',
-                model: 'gpt-realtime',
+                model: 'gpt-4o-realtime-preview-2024-12-17',
                 voice: 'alloy',
                 input_encoding: 'ulaw',
                 input_sample_rate_hz: 8000,

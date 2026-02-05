@@ -312,6 +312,9 @@ const EnvPage = () => {
         // AI Engine - API Keys
         'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY',
         'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID', 'GOOGLE_APPLICATION_CREDENTIALS',
+        // Email (SMTP)
+        'SMTP_HOST', 'SMTP_PORT', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'SMTP_TLS_MODE', 'SMTP_TLS_VERIFY',
+        'SMTP_TIMEOUT_SECONDS',
         // Local AI Server - Bind
         'LOCAL_WS_HOST', 'LOCAL_WS_PORT', 'LOCAL_WS_AUTH_TOKEN',
         // Local AI Server - Logging
@@ -607,6 +610,56 @@ const EnvPage = () => {
                             tooltip="Required for ElevenLabs Conversational AI mode."
                         />
                         {renderSecretInput('Resend API Key', 'RESEND_API_KEY', 're_...')}
+                        <div className="md:col-span-2 border-t border-border pt-4 mt-2">
+                            <div className="text-sm font-medium text-foreground mb-3">Email Delivery (SMTP)</div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="SMTP Host"
+                                    value={env['SMTP_HOST'] || ''}
+                                    onChange={(e) => updateEnv('SMTP_HOST', e.target.value)}
+                                    placeholder="smtp.yourcompany.com"
+                                    tooltip="If set, email tools can use SMTP (local mail server) instead of Resend."
+                                />
+                                <FormInput
+                                    label="SMTP Port"
+                                    type="number"
+                                    value={env['SMTP_PORT'] || ''}
+                                    onChange={(e) => updateEnv('SMTP_PORT', e.target.value)}
+                                    placeholder="587"
+                                    tooltip="587 for STARTTLS, 465 for SMTPS (implicit TLS). Leave blank for defaults."
+                                />
+                                <FormInput
+                                    label="SMTP Username (Optional)"
+                                    value={env['SMTP_USERNAME'] || ''}
+                                    onChange={(e) => updateEnv('SMTP_USERNAME', e.target.value)}
+                                    placeholder="username"
+                                />
+                                {renderSecretInput('SMTP Password (Optional)', 'SMTP_PASSWORD', 'password')}
+                                <FormSelect
+                                    label="SMTP TLS Mode"
+                                    options={[
+                                        { value: 'starttls', label: 'STARTTLS (recommended)' },
+                                        { value: 'smtps', label: 'SMTPS (implicit TLS)' },
+                                        { value: 'none', label: 'None (not recommended)' },
+                                    ]}
+                                    value={env['SMTP_TLS_MODE'] || 'starttls'}
+                                    onChange={(e) => updateEnv('SMTP_TLS_MODE', e.target.value)}
+                                />
+                                <FormSwitch
+                                    label="Verify TLS Certificates"
+                                    checked={isTrue(env['SMTP_TLS_VERIFY'] || 'true')}
+                                    onChange={(e) => updateEnv('SMTP_TLS_VERIFY', e.target.checked ? 'true' : 'false')}
+                                    description="Disable only for self-signed certs on trusted networks."
+                                />
+                                <FormInput
+                                    label="SMTP Timeout (Seconds)"
+                                    type="number"
+                                    value={env['SMTP_TIMEOUT_SECONDS'] || ''}
+                                    onChange={(e) => updateEnv('SMTP_TIMEOUT_SECONDS', e.target.value)}
+                                    placeholder="10"
+                                />
+                            </div>
+                        </div>
                         <FormInput
                             label="Google Service Account"
                             value={env['GOOGLE_APPLICATION_CREDENTIALS'] || ''}
