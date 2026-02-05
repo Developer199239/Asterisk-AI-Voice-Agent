@@ -863,13 +863,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     logger.debug("Failed to build turn_detection for GA", call_id=self._call_id, exc_info=True)
             audio_input["turn_detection"] = td_config
 
+            # GA: always request audio/pcm @ 24kHz output — engine transcodes downstream
+            # (audio/pcmu output may be silently ignored by some models)
             session: Dict[str, Any] = {
                 "type": "realtime",
                 "output_modalities": ["audio"],
                 "audio": {
                     "input": audio_input,
                     "output": {
-                        "format": {"type": out_fmt},
+                        "format": {"type": "audio/pcm", "rate": 24000},
                         "voice": self.config.voice,
                     },
                 },
@@ -2636,7 +2638,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             pass
         if self._is_ga:
-            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm"}}}}
+            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}}}}
         else:
             pcm_session = {"output_audio_format": "pcm16"}
         payload: Dict[str, Any] = {
