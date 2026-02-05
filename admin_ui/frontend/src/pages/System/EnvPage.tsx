@@ -296,6 +296,7 @@ const EnvPage = () => {
         // AI Engine - Asterisk
         'ASTERISK_HOST', 'ASTERISK_ARI_USERNAME', 'ASTERISK_ARI_PASSWORD',
         'ASTERISK_ARI_PORT', 'ASTERISK_ARI_SCHEME', 'ASTERISK_ARI_WEBSOCKET_SCHEME', 'ASTERISK_ARI_SSL_VERIFY',
+        'ASTERISK_APP_NAME', 'AST_MEDIA_DIR',
         // AI Engine - Diagnostics
         'DIAG_ENABLE_TAPS', 'DIAG_TAP_PRE_SECS', 'DIAG_TAP_POST_SECS', 'DIAG_TAP_OUTPUT_DIR',
         'DIAG_EGRESS_SWAP_MODE', 'DIAG_EGRESS_FORCE_MULAW', 'DIAG_ATTACK_MS',
@@ -318,7 +319,7 @@ const EnvPage = () => {
         // Local AI Server - Runtime
         'LOCAL_AI_MODE',
         // Local AI Server - STT backends
-        'LOCAL_STT_BACKEND', 'LOCAL_STT_MODEL_PATH',
+        'LOCAL_STT_BACKEND', 'LOCAL_STT_MODEL_PATH', 'LOCAL_STT_IDLE_TIMEOUT_MS',
         'KROKO_URL', 'KROKO_API_KEY', 'KROKO_LANGUAGE', 'KROKO_EMBEDDED', 'KROKO_MODEL_PATH', 'KROKO_PORT',
         'SHERPA_MODEL_PATH',
         'FASTER_WHISPER_MODEL', 'FASTER_WHISPER_DEVICE', 'FASTER_WHISPER_COMPUTE_TYPE', 'FASTER_WHISPER_LANGUAGE',
@@ -340,7 +341,13 @@ const EnvPage = () => {
         // System - Outbound Campaign
         'AAVA_OUTBOUND_EXTENSION_IDENTITY', 'AAVA_OUTBOUND_AMD_CONTEXT', 'AAVA_MEDIA_DIR', 'AAVA_VM_UPLOAD_MAX_BYTES',
         // Hidden/Internal (added to suppress from Other)
-        'COMPOSE_PROJECT_NAME', 'GREETING', 'AI_NAME', 'AI_ROLE', 'HOST_PROJECT_ROOT', 'PROJECT_ROOT', 'GPU_AVAILABLE'
+        'COMPOSE_PROJECT_NAME', 'GREETING', 'AI_GREETING', 'AI_NAME', 'AI_ROLE', 'HOST_PROJECT_ROOT', 'PROJECT_ROOT', 'GPU_AVAILABLE',
+        // Deprecated
+        'CARTESIA_API_KEY',
+        // Build-time only (docker build --build-arg, not runtime)
+        'INCLUDE_VOSK', 'INCLUDE_SHERPA', 'INCLUDE_FASTER_WHISPER', 'INCLUDE_WHISPER_CPP',
+        'INCLUDE_PIPER', 'INCLUDE_KOKORO', 'INCLUDE_MELOTTS', 'INCLUDE_LLAMA', 'INCLUDE_KROKO_EMBEDDED',
+        'LOCAL_FASTER_WHISPER_COMPUTE' // typo/legacy, use FASTER_WHISPER_COMPUTE_TYPE
     ];
 
     const otherSettings = Object.keys(env).filter(k => !knownKeys.includes(k));
@@ -526,6 +533,18 @@ const EnvPage = () => {
                                 </p>
                             </div>
                         )}
+                        <FormInput
+                            label="Stasis App Name"
+                            value={env['ASTERISK_APP_NAME'] || 'asterisk-ai-voice-agent'}
+                            onChange={(e) => updateEnv('ASTERISK_APP_NAME', e.target.value)}
+                            tooltip="Name of the Stasis application registered with Asterisk ARI."
+                        />
+                        <FormInput
+                            label="Media Directory"
+                            value={env['AST_MEDIA_DIR'] || '/mnt/asterisk_media/ai-generated'}
+                            onChange={(e) => updateEnv('AST_MEDIA_DIR', e.target.value)}
+                            tooltip="Directory for AI-generated audio files (playback fallback)."
+                        />
                     </div>
                     
                     {/* Test Connection Button */}
@@ -913,6 +932,13 @@ const EnvPage = () => {
                                 { value: 'sherpa', label: 'Sherpa-ONNX (Local)' },
                                 { value: 'faster_whisper', label: 'Faster Whisper (High Accuracy)' },
                             ]}
+                        />
+                        <FormInput
+                            label="Idle Timeout (ms)"
+                            type="number"
+                            value={env['LOCAL_STT_IDLE_TIMEOUT_MS'] || '3000'}
+                            onChange={(e) => updateEnv('LOCAL_STT_IDLE_TIMEOUT_MS', e.target.value)}
+                            tooltip="Time in milliseconds before finalizing speech after silence (default 3000ms)."
                         />
 
                         {/* Vosk Settings */}
