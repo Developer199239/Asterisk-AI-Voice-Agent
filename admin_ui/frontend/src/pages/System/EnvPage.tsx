@@ -292,31 +292,55 @@ const EnvPage = () => {
     );
 
     // Define known keys to exclude from "Other Variables"
-	    const knownKeys = [
-	        'ASTERISK_HOST', 'ASTERISK_ARI_USERNAME', 'ASTERISK_ARI_PASSWORD',
-	        'DIAG_ENABLE_TAPS', 'DIAG_TAP_PRE_SECS', 'DIAG_TAP_POST_SECS', 'DIAG_TAP_OUTPUT_DIR',
-	        'DIAG_EGRESS_SWAP_MODE', 'DIAG_EGRESS_FORCE_MULAW', 'DIAG_ATTACK_MS',
-	        'LOG_LEVEL', 'LOG_FORMAT', 'LOG_COLOR', 'LOG_SHOW_TRACEBACKS',
-	        'STREAMING_LOG_LEVEL', 'LOG_TO_FILE', 'LOG_FILE_PATH',
-	        'LOCAL_WS_URL', 'LOCAL_WS_CONNECT_TIMEOUT', 'LOCAL_WS_RESPONSE_TIMEOUT', 'LOCAL_WS_CHUNK_MS',
-	        'LOCAL_WS_HOST', 'LOCAL_WS_PORT', 'LOCAL_WS_AUTH_TOKEN',
-            'TZ',
-	        // STT backends
-	        'LOCAL_STT_BACKEND', 'LOCAL_STT_MODEL_PATH',
+    const knownKeys = [
+        // AI Engine - Asterisk
+        'ASTERISK_HOST', 'ASTERISK_ARI_USERNAME', 'ASTERISK_ARI_PASSWORD',
+        'ASTERISK_ARI_PORT', 'ASTERISK_ARI_SCHEME', 'ASTERISK_ARI_WEBSOCKET_SCHEME', 'ASTERISK_ARI_SSL_VERIFY',
+        // AI Engine - Diagnostics
+        'DIAG_ENABLE_TAPS', 'DIAG_TAP_PRE_SECS', 'DIAG_TAP_POST_SECS', 'DIAG_TAP_OUTPUT_DIR',
+        'DIAG_EGRESS_SWAP_MODE', 'DIAG_EGRESS_FORCE_MULAW', 'DIAG_ATTACK_MS',
+        // AI Engine - Logging
+        'LOG_LEVEL', 'LOG_FORMAT', 'LOG_COLOR', 'LOG_SHOW_TRACEBACKS',
+        'STREAMING_LOG_LEVEL', 'LOG_TO_FILE', 'LOG_FILE_PATH',
+        // AI Engine - Local AI Connection
+        'LOCAL_WS_URL', 'LOCAL_WS_CONNECT_TIMEOUT', 'LOCAL_WS_RESPONSE_TIMEOUT', 'LOCAL_WS_CHUNK_MS',
+        // AI Engine - Health Endpoint
+        'HEALTH_BIND_HOST', 'HEALTH_BIND_PORT', 'HEALTH_API_TOKEN',
+        // AI Engine - NAT/Hybrid Network
+        'AUDIOSOCKET_ADVERTISE_HOST', 'EXTERNAL_MEDIA_ADVERTISE_HOST',
+        // AI Engine - API Keys
+        'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY',
+        'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID', 'GOOGLE_APPLICATION_CREDENTIALS',
+        // Local AI Server - Bind
+        'LOCAL_WS_HOST', 'LOCAL_WS_PORT', 'LOCAL_WS_AUTH_TOKEN',
+        // Local AI Server - Logging
+        'LOCAL_LOG_LEVEL', 'LOCAL_DEBUG',
+        // Local AI Server - Runtime
+        'LOCAL_AI_MODE',
+        // Local AI Server - STT backends
+        'LOCAL_STT_BACKEND', 'LOCAL_STT_MODEL_PATH',
         'KROKO_URL', 'KROKO_API_KEY', 'KROKO_LANGUAGE', 'KROKO_EMBEDDED', 'KROKO_MODEL_PATH', 'KROKO_PORT',
         'SHERPA_MODEL_PATH',
-        // TTS backends
+        'FASTER_WHISPER_MODEL', 'FASTER_WHISPER_DEVICE', 'FASTER_WHISPER_COMPUTE_TYPE', 'FASTER_WHISPER_LANGUAGE',
+        // Local AI Server - TTS backends
         'LOCAL_TTS_BACKEND', 'LOCAL_TTS_MODEL_PATH',
-        'KOKORO_VOICE', 'KOKORO_LANG', 'KOKORO_MODEL_PATH',
-        // LLM
+        'KOKORO_VOICE', 'KOKORO_LANG', 'KOKORO_MODEL_PATH', 'KOKORO_MODE', 'KOKORO_API_BASE_URL', 'KOKORO_API_KEY',
+        'MELOTTS_VOICE', 'MELOTTS_DEVICE', 'MELOTTS_SPEED',
+        // Local AI Server - LLM
         'LOCAL_LLM_MODEL_PATH', 'LOCAL_LLM_THREADS',
         'LOCAL_LLM_CONTEXT', 'LOCAL_LLM_BATCH', 'LOCAL_LLM_MAX_TOKENS', 'LOCAL_LLM_TEMPERATURE', 'LOCAL_LLM_INFER_TIMEOUT_SEC',
-        // Other
-        'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID', 'JWT_SECRET',
-        'AI_NAME', 'AI_ROLE', 'ASTERISK_ARI_PORT', 'ASTERISK_ARI_WEBSOCKET_SCHEME',
+        'LOCAL_LLM_GPU_LAYERS', 'LOCAL_LLM_TOP_P', 'LOCAL_LLM_REPEAT_PENALTY', 'LOCAL_LLM_USE_MLOCK',
+        // System - General
+        'TZ', 'JWT_SECRET', 'UVICORN_HOST', 'UVICORN_PORT',
         'HEALTH_CHECK_LOCAL_AI_URL', 'HEALTH_CHECK_AI_ENGINE_URL',
-        // Admin UI
-        'UVICORN_HOST', 'UVICORN_PORT'
+        // System - Container Permissions
+        'ASTERISK_UID', 'ASTERISK_GID', 'DOCKER_GID',
+        // System - Call History
+        'CALL_HISTORY_ENABLED', 'CALL_HISTORY_RETENTION_DAYS', 'CALL_HISTORY_DB_PATH',
+        // System - Outbound Campaign
+        'AAVA_OUTBOUND_EXTENSION_IDENTITY', 'AAVA_OUTBOUND_AMD_CONTEXT', 'AAVA_MEDIA_DIR', 'AAVA_VM_UPLOAD_MAX_BYTES',
+        // Hidden/Internal (added to suppress from Other)
+        'COMPOSE_PROJECT_NAME', 'GREETING', 'AI_NAME', 'AI_ROLE', 'HOST_PROJECT_ROOT', 'PROJECT_ROOT', 'GPU_AVAILABLE'
     ];
 
     const otherSettings = Object.keys(env).filter(k => !knownKeys.includes(k));
@@ -565,8 +589,63 @@ const EnvPage = () => {
                             tooltip="Required for ElevenLabs Conversational AI mode."
                         />
                         {renderSecretInput('Resend API Key', 'RESEND_API_KEY', 're_...')}
+                        <FormInput
+                            label="Google Service Account"
+                            value={env['GOOGLE_APPLICATION_CREDENTIALS'] || ''}
+                            onChange={(e) => updateEnv('GOOGLE_APPLICATION_CREDENTIALS', e.target.value)}
+                            placeholder="/path/to/service-account-key.json"
+                            tooltip="Path to Google Cloud service account JSON key file (alternative to API key)."
+                        />
                     </div>
                     </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Health Endpoint */}
+                    <ConfigSection title="Health Endpoint" description="Settings for the AI Engine health/metrics endpoint.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="Bind Host"
+                                    value={env['HEALTH_BIND_HOST'] || '127.0.0.1'}
+                                    onChange={(e) => updateEnv('HEALTH_BIND_HOST', e.target.value)}
+                                    placeholder="127.0.0.1"
+                                    tooltip="Use 0.0.0.0 for remote monitoring access."
+                                />
+                                <FormInput
+                                    label="Bind Port"
+                                    type="number"
+                                    value={env['HEALTH_BIND_PORT'] || '15000'}
+                                    onChange={(e) => updateEnv('HEALTH_BIND_PORT', e.target.value)}
+                                    placeholder="15000"
+                                />
+                                {renderSecretInput('API Token', 'HEALTH_API_TOKEN', 'Required for remote access to sensitive endpoints')}
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* NAT/Hybrid Network */}
+                    <ConfigSection title="NAT / Hybrid Network" description="Use when AI Engine is behind NAT and Asterisk is remote.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="AudioSocket Advertise Host"
+                                    value={env['AUDIOSOCKET_ADVERTISE_HOST'] || ''}
+                                    onChange={(e) => updateEnv('AUDIOSOCKET_ADVERTISE_HOST', e.target.value)}
+                                    placeholder="10.8.0.5"
+                                    tooltip="IP address Asterisk can reach for AudioSocket (VPN IP, public IP, LAN IP)."
+                                />
+                                <FormInput
+                                    label="ExternalMedia Advertise Host"
+                                    value={env['EXTERNAL_MEDIA_ADVERTISE_HOST'] || ''}
+                                    onChange={(e) => updateEnv('EXTERNAL_MEDIA_ADVERTISE_HOST', e.target.value)}
+                                    placeholder="10.8.0.5"
+                                    tooltip="IP address Asterisk can reach for ExternalMedia RTP."
+                                />
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-3">
+                                Leave blank if AI Engine and Asterisk are on the same network.
+                            </p>
+                        </ConfigCard>
                     </ConfigSection>
 
                     {/* Local AI Server Connection (Client-side) */}
@@ -784,6 +863,42 @@ const EnvPage = () => {
                         </ConfigCard>
                     </ConfigSection>
 
+                    {/* Runtime & Logging */}
+                    <ConfigSection title="Runtime & Logging" description="Server mode and logging configuration.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormSelect
+                                    label="Runtime Mode"
+                                    value={env['LOCAL_AI_MODE'] || 'full'}
+                                    onChange={(e) => updateEnv('LOCAL_AI_MODE', e.target.value)}
+                                    options={[
+                                        { value: 'full', label: 'Full (Preload STT + LLM + TTS)' },
+                                        { value: 'minimal', label: 'Minimal (Skip LLM preload)' },
+                                    ]}
+                                    tooltip="Use minimal for faster startup and lower memory when LLM is not needed."
+                                />
+                                <FormSelect
+                                    label="Log Level"
+                                    value={(env['LOCAL_LOG_LEVEL'] || 'INFO').toUpperCase()}
+                                    onChange={(e) => updateEnv('LOCAL_LOG_LEVEL', e.target.value)}
+                                    options={[
+                                        { value: 'DEBUG', label: 'Debug' },
+                                        { value: 'INFO', label: 'Info' },
+                                        { value: 'WARNING', label: 'Warning' },
+                                        { value: 'ERROR', label: 'Error' },
+                                    ]}
+                                />
+                                <FormSwitch
+                                    id="local-debug"
+                                    label="Verbose Audio Debug"
+                                    description="Enable detailed audio processing logs (high volume)."
+                                    checked={isTrue(env['LOCAL_DEBUG'])}
+                                    onChange={(e) => updateEnv('LOCAL_DEBUG', e.target.checked ? '1' : '0')}
+                                />
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
+
                     {/* STT Backend Settings */}
                     <ConfigSection title="STT (Speech-to-Text)" description="Speech recognition model and backend settings.">
                         <ConfigCard>
@@ -796,6 +911,7 @@ const EnvPage = () => {
                                 { value: 'vosk', label: 'Vosk (Local)' },
                                 { value: 'kroko', label: 'Kroko (Cloud/Embedded)' },
                                 { value: 'sherpa', label: 'Sherpa-ONNX (Local)' },
+                                { value: 'faster_whisper', label: 'Faster Whisper (High Accuracy)' },
                             ]}
                         />
 
@@ -865,6 +981,52 @@ const EnvPage = () => {
                                 onChange={(e) => updateEnv('SHERPA_MODEL_PATH', e.target.value)}
                             />
                         )}
+
+                        {/* Faster Whisper Settings */}
+                        {env['LOCAL_STT_BACKEND'] === 'faster_whisper' && (
+                            <>
+                                <FormSelect
+                                    label="Model Size"
+                                    value={env['FASTER_WHISPER_MODEL'] || 'base'}
+                                    onChange={(e) => updateEnv('FASTER_WHISPER_MODEL', e.target.value)}
+                                    options={[
+                                        { value: 'tiny', label: 'Tiny (Fastest)' },
+                                        { value: 'base', label: 'Base' },
+                                        { value: 'small', label: 'Small' },
+                                        { value: 'medium', label: 'Medium' },
+                                        { value: 'large-v2', label: 'Large v2' },
+                                        { value: 'large-v3', label: 'Large v3 (Best)' },
+                                    ]}
+                                />
+                                <FormSelect
+                                    label="Device"
+                                    value={env['FASTER_WHISPER_DEVICE'] || 'cpu'}
+                                    onChange={(e) => updateEnv('FASTER_WHISPER_DEVICE', e.target.value)}
+                                    options={[
+                                        { value: 'cpu', label: 'CPU' },
+                                        { value: 'cuda', label: 'CUDA (GPU)' },
+                                        { value: 'auto', label: 'Auto' },
+                                    ]}
+                                />
+                                <FormSelect
+                                    label="Compute Type"
+                                    value={env['FASTER_WHISPER_COMPUTE_TYPE'] || 'int8'}
+                                    onChange={(e) => updateEnv('FASTER_WHISPER_COMPUTE_TYPE', e.target.value)}
+                                    options={[
+                                        { value: 'int8', label: 'INT8 (Fastest)' },
+                                        { value: 'float16', label: 'Float16' },
+                                        { value: 'float32', label: 'Float32 (Best)' },
+                                    ]}
+                                />
+                                <FormInput
+                                    label="Language"
+                                    value={env['FASTER_WHISPER_LANGUAGE'] || 'en'}
+                                    onChange={(e) => updateEnv('FASTER_WHISPER_LANGUAGE', e.target.value)}
+                                    placeholder="en"
+                                    tooltip="Language code (e.g., en, es, fr, de)"
+                                />
+                            </>
+                        )}
                             </div>
                         </ConfigCard>
                     </ConfigSection>
@@ -880,6 +1042,7 @@ const EnvPage = () => {
                             options={[
                                 { value: 'piper', label: 'Piper (Local)' },
                                 { value: 'kokoro', label: 'Kokoro (Local, Premium)' },
+                                { value: 'melotts', label: 'MeloTTS (CPU-Optimized)' },
                             ]}
                         />
 
@@ -960,6 +1123,41 @@ const EnvPage = () => {
                                 )}
                             </>
                         )}
+
+                        {/* MeloTTS Settings */}
+                        {env['LOCAL_TTS_BACKEND'] === 'melotts' && (
+                            <>
+                                <FormSelect
+                                    label="Voice"
+                                    value={env['MELOTTS_VOICE'] || 'EN-US'}
+                                    onChange={(e) => updateEnv('MELOTTS_VOICE', e.target.value)}
+                                    options={[
+                                        { value: 'EN-US', label: 'American English' },
+                                        { value: 'EN-BR', label: 'British English' },
+                                        { value: 'EN-AU', label: 'Australian English' },
+                                        { value: 'EN-IN', label: 'Indian English' },
+                                        { value: 'EN-Default', label: 'Default English' },
+                                    ]}
+                                />
+                                <FormSelect
+                                    label="Device"
+                                    value={env['MELOTTS_DEVICE'] || 'cpu'}
+                                    onChange={(e) => updateEnv('MELOTTS_DEVICE', e.target.value)}
+                                    options={[
+                                        { value: 'cpu', label: 'CPU' },
+                                        { value: 'cuda', label: 'CUDA (GPU)' },
+                                    ]}
+                                />
+                                <FormInput
+                                    label="Speed"
+                                    type="number"
+                                    step="0.1"
+                                    value={env['MELOTTS_SPEED'] || '1.0'}
+                                    onChange={(e) => updateEnv('MELOTTS_SPEED', e.target.value)}
+                                    tooltip="Speech speed (1.0 = normal)"
+                                />
+                            </>
+                        )}
                             </div>
                         </ConfigCard>
                     </ConfigSection>
@@ -1011,6 +1209,44 @@ const EnvPage = () => {
                                     type="number"
                                     value={env['LOCAL_LLM_INFER_TIMEOUT_SEC'] || '30'}
                                     onChange={(e) => updateEnv('LOCAL_LLM_INFER_TIMEOUT_SEC', e.target.value)}
+                                />
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Advanced LLM Settings */}
+                    <ConfigSection title="Advanced LLM Settings" description="GPU acceleration and fine-tuning parameters.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="GPU Layers"
+                                    type="number"
+                                    value={env['LOCAL_LLM_GPU_LAYERS'] || '0'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_GPU_LAYERS', e.target.value)}
+                                    tooltip="0=CPU only, -1=Auto-detect GPU, N=Offload N layers to GPU"
+                                />
+                                <FormInput
+                                    label="Top P"
+                                    type="number"
+                                    step="0.01"
+                                    value={env['LOCAL_LLM_TOP_P'] || '0.85'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_TOP_P', e.target.value)}
+                                    tooltip="Nucleus sampling (0.8-0.95)"
+                                />
+                                <FormInput
+                                    label="Repeat Penalty"
+                                    type="number"
+                                    step="0.01"
+                                    value={env['LOCAL_LLM_REPEAT_PENALTY'] || '1.05'}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_REPEAT_PENALTY', e.target.value)}
+                                    tooltip="Repetition penalty (1.0-1.2)"
+                                />
+                                <FormSwitch
+                                    id="llm-mlock"
+                                    label="Lock Model in RAM"
+                                    description="Prevent model from being swapped to disk (requires privileges)."
+                                    checked={isTrue(env['LOCAL_LLM_USE_MLOCK'])}
+                                    onChange={(e) => updateEnv('LOCAL_LLM_USE_MLOCK', e.target.checked ? '1' : '0')}
                                 />
                             </div>
                         </ConfigCard>
@@ -1092,6 +1328,101 @@ const EnvPage = () => {
                                     value={env['HEALTH_CHECK_AI_ENGINE_URL'] || 'http://ai_engine:15000/health'}
                                     onChange={(e) => updateEnv('HEALTH_CHECK_AI_ENGINE_URL', e.target.value)}
                                     placeholder="http://ai_engine:15000/health"
+                                />
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Call History */}
+                    <ConfigSection title="Call History" description="Settings for call history persistence and retention.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormSwitch
+                                    id="call-history-enabled"
+                                    label="Enable Call History"
+                                    description="Record call history for debugging and analytics."
+                                    checked={isTrue(env['CALL_HISTORY_ENABLED'])}
+                                    onChange={(e) => updateEnv('CALL_HISTORY_ENABLED', e.target.checked ? 'true' : 'false')}
+                                />
+                                <FormInput
+                                    label="Retention Days"
+                                    type="number"
+                                    value={env['CALL_HISTORY_RETENTION_DAYS'] || '0'}
+                                    onChange={(e) => updateEnv('CALL_HISTORY_RETENTION_DAYS', e.target.value)}
+                                    tooltip="0 = unlimited (keep forever)"
+                                />
+                                <div className="col-span-full">
+                                    <FormInput
+                                        label="Database Path"
+                                        value={env['CALL_HISTORY_DB_PATH'] || 'data/call_history.db'}
+                                        onChange={(e) => updateEnv('CALL_HISTORY_DB_PATH', e.target.value)}
+                                        placeholder="data/call_history.db"
+                                    />
+                                </div>
+                            </div>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Outbound Campaign */}
+                    <ConfigSection title="Outbound Campaign (Alpha)" description="Settings for outbound calling campaigns.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="Extension Identity"
+                                    value={env['AAVA_OUTBOUND_EXTENSION_IDENTITY'] || '6789'}
+                                    onChange={(e) => updateEnv('AAVA_OUTBOUND_EXTENSION_IDENTITY', e.target.value)}
+                                    tooltip="Extension used for FreePBX routing (sets AMPUSER + CALLERID)."
+                                />
+                                <FormInput
+                                    label="AMD Context"
+                                    value={env['AAVA_OUTBOUND_AMD_CONTEXT'] || 'aava-outbound-amd'}
+                                    onChange={(e) => updateEnv('AAVA_OUTBOUND_AMD_CONTEXT', e.target.value)}
+                                    tooltip="Dialplan context for AMD hop."
+                                />
+                                <FormInput
+                                    label="Media Directory"
+                                    value={env['AAVA_MEDIA_DIR'] || '/mnt/asterisk_media/ai-generated'}
+                                    onChange={(e) => updateEnv('AAVA_MEDIA_DIR', e.target.value)}
+                                    tooltip="Directory for voicemail drop and consent prompts."
+                                />
+                                <FormInput
+                                    label="Upload Max Bytes"
+                                    type="number"
+                                    value={env['AAVA_VM_UPLOAD_MAX_BYTES'] || '12582912'}
+                                    onChange={(e) => updateEnv('AAVA_VM_UPLOAD_MAX_BYTES', e.target.value)}
+                                    tooltip="Maximum upload size for recordings (default 12MB)."
+                                />
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-3">
+                                <strong>Note:</strong> Outbound calling is managed from Admin UI → Call Scheduling.
+                            </p>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Container Permissions */}
+                    <ConfigSection title="Container Permissions" description="User/group IDs for container permission alignment.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <FormInput
+                                    label="Asterisk UID"
+                                    type="number"
+                                    value={env['ASTERISK_UID'] || '995'}
+                                    onChange={(e) => updateEnv('ASTERISK_UID', e.target.value)}
+                                    tooltip="User ID of asterisk user on host (detect with: id -u asterisk)"
+                                />
+                                <FormInput
+                                    label="Asterisk GID"
+                                    type="number"
+                                    value={env['ASTERISK_GID'] || '995'}
+                                    onChange={(e) => updateEnv('ASTERISK_GID', e.target.value)}
+                                    tooltip="Group ID of asterisk group on host (detect with: id -g asterisk)"
+                                />
+                                <FormInput
+                                    label="Docker GID"
+                                    type="number"
+                                    value={env['DOCKER_GID'] || '999'}
+                                    onChange={(e) => updateEnv('DOCKER_GID', e.target.value)}
+                                    tooltip="Docker socket group ID (detect with: stat -c '%g' /var/run/docker.sock)"
                                 />
                             </div>
                         </ConfigCard>
