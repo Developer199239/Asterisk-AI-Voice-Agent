@@ -645,7 +645,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                                 "type": "response.create",
                                 "event_id": f"resp-farewell-{uuid.uuid4()}",
                                 "response": {
-                                    "modalities": output_modalities,
+                                    self._modalities_key: output_modalities,
                                     "instructions": (
                                         "Say the following sentence to the user exactly, then stop. "
                                         f"Do not call any tools: {farewell_text}"
@@ -789,6 +789,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             session["type"] = "realtime"
         return session
 
+    @property
+    def _modalities_key(self) -> str:
+        """GA uses 'output_modalities'; Beta uses 'modalities'."""
+        return "output_modalities" if self._is_ga else "modalities"
+
     def _build_ws_url(self) -> str:
         base = (self.config.base_url or "").strip()
         # Fallback if unresolved placeholders exist or scheme isn't ws/wss
@@ -826,7 +831,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
-            "modalities": output_modalities,
+            self._modalities_key: output_modalities,
             "input_audio_format": in_fmt,
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
@@ -859,8 +864,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         
         # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
         # Only override if explicitly configured in YAML
-        # OpenAI's defaults are tuned for their audio processing pipeline
-        if getattr(self.config, "turn_detection", None):
+        # GA API does not accept turn_detection in session.update; Beta does.
+        if not self._is_ga and getattr(self.config, "turn_detection", None):
             try:
                 td = self.config.turn_detection
                 session["turn_detection"] = {
@@ -877,8 +882,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 )
             except Exception:
                 logger.debug("Failed to include turn_detection in session.update", call_id=self._call_id, exc_info=True)
-        # If not configured, DON'T SET IT - let OpenAI use optimized defaults
-        # This prevents us from interfering with OpenAI's audio processing
+        # If not configured or GA mode, DON'T SET IT - let OpenAI use optimized defaults
 
         # Build instructions with audio-forcing prefix
         # CRITICAL: Per OpenAI community reports (Dec 2024), the Realtime API has a bug
@@ -941,15 +945,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             call_id=self._call_id
         )
         
-        # Disable VAD before greeting
-        disable_vad_payload: Dict[str, Any] = {
-            "type": "session.update",
-            "event_id": f"sess-disable-vad-{uuid.uuid4()}",
-            "session": self._ga_session_type({
-                "turn_detection": None  # Disable automatic VAD
-            })
-        }
-        await self._send_json(disable_vad_payload)
+        # Disable VAD before greeting (Beta only - GA doesn't accept turn_detection)
+        if not self._is_ga:
+            disable_vad_payload: Dict[str, Any] = {
+                "type": "session.update",
+                "event_id": f"sess-disable-vad-{uuid.uuid4()}",
+                "session": self._ga_session_type({
+                    "turn_detection": None  # Disable automatic VAD
+                })
+            }
+            await self._send_json(disable_vad_payload)
         
         # Small delay to ensure VAD disable is processed
         await asyncio.sleep(0.1)
@@ -962,7 +967,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                "modalities": output_modalities,
+                self._modalities_key: output_modalities,
                 # Simple instruction that was working before
                 "instructions": f"Please greet the user with the following: {greeting}",
                 "input": [],  # Empty input to avoid distractions
@@ -1026,27 +1031,34 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 logger.debug("Failed to build turn_detection config, using OpenAI defaults", 
                            call_id=self._call_id, exc_info=True)
         
-        # If no config in YAML, let OpenAI use its defaults by not setting the field
-        # This is better than hardcoding default values
-        session_update = {}
-        if turn_detection_config:
-            session_update["turn_detection"] = turn_detection_config
+        # GA API does not accept turn_detection in session.update; skip entirely
+        if self._is_ga:
+            logger.info(
+                "🔊 GA mode: skipping turn_detection re-enable (server manages VAD)",
+                call_id=self._call_id,
+            )
         else:
-            # Use OpenAI's default server_vad configuration
-            session_update["turn_detection"] = {"type": "server_vad"}
-        
-        enable_vad_payload: Dict[str, Any] = {
-            "type": "session.update",
-            "event_id": f"sess-enable-vad-{uuid.uuid4()}",
-            "session": self._ga_session_type(session_update)
-        }
-        
-        await self._send_json(enable_vad_payload)
-        logger.info(
-            "🔊 Turn_detection re-enabled after greeting",
-            call_id=self._call_id,
-            config=turn_detection_config if turn_detection_config else "OpenAI defaults"
-        )
+            # If no config in YAML, let OpenAI use its defaults by not setting the field
+            # This is better than hardcoding default values
+            session_update = {}
+            if turn_detection_config:
+                session_update["turn_detection"] = turn_detection_config
+            else:
+                # Use OpenAI's default server_vad configuration
+                session_update["turn_detection"] = {"type": "server_vad"}
+            
+            enable_vad_payload: Dict[str, Any] = {
+                "type": "session.update",
+                "event_id": f"sess-enable-vad-{uuid.uuid4()}",
+                "session": self._ga_session_type(session_update)
+            }
+            
+            await self._send_json(enable_vad_payload)
+            logger.info(
+                "🔊 Turn_detection re-enabled after greeting",
+                call_id=self._call_id,
+                config=turn_detection_config if turn_detection_config else "OpenAI defaults"
+            )
 
     async def _ensure_response_request(self):
         if self._pending_response or not self.websocket or self.websocket.state.name != "OPEN":
@@ -1056,8 +1068,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                # Use 'modalities' which is accepted by server
-                "modalities": [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"],
+                self._modalities_key: [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"],
                 "metadata": {"call_id": self._call_id},
             },
         }
