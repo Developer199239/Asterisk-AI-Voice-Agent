@@ -829,9 +829,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             in_fmt = _ga_audio_fmt(input_enc)
             out_fmt = _ga_audio_fmt(output_enc)
 
-            # GA requires rate in format object
-            in_rate = getattr(self.config, "provider_input_sample_rate_hz", 24000)
-            out_rate = getattr(self.config, "output_sample_rate_hz", 24000)
+            # GA requires minimum 24000 Hz for both input and output
+            in_rate = max(getattr(self.config, "provider_input_sample_rate_hz", 24000), 24000)
+            out_rate = max(getattr(self.config, "output_sample_rate_hz", 24000), 24000)
 
             audio_input: Dict[str, Any] = {
                 "format": {"type": in_fmt, "rate": in_rate},
