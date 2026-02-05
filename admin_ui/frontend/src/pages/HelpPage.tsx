@@ -261,21 +261,27 @@ const HelpPage = () => {
                                     <Loader2 className="w-8 h-8 animate-spin text-primary" />
                                 </div>
                             ) : selectedDoc ? (
-                                <article className="prose prose-invert prose-sm max-w-none
-                                    prose-headings:text-foreground
-                                    prose-h1:text-2xl prose-h1:font-bold prose-h1:mb-4
-                                    prose-h2:text-xl prose-h2:font-semibold prose-h2:mt-6 prose-h2:mb-3
-                                    prose-h3:text-lg prose-h3:font-medium prose-h3:mt-4 prose-h3:mb-2
-                                    prose-p:text-muted-foreground prose-p:leading-relaxed
-                                    prose-a:text-primary prose-a:no-underline hover:prose-a:underline
-                                    prose-code:bg-accent prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:before:content-none prose-code:after:content-none
-                                    prose-pre:bg-accent prose-pre:border prose-pre:border-border prose-pre:rounded-lg
-                                    prose-ul:text-muted-foreground prose-ol:text-muted-foreground
-                                    prose-li:marker:text-muted-foreground
-                                    prose-table:text-sm
-                                    prose-th:bg-accent prose-th:px-3 prose-th:py-2 prose-th:text-left prose-th:font-medium
-                                    prose-td:px-3 prose-td:py-2 prose-td:border-t prose-td:border-border
-                                    prose-blockquote:border-l-primary prose-blockquote:text-muted-foreground
+                                <article className="prose prose-slate dark:prose-invert prose-base max-w-none
+                                    prose-headings:text-foreground prose-headings:font-semibold
+                                    prose-h1:text-2xl prose-h1:font-bold prose-h1:mb-4 prose-h1:mt-0
+                                    prose-h2:text-xl prose-h2:font-semibold prose-h2:mt-8 prose-h2:mb-4 prose-h2:pb-2 prose-h2:border-b prose-h2:border-border
+                                    prose-h3:text-lg prose-h3:font-semibold prose-h3:mt-6 prose-h3:mb-3
+                                    prose-h4:text-base prose-h4:font-medium prose-h4:mt-4 prose-h4:mb-2
+                                    prose-p:text-foreground/90 prose-p:leading-7 prose-p:my-4
+                                    prose-strong:text-foreground prose-strong:font-semibold
+                                    prose-a:text-primary prose-a:font-medium prose-a:no-underline hover:prose-a:underline
+                                    prose-code:bg-zinc-800 prose-code:text-amber-200 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
+                                    prose-pre:bg-zinc-900 prose-pre:text-zinc-100 prose-pre:border prose-pre:border-zinc-700 prose-pre:rounded-lg prose-pre:my-4 prose-pre:overflow-x-auto
+                                    prose-ul:text-foreground/90 prose-ul:my-4 prose-ul:pl-6
+                                    prose-ol:text-foreground/90 prose-ol:my-4 prose-ol:pl-6
+                                    prose-li:text-foreground/90 prose-li:my-1 prose-li:marker:text-foreground/60
+                                    prose-table:text-sm prose-table:my-4
+                                    prose-thead:border-b prose-thead:border-border
+                                    prose-th:bg-muted prose-th:text-foreground prose-th:px-4 prose-th:py-3 prose-th:text-left prose-th:font-semibold
+                                    prose-td:px-4 prose-td:py-3 prose-td:border-t prose-td:border-border prose-td:text-foreground/90
+                                    prose-blockquote:border-l-4 prose-blockquote:border-primary prose-blockquote:bg-muted/50 prose-blockquote:px-4 prose-blockquote:py-2 prose-blockquote:my-4 prose-blockquote:text-foreground/80 prose-blockquote:italic
+                                    prose-hr:border-border prose-hr:my-8
+                                    prose-img:rounded-lg prose-img:my-4
                                 ">
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                         {selectedDoc.content}
