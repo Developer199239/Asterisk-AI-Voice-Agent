@@ -819,43 +819,61 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         input_enc = (getattr(self.config, "provider_input_encoding", None) or "linear16").lower()
 
         if self._is_ga:
-            # GA API: verified working schema from Voximplant GA example
-            # - voice under audio.output.voice
+            # GA API: exact schema from official OpenAI API reference (session.created example)
+            # - format objects under audio.input.format / audio.output.format with type + rate
+            # - turn_detection under audio.input.turn_detection
             # - transcription under audio.input.transcription
-            # - turn_detection at session level (NOT under audio.input)
-            # - NO format objects needed (auto-negotiated)
-            session: Dict[str, Any] = {
-                "type": "realtime",
-                "audio": {
-                    "output": {
-                        "voice": self.config.voice,
-                    },
-                    "input": {
-                        "transcription": {
-                            "model": "whisper-1",
-                        },
-                    },
-                },
+            # - voice under audio.output.voice
+            # - MIME format types: audio/pcm (24kHz), audio/pcmu (8kHz), audio/pcma (8kHz)
+            def _ga_audio_fmt(enc: str) -> str:
+                enc = enc.lower()
+                if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    return "audio/pcmu"
+                elif enc in ("alaw", "g711_alaw"):
+                    return "audio/pcma"
+                return "audio/pcm"
+
+            in_fmt = _ga_audio_fmt(input_enc)
+            out_fmt = _ga_audio_fmt(output_enc)
+            # Rate is tied to format: audio/pcm=24000, audio/pcmu=8000, audio/pcma=8000
+            in_rate = 8000 if in_fmt in ("audio/pcmu", "audio/pcma") else 24000
+            out_rate = 8000 if out_fmt in ("audio/pcmu", "audio/pcma") else 24000
+
+            # Build audio.input with turn_detection nested inside
+            audio_input: Dict[str, Any] = {
+                "format": {"type": in_fmt, "rate": in_rate},
+                "transcription": {"model": "whisper-1"},
             }
-            # GA: turn_detection at session level (same as Beta)
+            # turn_detection lives under audio.input per official GA schema
+            td_config: Dict[str, Any] = {
+                "type": "server_vad",
+                "create_response": True,
+                "interrupt_response": True,
+            }
             if getattr(self.config, "turn_detection", None):
                 try:
                     td = self.config.turn_detection
-                    session["turn_detection"] = {
+                    td_config.update({
                         "type": td.type,
                         "silence_duration_ms": td.silence_duration_ms,
                         "threshold": td.threshold,
                         "prefix_padding_ms": td.prefix_padding_ms,
-                        "create_response": True,
-                    }
+                    })
                 except Exception:
                     logger.debug("Failed to build turn_detection for GA", call_id=self._call_id, exc_info=True)
-            else:
-                # Default server_vad if not configured
-                session["turn_detection"] = {
-                    "type": "server_vad",
-                    "create_response": True,
-                }
+            audio_input["turn_detection"] = td_config
+
+            session: Dict[str, Any] = {
+                "type": "realtime",
+                "output_modalities": ["audio"],
+                "audio": {
+                    "input": audio_input,
+                    "output": {
+                        "format": {"type": out_fmt, "rate": out_rate},
+                        "voice": self.config.voice,
+                    },
+                },
+            }
         else:
             # Beta API: flat format strings (pcm16, g711_ulaw, g711_alaw)
             def _beta_audio_fmt(enc: str) -> str:
@@ -2616,9 +2634,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             pass
         if self._is_ga:
-            # GA auto-negotiates format; skip format override
-            logger.info("GA mode: skipping PCM switch (format auto-negotiated)", call_id=call_id)
-            return
+            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}}}}
         else:
             pcm_session = {"output_audio_format": "pcm16"}
         payload: Dict[str, Any] = {
