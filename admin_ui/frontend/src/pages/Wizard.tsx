@@ -2442,13 +2442,13 @@ const Wizard = () => {
                                                         if (res.data.restart_required) {
                                                             if (confirm('New provider detected. A full restart is needed. Restart now?')) {
                                                                 showToast('Restarting AI Engine...', 'success');
-                                                                const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false');
+                                                                const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false&recreate=true');
                                                                 if (restartRes.data?.status === 'warning') {
                                                                     const confirmForce = confirm(
                                                                         `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`
                                                                     );
                                                                     if (confirmForce) {
-                                                                        await axios.post('/api/system/containers/ai_engine/restart?force=true');
+                                                                        await axios.post('/api/system/containers/ai_engine/restart?force=true&recreate=true');
                                                                         showToast('AI Engine restarted!', 'success');
                                                                     } else {
                                                                         showToast('Restart skipped due to active calls.', 'warning');
@@ -2623,13 +2623,13 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                                     // New provider needs full restart
                                                     if (confirm('New provider detected. A full restart is needed to load it. Restart now?')) {
                                                         showToast('Restarting AI Engine...', 'success');
-                                                        const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false');
+                                                        const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false&recreate=true');
                                                         if (restartRes.data?.status === 'warning') {
                                                             const confirmForce = confirm(
                                                                 `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`
                                                             );
                                                             if (confirmForce) {
-                                                                await axios.post('/api/system/containers/ai_engine/restart?force=true');
+                                                                await axios.post('/api/system/containers/ai_engine/restart?force=true&recreate=true');
                                                                 showToast('AI Engine restarted! New provider is now available.', 'success');
                                                             } else {
                                                                 showToast('Restart skipped due to active calls. Restart later to use new provider.', 'warning');
