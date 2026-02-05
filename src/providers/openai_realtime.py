@@ -813,27 +813,22 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_modalities = ["audio"]
 
         # CRITICAL FIX: Use output_encoding (what OpenAI sends), NOT target_encoding (downstream format)
-        # OpenAI should send in the configured output_encoding, which we then transcode to target_encoding.
-        # Server expects a string token for output_audio_format (e.g., 'pcm16', 'g711_ulaw').
         output_enc = (self.config.output_encoding or "linear16").lower()
-        if output_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            out_fmt = "g711_ulaw"
-        else:
-            out_fmt = "pcm16"
-        
-        # Map provider_input_encoding to OpenAI's input_audio_format
-        # provider_input_encoding = what WE send TO OpenAI
         input_enc = (getattr(self.config, "provider_input_encoding", None) or "linear16").lower()
-        if input_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            in_fmt = "g711_ulaw"
-        elif input_enc in ("alaw", "g711_alaw"):
-            in_fmt = "g711_alaw"
-        else:
-            in_fmt = "pcm16"
-        # Do not mutate local provider format state here; wait for session ACK/events
 
         if self._is_ga:
-            # GA API: nested audio structure, output_modalities (single value only)
+            # GA uses MIME-type format strings: audio/pcm, audio/pcmu, audio/pcma
+            def _ga_audio_fmt(enc: str) -> str:
+                enc = enc.lower()
+                if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    return "audio/pcmu"
+                elif enc in ("alaw", "g711_alaw"):
+                    return "audio/pcma"
+                return "audio/pcm"  # PCM16 linear
+
+            in_fmt = _ga_audio_fmt(input_enc)
+            out_fmt = _ga_audio_fmt(output_enc)
+
             audio_input: Dict[str, Any] = {
                 "format": {"type": in_fmt},
             }
@@ -863,7 +858,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 # GA does not accept input_audio_transcription at session level
             }
         else:
-            # Beta API: flat audio format fields, modalities accepts multiple
+            # Beta API: flat format strings (pcm16, g711_ulaw, g711_alaw)
+            def _beta_audio_fmt(enc: str) -> str:
+                enc = enc.lower()
+                if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    return "g711_ulaw"
+                elif enc in ("alaw", "g711_alaw"):
+                    return "g711_alaw"
+                return "pcm16"
+
+            in_fmt = _beta_audio_fmt(input_enc)
+            out_fmt = _beta_audio_fmt(output_enc)
+
             session: Dict[str, Any] = {
                 "modalities": output_modalities,
                 "input_audio_format": in_fmt,
@@ -2600,7 +2606,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             pass
         if self._is_ga:
-            pcm_session = {"audio": {"output": {"format": {"type": "pcm16"}}}}
+            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm"}}}}
         else:
             pcm_session = {"output_audio_format": "pcm16"}
         payload: Dict[str, Any] = {
