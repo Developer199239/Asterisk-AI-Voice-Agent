@@ -1528,9 +1528,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Modern event naming variants (top-level types)
         if event_type == "response.output_audio.delta":
+            # GA: audio is in event["delta"] as a base64 string, or event["audio"]
+            delta = event.get("delta")
             audio_b64 = (
                 event.get("audio")
-                or (event.get("delta") or {}).get("audio")
+                or (delta if isinstance(delta, str) else (delta or {}).get("audio"))
             )
             if audio_b64:
                 await self._handle_output_audio(audio_b64)
