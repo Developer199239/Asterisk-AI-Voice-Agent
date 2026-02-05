@@ -860,9 +860,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         "voice": self.config.voice,
                     },
                 },
-                "input_audio_transcription": {
-                    "model": "whisper-1"
-                },
+                # GA does not accept input_audio_transcription at session level
             }
         else:
             # Beta API: flat audio format fields, modalities accepts multiple

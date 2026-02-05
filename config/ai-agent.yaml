@@ -1143,7 +1143,7 @@ providers:
     instructions: You are a voice assistant. Always speak your responses out loud.
     max_response_output_tokens: 4096
     api_version: ga
-    model: gpt-realtime
+    model: gpt-4o-realtime-preview-2024-12-17
     organization: ''
     output_encoding: mulaw
     output_sample_rate_hz: 8000
