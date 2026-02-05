@@ -52,7 +52,7 @@ Add first-class support for OpenAI’s Realtime voice agents so users can swap b
   "type": "session.update",
   "session": {
     "type": "realtime",
-    "model": "gpt-4o-realtime-preview-2024-12-17",
+    "model": "gpt-realtime",
     "output_modalities": ["audio"],
     "audio": {
       "input": {

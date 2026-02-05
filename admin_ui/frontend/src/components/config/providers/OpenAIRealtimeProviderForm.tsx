@@ -43,6 +43,37 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                 </div>
             </div>
 
+            {/* API Version Section */}
+            <div>
+                <h4 className="font-semibold mb-3">API Version</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Realtime API Version</label>
+                        <select
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.api_version || 'ga'}
+                            onChange={(e) => {
+                                const version = e.target.value;
+                                const updates: any = { ...config, api_version: version };
+                                if (version === 'ga' && config.model?.includes('preview')) {
+                                    updates.model = 'gpt-realtime';
+                                } else if (version === 'beta' && !config.model?.includes('preview')) {
+                                    updates.model = 'gpt-4o-realtime-preview-2024-12-17';
+                                }
+                                onChange(updates);
+                            }}
+                        >
+                            <option value="ga">GA (recommended)</option>
+                            <option value="beta">Beta (legacy)</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">
+                            <strong>GA</strong> uses <code>gpt-realtime</code> models (no beta header).
+                            <strong className="ml-1">Beta</strong> uses <code>gpt-4o-realtime-preview</code> models with the <code>OpenAI-Beta</code> header.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             {/* Model & Voice Section */}
             <div>
                 <h4 className="font-semibold mb-3">Model & Voice</h4>
@@ -51,23 +82,34 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                         <label className="text-sm font-medium">Model</label>
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.model || 'gpt-4o-realtime-preview'}
+                            value={config.model || 'gpt-realtime'}
                             onChange={(e) => handleChange('model', e.target.value)}
                         >
-                            <optgroup label="GPT-4o Realtime">
-                                <option value="gpt-4o-realtime-preview">GPT-4o Realtime (Latest)</option>
-                                <option value="gpt-4o-realtime-preview-2025-06-03">GPT-4o Realtime (2025-06-03)</option>
-                                <option value="gpt-4o-realtime-preview-2024-12-17">GPT-4o Realtime (2024-12-17)</option>
-                                <option value="gpt-4o-realtime-preview-2024-10-01">GPT-4o Realtime (2024-10-01)</option>
-                            </optgroup>
-                            <optgroup label="GPT-4o Mini Realtime">
-                                <option value="gpt-4o-mini-realtime-preview">GPT-4o Mini Realtime (Latest)</option>
-                                <option value="gpt-4o-mini-realtime-preview-2024-12-17">GPT-4o Mini Realtime (2024-12-17)</option>
-                            </optgroup>
+                            {(config.api_version || 'ga') === 'ga' ? (
+                                <>
+                                    <optgroup label="GA Models">
+                                        <option value="gpt-realtime">GPT Realtime</option>
+                                        <option value="gpt-realtime-mini">GPT Realtime Mini</option>
+                                    </optgroup>
+                                </>
+                            ) : (
+                                <>
+                                    <optgroup label="Beta Preview Models">
+                                        <option value="gpt-4o-realtime-preview">GPT-4o Realtime (Latest)</option>
+                                        <option value="gpt-4o-realtime-preview-2025-06-03">GPT-4o Realtime (2025-06-03)</option>
+                                        <option value="gpt-4o-realtime-preview-2024-12-17">GPT-4o Realtime (2024-12-17)</option>
+                                        <option value="gpt-4o-realtime-preview-2024-10-01">GPT-4o Realtime (2024-10-01)</option>
+                                    </optgroup>
+                                    <optgroup label="Beta Mini Models">
+                                        <option value="gpt-4o-mini-realtime-preview">GPT-4o Mini Realtime (Latest)</option>
+                                        <option value="gpt-4o-mini-realtime-preview-2024-12-17">GPT-4o Mini Realtime (2024-12-17)</option>
+                                    </optgroup>
+                                </>
+                            )}
                         </select>
                         <p className="text-xs text-muted-foreground">
                             Multilingual speech-to-speech. Supports EN, ES, FR, DE, IT, PT, JA, KO, ZH, AR +more.
-                            <a href="https://platform.openai.com/docs/guides/realtime-conversations" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
+                            <a href="https://platform.openai.com/docs/guides/realtime" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
                         </p>
                     </div>
                     <div className="space-y-2">

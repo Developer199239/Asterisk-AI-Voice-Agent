@@ -109,7 +109,7 @@ class Component(ABC):
                 headers.append(("Authorization", f"Token {api_key}"))
             elif "openai.com" in url:
                 headers.append(("Authorization", f"Bearer {api_key}"))
-                headers.append(("OpenAI-Beta", "realtime=v1"))
+                # Only include Beta header for legacy beta API usage
             else:
                 headers.append(("Authorization", f"Bearer {api_key}"))
         

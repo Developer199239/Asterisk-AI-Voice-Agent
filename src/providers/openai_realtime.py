@@ -361,14 +361,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._reset_output_meter()
 
         url = self._build_ws_url()
+        use_beta = getattr(self.config, 'api_version', 'ga').lower() == 'beta'
         headers = [
             ("Authorization", f"Bearer {self.config.api_key}"),
-            ("OpenAI-Beta", "realtime=v1"),
         ]
+        if use_beta:
+            headers.append(("OpenAI-Beta", "realtime=v1"))
         if self.config.organization:
             headers.append(("OpenAI-Organization", self.config.organization))
 
-        logger.info("Connecting to OpenAI Realtime", url=url, call_id=call_id)
+        logger.info("Connecting to OpenAI Realtime", url=url, call_id=call_id, api_version="beta" if use_beta else "ga")
         try:
             self.websocket = await websockets.connect(url, additional_headers=headers)
         except Exception:
@@ -623,7 +625,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             {
                                 "type": "session.update",
                                 "event_id": f"sess-tools-none-{uuid.uuid4()}",
-                                "session": {"tool_choice": "none"},
+                                "session": self._ga_session_type({"tool_choice": "none"}),
                             }
                         )
                     except Exception:
@@ -776,6 +778,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     # Internal helpers
     # ------------------------------------------------------------------ #
 
+    @property
+    def _is_ga(self) -> bool:
+        """True when using the GA Realtime API (no beta header)."""
+        return getattr(self.config, 'api_version', 'ga').lower() != 'beta'
+
+    def _ga_session_type(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        """Inject session type for GA API if not already present."""
+        if self._is_ga and "type" not in session:
+            session["type"] = "realtime"
+        return session
+
     def _build_ws_url(self) -> str:
         base = (self.config.base_url or "").strip()
         # Fallback if unresolved placeholders exist or scheme isn't ws/wss
@@ -823,6 +836,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 "model": "whisper-1"
             },
         }
+        # GA API requires session type
+        self._ga_session_type(session)
         
         # Optional: Add temperature control (affects response creativity and consistency)
         if hasattr(self.config, 'temperature') and self.config.temperature is not None:
@@ -930,9 +945,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         disable_vad_payload: Dict[str, Any] = {
             "type": "session.update",
             "event_id": f"sess-disable-vad-{uuid.uuid4()}",
-            "session": {
+            "session": self._ga_session_type({
                 "turn_detection": None  # Disable automatic VAD
-            }
+            })
         }
         await self._send_json(disable_vad_payload)
         
@@ -1023,7 +1038,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         enable_vad_payload: Dict[str, Any] = {
             "type": "session.update",
             "event_id": f"sess-enable-vad-{uuid.uuid4()}",
-            "session": session_update
+            "session": self._ga_session_type(session_update)
         }
         
         await self._send_json(enable_vad_payload)
@@ -2159,10 +2174,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 return
             try:
                 url = self._build_ws_url()
+                use_beta = getattr(self.config, 'api_version', 'ga').lower() == 'beta'
                 headers = [
                     ("Authorization", f"Bearer {self.config.api_key}"),
-                    ("OpenAI-Beta", "realtime=v1"),
                 ]
+                if use_beta:
+                    headers.append(("OpenAI-Beta", "realtime=v1"))
                 if self.config.organization:
                     headers.append(("OpenAI-Organization", self.config.organization))
                 logger.info("Reconnecting to OpenAI Realtime", call_id=call_id, attempt=attempt)
@@ -2557,9 +2574,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         payload: Dict[str, Any] = {
             "type": "session.update",
             "event_id": f"sess-{uuid.uuid4()}",
-            "session": {
+            "session": self._ga_session_type({
                 "output_audio_format": "pcm16",
-            },
+            }),
         }
         try:
             await self._send_json(payload)
