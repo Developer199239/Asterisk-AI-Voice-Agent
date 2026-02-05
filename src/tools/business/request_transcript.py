@@ -258,23 +258,7 @@ class RequestTranscriptTool(Tool):
                         ),
                         "ai_should_speak": True
                     }
-            
-            # Check for duplicate email (deduplication)
-            if call_id not in self._sent_emails:
-                self._sent_emails[call_id] = set()
-            
-            if parsed_email.lower() in self._sent_emails[call_id]:
-                logger.info(
-                    "Duplicate transcript request detected, skipping",
-                    call_id=call_id,
-                    email=parsed_email
-                )
-                return {
-                    "status": "success",
-                    "message": f"I already sent the transcript to {parsed_email}. Please check your inbox.",
-                    "ai_should_speak": True
-                }
-            
+
             # Get session data
             session = await context.get_session()
             if not session:
@@ -284,6 +268,49 @@ class RequestTranscriptTool(Tool):
                     "message": "I'm sorry, I couldn't access the call data to send the transcript.",
                     "ai_should_speak": True
                 }
+
+            allow_multiple = bool(config.get("allow_multiple_recipients", False))
+            normalized_email = parsed_email.lower()
+            existing_emails = getattr(session, "transcript_emails", None)
+            existing_single: Optional[str] = None
+            if isinstance(existing_emails, set) and len(existing_emails) == 1:
+                try:
+                    existing_single = next(iter(existing_emails))
+                except Exception:
+                    existing_single = None
+
+            # Idempotency / duplicate handling:
+            # - Default behavior is "set/update": only the latest email is kept for end-of-call send.
+            # - When allow_multiple_recipients is true, we keep additive behavior and suppress duplicates.
+            if not allow_multiple and existing_single and existing_single == normalized_email:
+                email_for_speech = self._validator.format_for_speech(parsed_email)
+                logger.info(
+                    "Transcript email already set (no-op)",
+                    call_id=call_id,
+                    caller_email=parsed_email,
+                )
+                return {
+                    "status": "success",
+                    "message": f"Got it. I'll send the complete transcript to {email_for_speech} when our call ends.",
+                    "ai_should_speak": True,
+                    "caller_email": parsed_email,
+                    "email_for_speech": email_for_speech,
+                }
+
+            if allow_multiple:
+                if call_id not in self._sent_emails:
+                    self._sent_emails[call_id] = set()
+                if normalized_email in self._sent_emails[call_id]:
+                    logger.info(
+                        "Duplicate transcript recipient detected, skipping",
+                        call_id=call_id,
+                        email=parsed_email,
+                    )
+                    return {
+                        "status": "success",
+                        "message": f"I already added {parsed_email} for the transcript. Please check your inbox after the call ends.",
+                        "ai_should_speak": True,
+                    }
             
             # Format email for speech readback
             email_for_speech = self._validator.format_for_speech(parsed_email)
@@ -291,15 +318,21 @@ class RequestTranscriptTool(Tool):
             # IMPORTANT: Store email address in session for end-of-call transcript sending
             # Do NOT send immediately - conversation isn't complete yet!
             # Engine will check for this attribute in cleanup and send complete transcript
-            if not hasattr(session, 'transcript_emails'):
+            if not hasattr(session, 'transcript_emails') or not isinstance(getattr(session, 'transcript_emails', None), set):
                 session.transcript_emails = set()
-            session.transcript_emails.add(parsed_email.lower())
+            if allow_multiple:
+                session.transcript_emails.add(normalized_email)
+            else:
+                # Default: last email wins (set/update semantics).
+                session.transcript_emails.clear()
+                session.transcript_emails.add(normalized_email)
             
             # Save session with transcript email
             await context.session_store.upsert_call(session)
             
-            # Mark as requested to prevent duplicates during call
-            self._sent_emails[call_id].add(parsed_email.lower())
+            # Mark as requested to prevent noisy repeats when allow_multiple_recipients is enabled.
+            if allow_multiple:
+                self._sent_emails[call_id].add(normalized_email)
             
             logger.info(
                 "Transcript email saved for end-of-call sending",
@@ -311,8 +344,7 @@ class RequestTranscriptTool(Tool):
             return {
                 "status": "success",
                 "message": (
-                    f"Perfect! I'll send the complete transcript to {email_for_speech} "
-                    "when our call ends."
+                    f"Perfect! I'll send the complete transcript to {email_for_speech} when our call ends."
                 ),
                 "ai_should_speak": True,
                 "caller_email": parsed_email,

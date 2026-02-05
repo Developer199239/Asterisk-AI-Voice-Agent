@@ -894,6 +894,9 @@ tools:
     #   sales: "sales@yourdomain.com"
     confirm_email: true                # AI reads back email
     validate_domain: true              # DNS MX lookup
+    # Note: by default, only the most recent confirmed email is used per call.
+    # Set to true to allow multiple recipients (not recommended for most deployments).
+    # allow_multiple_recipients: false
     max_attempts: 2                    # Retry attempts for invalid email
     common_domains: ["gmail.com", "yahoo.com", "outlook.com"]
 ```
