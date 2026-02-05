@@ -270,8 +270,8 @@ const HelpPage = () => {
                                     prose-p:text-foreground/90 prose-p:leading-7 prose-p:my-4
                                     prose-strong:text-foreground prose-strong:font-semibold
                                     prose-a:text-primary prose-a:font-medium prose-a:no-underline hover:prose-a:underline
-                                    prose-code:bg-zinc-800 prose-code:text-amber-200 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
-                                    prose-pre:bg-zinc-900 prose-pre:text-zinc-100 prose-pre:border prose-pre:border-zinc-700 prose-pre:rounded-lg prose-pre:my-4 prose-pre:overflow-x-auto
+                                    prose-code:bg-[#1c1c1c] prose-code:text-[#4ade80] prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
+                                    prose-pre:bg-[#0d0d0d] prose-pre:text-[#4ade80] prose-pre:border prose-pre:border-[#2a2a2a] prose-pre:rounded-lg prose-pre:my-4 prose-pre:overflow-x-auto prose-pre:p-4
                                     prose-ul:text-foreground/90 prose-ul:my-4 prose-ul:pl-6
                                     prose-ol:text-foreground/90 prose-ol:my-4 prose-ol:pl-6
                                     prose-li:text-foreground/90 prose-li:my-1 prose-li:marker:text-foreground/60
