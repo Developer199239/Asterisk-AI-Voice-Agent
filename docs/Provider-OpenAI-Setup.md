@@ -51,7 +51,7 @@ providers:
     greeting: "Hi {caller_name}, I'm your AI assistant. How can I help you today?"
     
     # Model Configuration
-    model: gpt-realtime                       # Shipped default; override if you have access to other Realtime models
+    model: gpt-4o-realtime-preview-2024-12-17  # OpenAI Realtime model
     temperature: 0.6                          # Creativity (0.0-1.0)
     max_response_output_tokens: 4096          # Max output length
     
@@ -84,7 +84,7 @@ providers:
 ```
 
 **Key Settings**:
-- `model`: defaults to `gpt-realtime` in this repo’s shipped config; override if needed
+- `model`: defaults to `gpt-4o-realtime-preview-2024-12-17`; update when newer Realtime models are available
 - `response_modalities`: include both `audio` and `text` for speech-to-speech + transcripts
 - `turn_detection.type`: use `server_vad` for turn-taking in streaming mode
 

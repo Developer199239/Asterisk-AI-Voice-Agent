@@ -173,7 +173,7 @@ class OpenAIProviderConfig(BaseModel):
     chat_base_url: str = Field(default="https://api.openai.com/v1")
     stt_base_url: str = Field(default="https://api.openai.com/v1/audio/transcriptions")
     tts_base_url: str = Field(default="https://api.openai.com/v1/audio/speech")
-    realtime_model: str = Field(default="gpt-realtime")
+    realtime_model: str = Field(default="gpt-4o-realtime-preview-2024-12-17")
     chat_model: str = Field(default="gpt-4o-mini")
     stt_model: str = Field(default="whisper-1")
     # NOTE: Default to widely-available TTS model to avoid silent-call failures when
@@ -346,7 +346,7 @@ class MCPConfig(BaseModel):
 class OpenAIRealtimeProviderConfig(BaseModel):
     enabled: bool = Field(default=True)
     api_key: Optional[str] = None
-    model: str = Field(default="gpt-realtime")
+    model: str = Field(default="gpt-4o-realtime-preview-2024-12-17")
     voice: str = Field(default="alloy")
     base_url: str = Field(default="wss://api.openai.com/v1/realtime")
     instructions: Optional[str] = None
