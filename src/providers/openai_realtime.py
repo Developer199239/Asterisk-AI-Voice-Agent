@@ -829,8 +829,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             in_fmt = _ga_audio_fmt(input_enc)
             out_fmt = _ga_audio_fmt(output_enc)
 
+            # GA requires rate in format object
+            in_rate = getattr(self.config, "provider_input_sample_rate_hz", 24000)
+            out_rate = getattr(self.config, "output_sample_rate_hz", 24000)
+
             audio_input: Dict[str, Any] = {
-                "format": {"type": in_fmt},
+                "format": {"type": in_fmt, "rate": in_rate},
             }
             # GA: turn_detection lives under audio.input
             if getattr(self.config, "turn_detection", None):
@@ -851,7 +855,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 "audio": {
                     "input": audio_input,
                     "output": {
-                        "format": {"type": out_fmt},
+                        "format": {"type": out_fmt, "rate": out_rate},
                         "voice": self.config.voice,
                     },
                 },
@@ -2606,7 +2610,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             pass
         if self._is_ga:
-            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm"}}}}
+            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}}}}
         else:
             pcm_session = {"output_audio_format": "pcm16"}
         payload: Dict[str, Any] = {
