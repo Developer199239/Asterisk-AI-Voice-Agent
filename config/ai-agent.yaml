@@ -1146,9 +1146,9 @@ providers:
     model: gpt-4o-realtime-preview-2024-12-17
     organization: ''
     output_encoding: mulaw
-    output_sample_rate_hz: 8000
+    output_sample_rate_hz: 24000
     provider_input_encoding: linear16
-    provider_input_sample_rate_hz: 16000
+    provider_input_sample_rate_hz: 24000
     response_modalities:
       - audio
       - text
