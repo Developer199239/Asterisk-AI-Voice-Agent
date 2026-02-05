@@ -314,7 +314,9 @@ const EnvPage = () => {
         // Other
         'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID', 'JWT_SECRET',
         'AI_NAME', 'AI_ROLE', 'ASTERISK_ARI_PORT', 'ASTERISK_ARI_WEBSOCKET_SCHEME',
-        'HEALTH_CHECK_LOCAL_AI_URL', 'HEALTH_CHECK_AI_ENGINE_URL'
+        'HEALTH_CHECK_LOCAL_AI_URL', 'HEALTH_CHECK_AI_ENGINE_URL',
+        // Admin UI
+        'UVICORN_HOST', 'UVICORN_PORT'
     ];
 
     const otherSettings = Object.keys(env).filter(k => !knownKeys.includes(k));
@@ -1045,6 +1047,32 @@ const EnvPage = () => {
                             </div>
                             <p className="text-xs text-muted-foreground mt-3">
                                 Changing JWT Secret will invalidate all active sessions.
+                            </p>
+                        </ConfigCard>
+                    </ConfigSection>
+
+                    {/* Admin UI Server */}
+                    <ConfigSection title="Admin UI Server" description="Network settings for the Admin UI web server.">
+                        <ConfigCard>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <FormInput
+                                    label="Bind Address"
+                                    value={env['UVICORN_HOST'] || '0.0.0.0'}
+                                    onChange={(e) => updateEnv('UVICORN_HOST', e.target.value)}
+                                    placeholder="0.0.0.0"
+                                    tooltip="IP address the Admin UI binds to. Use 0.0.0.0 for all interfaces or 127.0.0.1 for local-only access."
+                                />
+                                <FormInput
+                                    label="Port"
+                                    type="number"
+                                    value={env['UVICORN_PORT'] || '3003'}
+                                    onChange={(e) => updateEnv('UVICORN_PORT', e.target.value)}
+                                    placeholder="3003"
+                                    tooltip="Port number for the Admin UI. Default is 3003."
+                                />
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-3">
+                                <strong>Note:</strong> Changes require Admin UI container restart to take effect.
                             </p>
                         </ConfigCard>
                     </ConfigSection>
