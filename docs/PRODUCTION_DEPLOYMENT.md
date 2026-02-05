@@ -40,7 +40,7 @@ This guide covers production deployment considerations, security hardening, scal
 
 - [ ] **`.env` file**: All required environment variables set
 - [ ] **`config/ai-agent.yaml`**: Production configuration selected
-- [ ] **Shared Storage**: `./asterisk_media/ai-generated` configured (mounted into `ai-engine` as `/mnt/asterisk_media/ai-generated`) (for Local Hybrid)
+- [ ] **Shared Storage**: `./asterisk_media/ai-generated` configured (mounted into `ai_engine` as `/mnt/asterisk_media/ai-generated`) (for Local Hybrid)
 - [ ] **Call History**: `./data` volume persisted (default DB: `./data/call_history.db`)
 - [ ] **Monitoring (optional)**: Prometheus scraping `/metrics` (aggregate metrics only)
 
@@ -65,12 +65,12 @@ This guide covers production deployment considerations, security hardening, scal
 │  Single Server (8 cores, 16GB RAM)    │
 │                                        │
 │  ┌──────────┐    ┌─────────────────┐ │
-│  │ Asterisk │────│   ai-engine     │ │
+│  │ Asterisk │────│   ai_engine     │ │
 │  │  +       │    │                 │ │
 │  │ FreePBX  │    │  (Docker)       │ │
 │  └──────────┘    └─────────────────┘ │
 │                   ┌─────────────────┐ │
-│                   │ local-ai-server │ │
+│                   │ local_ai_server │ │
 │                   │  (Optional)     │ │
 │                   └─────────────────┘ │
 └────────────────────────────────────────┘
@@ -99,7 +99,7 @@ This guide covers production deployment considerations, security hardening, scal
 │   (FreePBX)     │ ARI  │   Server        │
 │                 │      │                 │
 │  8 cores        │      │  ┌──────────┐   │
-│  16GB RAM       │      │  │ai-engine │   │
+│  16GB RAM       │      │  │ai_engine │   │
 │                 │      │  └──────────┘   │
 └─────────────────┘      │  ┌──────────┐   │
                          │  │local-ai  │   │
@@ -136,7 +136,7 @@ This guide covers production deployment considerations, security hardening, scal
         ┌───────────────────┼───────────────────┐
         │                   │                   │
    ┌────▼────┐         ┌────▼────┐        ┌────▼────┐
-   │ai-engine│         │ai-engine│        │ai-engine│
+   │ai_engine│         │ai_engine│        │ai_engine│
    │ node 1  │         │ node 2  │        │ node 3  │
    └────┬────┘         └────┬────┘        └────┬────┘
         │                   │                   │
@@ -206,7 +206,7 @@ ls -l .env
 # 3. Update .env file
 vi .env  # Update OPENAI_API_KEY or DEEPGRAM_API_KEY
 
-# 4. Restart ai-engine
+# 4. Restart `ai_engine`
 docker compose restart ai_engine
 
 # 5. Verify with test call
@@ -232,7 +232,7 @@ external_media:
 
 **Key Considerations:**
 
-1. **Port Accessibility**: UDP port 18080 must be accessible from Asterisk to ai-engine
+1. **Port Accessibility**: UDP port 18080 must be accessible from Asterisk to `ai_engine`
    ```bash
    # Verify port is listening
    netstat -tuln | grep 18080
@@ -253,7 +253,7 @@ external_media:
    - Monitor network quality with `ping` and `mtr`
 
 5. **Provider Compatibility**:
-   - **Local Hybrid / pipelines**: ExternalMedia RTP is the shipped default and is a strong production choice. File playback is the most robust option; streaming-first is supported with automatic fallback to file.
+   - **Local Hybrid / pipelines**: ExternalMedia RTP is a strong production choice for modular pipelines. File playback is the most robust option; streaming-first is supported with automatic fallback to file.
    - **Full agents (OpenAI Realtime / Deepgram / Google Live / ElevenLabs)**: AudioSocket + streaming playback is validated for low-latency, real-time UX.
 
 **When to Use ExternalMedia:**
@@ -278,8 +278,8 @@ external_media:
 ufw default deny incoming
 ufw default allow outgoing
 
-# Asterisk ARI (from ai-engine only)
-ufw allow from <ai-engine-ip> to any port 8088 proto tcp
+# Asterisk ARI (from `ai_engine` only)
+ufw allow from <ai_engine-ip> to any port 8088 proto tcp
 
 # AudioSocket (from Asterisk only)
 ufw allow from <asterisk-ip> to any port 8090 proto tcp
@@ -335,7 +335,7 @@ The default `docker-compose.yml` uses host networking:
 ```yaml
 # docker-compose.yml (default)
 services:
-  ai-engine:
+  ai_engine:
     network_mode: host
 ```
 
@@ -358,7 +358,7 @@ For deployments that require explicit port isolation and tighter security postur
 ```yaml
 # Example (bridge mode)
 services:
-  ai-engine:
+  ai_engine:
     ports:
       - "8090:8090"        # AudioSocket
       - "18080:18080/udp"  # ExternalMedia RTP
@@ -401,7 +401,7 @@ HEALTH_BIND_HOST=0.0.0.0
 ```yaml
 # docker-compose.yml
 services:
-  ai-engine:
+  ai_engine:
     ports:
       - "8090:8090"    # AudioSocket
       - "18080:18080"  # RTP
@@ -423,7 +423,7 @@ services:
 ┌─────────────────────────────┐
 │  Single Server              │
 │  ┌────────┐   ┌──────────┐ │
-│  │Asterisk├───┤ai-engine │ │
+│  │Asterisk├───┤ai_engine │ │
 │  │        │   │ (host)   │ │
 │  └────────┘   └──────────┘ │
 │  Via: 127.0.0.1             │
@@ -465,7 +465,7 @@ services:
 ```yaml
 # In docker-compose.yml
 services:
-  ai-engine:
+  ai_engine:
     user: "1000:1000"  # Non-root UID:GID
     security_opt:
       - no-new-privileges:true
@@ -474,7 +474,7 @@ services:
 **Limit resources**:
 ```yaml
 services:
-  ai-engine:
+  ai_engine:
     deploy:
       resources:
         limits:
@@ -488,7 +488,7 @@ services:
 **Read-only filesystem** (where possible):
 ```yaml
 services:
-  ai-engine:
+  ai_engine:
     read_only: true
     tmpfs:
       - /tmp
@@ -559,7 +559,7 @@ If you run Prometheus/Grafana, back up their persistent storage per your monitor
 
 **Generated Audio Files** (optional):
 ```
-./asterisk_media/ai-generated/  # default host path (mounted as /mnt/asterisk_media/ai-generated in ai-engine)
+./asterisk_media/ai-generated/  # default host path (mounted as /mnt/asterisk_media/ai-generated in `ai_engine`)
 ```
 
 **Logs** (for compliance):
@@ -705,7 +705,7 @@ aws s3 sync /backups/ai-voice-agent/ "$BUCKET/" \
 - Docker container restarts
 
 **Application Health**:
-- ai-engine health endpoint down
+- `ai_engine` health endpoint down
 - No active calls for > 1 hour during business hours
 - Turn response latency p95 > 2s
 - Audio underflow rate > 2 per call
@@ -866,12 +866,12 @@ docker compose logs -f ai_engine
 ```yaml
 # docker-compose.yml
 services:
-  ai-engine:
+  ai_engine:
     logging:
       driver: "syslog"
       options:
         syslog-address: "tcp://log-server:514"
-        tag: "ai-engine"
+        tag: "ai_engine"
 ```
 
 **Log Analysis**:
@@ -883,7 +883,7 @@ docker logs ai_engine --since 1h 2>&1 | grep -i error
 docker logs ai_engine --since 24h 2>&1 | grep -i warning | wc -l
 
 # Export logs for analysis
-docker logs ai_engine --since 24h > /tmp/ai-engine.log
+docker logs ai_engine --since 24h > /tmp/ai_engine.log
 ```
 
 ---
@@ -1008,7 +1008,7 @@ barge_in:
 ```yaml
 # docker-compose.yml
 services:
-  ai-engine:
+  ai_engine:
     deploy:
       resources:
         limits:

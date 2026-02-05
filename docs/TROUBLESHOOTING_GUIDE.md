@@ -8,7 +8,6 @@ Complete guide to diagnosing and fixing issues with Asterisk AI Voice Agent.
 - [Quick Diagnostics](#quick-diagnostics)
 - [Common Issues](#common-issues)
 - [Troubleshooting Tools](#troubleshooting-tools)
-- [Symptom-Based Diagnosis](#symptom-based-diagnosis)
 - [Log Analysis](#log-analysis)
 - [Provider-Specific Issues](#provider-specific-issues)
 - [Performance Issues](#performance-issues)
@@ -305,7 +304,7 @@ exten => s,1,NoOp(AI Voice Agent)
 ```
 
 **Fix:** Ensure you're calling `Stasis(asterisk-ai-voice-agent)`, not `AudioSocket()`.  
-The ai-engine creates AudioSocket/RTP channels automatically via ARI.
+The `ai_engine` service creates AudioSocket/RTP channels automatically via ARI.
 
 #### Container Not Running
 ```bash
@@ -378,8 +377,8 @@ Look for: "Provider bytes ratio" should be `~1.0`.
 #### Sample Rate Mismatch
 **Expected flow:**
 - Asterisk → AudioSocket: 8kHz PCM16 (slin)
-- ai-engine ↔ Provider: Provider's native rate
-- ai-engine → Asterisk: 8kHz PCM16 (slin)
+- `ai_engine` ↔ Provider: Provider's native rate
+- `ai_engine` → Asterisk: 8kHz PCM16 (slin)
 
 **Check config:**
 ```yaml
@@ -531,7 +530,7 @@ agent check -v
 ```
 
 **What it checks:**
-- Docker containers (ai-engine, local-ai-server, monitoring)
+- Docker containers (`ai_engine`, `local_ai_server`, monitoring)
 - Asterisk ARI (connectivity, authentication)
 - AudioSocket (port 8090 availability)
 - Configuration (YAML validation, required fields)
@@ -1131,7 +1130,7 @@ docker stats ai_engine local_ai_server
 ```
 
 **Normal Usage:**
-- ai-engine: <20% CPU, <512MB RAM
+- `ai_engine`: <20% CPU, <512MB RAM
 - local_ai_server: 50-100% CPU (during inference), 4-8GB RAM
 
 **High usage causes:**
@@ -1193,7 +1192,7 @@ netstat -tuln | grep 8090
 sudo ufw status | grep 8090
 
 # Test from Asterisk
-telnet ai-engine-host 8090
+telnet engine-host 8090
 ```
 
 **Fix:** Open firewall port:
@@ -1378,7 +1377,7 @@ agent check > agent-check.txt
 agent rca > agent-rca.txt
 
 # Collect logs
-docker logs --since 1h ai_engine > ai-engine.log 2>&1
+docker logs --since 1h ai_engine > ai_engine.log 2>&1
 ```
 
 ### 2. Check Documentation
@@ -1416,7 +1415,7 @@ Garbled audio - sounds robotic and fast
 - OS: Ubuntu 22.04
 - Docker: 24.0.7
 - Asterisk: 18.20.0
-- ai-engine version: v4.0.0
+- `ai_engine` version: v4.0.0
 
 **Configuration:**
 Provider: OpenAI Realtime
@@ -1497,7 +1496,7 @@ exten => s,1,NoOp(AI Voice Agent)
 - Set `audio_transport: externalmedia` for **pipelines** (hybrid, local_only)
 - Set `audio_transport: audiosocket` for **full agents** (Deepgram, OpenAI Realtime)
 
-The ai-engine automatically creates the AudioSocket server or RTP endpoint based on your config. You don't need to add `AudioSocket()` to the dialplan.
+The `ai_engine` service automatically creates the AudioSocket server or RTP endpoint based on your config. You don't need to add `AudioSocket()` to the dialplan.
 
 **Context Selection:**
 Use `AI_CONTEXT` to select different agent personalities/configurations from `config/ai-agent.yaml`.

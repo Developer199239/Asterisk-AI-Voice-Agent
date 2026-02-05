@@ -452,11 +452,11 @@ async def handle_function_call(event):
 
 **Fix**: Verify configuration matches:
 ```yaml
-# Asterisk → ai-engine → Deepgram
+# Asterisk → ai_engine → Deepgram
 encoding: mulaw
 sample_rate: 8000
 
-# Deepgram → ai-engine → Asterisk
+# Deepgram → ai_engine → Asterisk
 audio.output.encoding: linear16
 audio.output.sample_rate: 24000
 ```
@@ -470,7 +470,7 @@ audio.output.sample_rate: 24000
 ```
 Asterisk AudioSocket (μ-law 8kHz)
     ↓
-ai-engine receives
+ai_engine receives
     ↓
 Send to Deepgram (μ-law 8kHz)
 ```
@@ -490,7 +490,7 @@ audio_config = {
 ```
 Deepgram sends PCM16 24kHz
     ↓
-ai-engine receives
+ai_engine receives
     ↓
 DC-blocker filter
     ↓

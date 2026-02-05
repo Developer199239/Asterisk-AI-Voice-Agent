@@ -39,7 +39,7 @@ Validated operator test scenarios (reference):
 
 Notable fixes/hardening already applied during validation:
 
-- SQLite WAL/SHM permission hardening so `ai-engine` can write even after Admin UI touches the DB (prevents `sqlite3.OperationalError: attempt to write a readonly database`).
+- SQLite WAL/SHM permission hardening so `ai_engine` can write even after Admin UI touches the DB (prevents `sqlite3.OperationalError: attempt to write a readonly database`).
 - Voicemail media path unified so Asterisk can play uploaded/converted media from `ai-generated/`.
 - Dialplan AMD guardrails fixed (`INITIALSILENCE` prefix length) to reduce false voicemail drops.
 - Admin UI “Setup Guide” dialplan generator hardened so disabling consent/voicemail never removes required labels (fixes Asterisk `No such label 'human'` / immediate hangup on answer).
@@ -270,7 +270,7 @@ Keep a collapsible “Setup Guide” with dialplan snippet and verification comm
 ### Phase 4 — Voicemail drop flow
 
 - Campaign start requires voicemail audio to exist
-- Implement TTS generation (local-ai-server) + upload support
+- Implement TTS generation (`local_ai_server`) + upload support
 - Implement WAV preview endpoint for Admin UI
 - Play voicemail drop (μ-law 8k) and hang up
 
@@ -312,9 +312,9 @@ Expected: the CLI output includes the `AMD()` step and the `Stasis(...,outbound_
 
 ### 2) Engine prerequisites
 
-- Confirm `ai-engine` is running and connected to ARI (baseline behavior for inbound).
-- If using `voicemail_drop_mode=tts`, confirm `local-ai-server` is running and healthy (per your existing deployment docs).
-- After deploying code changes, restart `ai-engine` (outbound provider/context selection relies on originate-time variables).
+- Confirm `ai_engine` is running and connected to ARI (baseline behavior for inbound).
+- If using `voicemail_drop_mode=tts`, confirm `local_ai_server` is running and healthy (per your existing deployment docs).
+- After deploying code changes, restart `ai_engine` (outbound provider/context selection relies on originate-time variables).
 
 ### 3) Admin UI happy path
 
@@ -374,7 +374,7 @@ Expected:
 - Campaign window/timezone:
   - set a window that is currently outside local time → status card should show “Outside window” and no calls originate.
   - set a window that crosses midnight → confirm “within” logic behaves as expected.
-- Restart resilience: restart `ai-engine` mid-campaign and confirm:
+- Restart resilience: restart `ai_engine` mid-campaign and confirm:
   - stale `leased`/`dialing` leads are re-queued after TTL
   - campaign resumes dialing if still `running` and within window.
 
@@ -386,7 +386,7 @@ Expected:
 
 Common “out of the box” gotchas:
 
-- SQLite permissions: when multiple containers touch the same SQLite DB, ensure `call_history.db`, `call_history.db-wal`, and `call_history.db-shm` remain writable by the `ai-engine` user/group.
+- SQLite permissions: when multiple containers touch the same SQLite DB, ensure `call_history.db`, `call_history.db-wal`, and `call_history.db-shm` remain writable by the `ai_engine` user/group.
 - Voicemail media visibility: Asterisk must be able to resolve the uploaded/converted μ-law file under `ai-generated/` via its `sounds` path (symlink or bind mount).
 - Dialplan changes require a reload: `asterisk -rx "dialplan reload"`.
 

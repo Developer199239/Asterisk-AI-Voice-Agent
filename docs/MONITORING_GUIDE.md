@@ -12,7 +12,7 @@ The monitoring stack provides real-time observability into call quality, system 
 **Stack Components**:
 - **Prometheus**: Time-series metrics collection and alerting (port 9090)
 - **Grafana**: Visualization dashboards and analytics (port 3000)
-- **ai-engine**: Metrics source via `/metrics` endpoint (port 15000)
+- **ai_engine**: Metrics source via `/metrics` endpoint (port 15000)
 
 **Key Benefits**:
 - **Aggregate health + quality signals**: latency histograms, underruns, bytes, and session counts
@@ -32,11 +32,11 @@ The monitoring stack provides real-time observability into call quality, system 
 cd /path/to/Asterisk-AI-Voice-Agent
 ```
 
-Add a scrape target for `ai-engine`:
+Add a scrape target for `ai_engine`:
 
 ```yaml
 scrape_configs:
-  - job_name: 'ai-engine'
+  - job_name: 'ai_engine'
     metrics_path: '/metrics'
     static_configs:
       - targets: ['127.0.0.1:15000']
@@ -45,7 +45,7 @@ scrape_configs:
 ### 2. Verify Metrics Collection
 
 ```bash
-# Check ai-engine health endpoint is responding
+# Check ai_engine health endpoint is responding
 curl http://localhost:15000/health
 
 # View sample metrics
@@ -75,7 +75,7 @@ For “what happened on *this* call?” debugging, use **Call History**:
 
 ```
 ┌─────────────┐     HTTP scrape      ┌────────────┐
-│  ai-engine  │────(every 1 second)──▶│ Prometheus │
+│  ai_engine  │────(every 1 second)──▶│ Prometheus │
 │ :15000      │                       │ :9090      │
 └─────────────┘                       └──────┬─────┘
                                              │
@@ -274,17 +274,17 @@ labels:
 annotations:
   summary: "No active AudioSocket connections"
 ```
-**Action**: Verify ai-engine is running, check Asterisk connectivity
+**Action**: Verify `ai_engine` is running, check Asterisk connectivity
 
 #### HealthEndpointDown
 ```yaml
 alert: HealthEndpointDown
-expr: up{job="ai-engine"} == 0
+expr: up{job="ai_engine"} == 0
 for: 30s
 labels:
   severity: critical
 annotations:
-  summary: "ai-engine health endpoint unreachable"
+  summary: "ai_engine health endpoint unreachable"
 ```
 **Action**: Check container status, review logs, restart if needed
 
@@ -432,15 +432,15 @@ sum by (provider, error_type) (rate(ai_agent_provider_errors_total[5m]))
 # 1. Check Prometheus is scraping
 curl http://localhost:9090/api/v1/targets
 
-# 2. Check ai-engine metrics endpoint
+# 2. Check `ai_engine` metrics endpoint
 curl http://localhost:15000/metrics
 
 # 3. Query Prometheus for any metric
-curl 'http://localhost:9090/api/v1/query?query=up{job="ai-engine"}'
+curl 'http://localhost:9090/api/v1/query?query=up{job="ai_engine"}'
 ```
 
 **Solutions**:
-1. **ai-engine not running**: `docker ps | grep ai_engine`
+1. **`ai_engine` not running**: `docker ps | grep ai_engine`
 2. **Metrics endpoint unreachable**: Check port 15000 not blocked
 3. **Prometheus configuration error**: `docker logs prometheus`
 4. **Wrong data source in Grafana**: Check Grafana → Configuration → Data Sources
@@ -481,7 +481,7 @@ docker logs prometheus | grep -i alert
 ```
 
 **Solutions**:
-1. **Rules file not loaded**: Check `prometheus.yml` includes `alerts/*.yml`
+1. **Rules file not loaded**: Ensure your Prometheus config loads your rules files (example below)
 2. **Threshold not met**: Lower threshold temporarily to test
 3. **'for' duration not elapsed**: Wait for specified duration
 4. **Alertmanager not configured**: Alerts fire but have no destination
@@ -513,19 +513,22 @@ docker exec prometheus du -sh /prometheus
 
 ### Multi-Server Setup
 
-For distributed deployments with multiple ai-engine instances:
+For distributed deployments with multiple `ai_engine` instances:
 
 **Option 1: Centralized Prometheus**
 
 ```yaml
-# prometheus.yml
+# prometheus.yml (example)
+rule_files:
+  - "alerts/*.yml"
+
 scrape_configs:
-  - job_name: 'ai-engine-cluster'
+  - job_name: 'ai_engine_cluster'
     static_configs:
       - targets:
-          - 'ai-engine-1:15000'
-          - 'ai-engine-2:15000'
-          - 'ai-engine-3:15000'
+          - 'engine-1:15000'
+          - 'engine-2:15000'
+          - 'engine-3:15000'
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
@@ -542,7 +545,7 @@ scrape_configs:
     metrics_path: '/federate'
     params:
       'match[]':
-        - '{job="ai-engine"}'
+        - '{job="ai_engine"}'
     static_configs:
       - targets:
           - 'prometheus-us-east:9090'
@@ -584,7 +587,7 @@ networks:
 
 ### Backup Strategy
 
-**Automated Dashboard Backup**:
+**Automated Dashboard Backup (example)**:
 ```bash
 #!/bin/bash
 # backup-grafana.sh
@@ -716,8 +719,7 @@ receivers:
 ### Version Upgrades
 
 ```bash
-# Backup first
-./backup-grafana.sh
+# Backup first (use your own backup procedure; example script above)
 docker run --rm --volumes-from prometheus -v $(pwd)/backups:/backup alpine tar czf /backup/prometheus.tar.gz /prometheus
 
 # Upgrade your Prometheus/Grafana stack per your deployment approach.
@@ -731,7 +733,6 @@ curl http://localhost:3000/api/health
 
 ## Further Reading
 
-- **Monitoring/README.md**: Quick start and configuration reference
 - **Prometheus Documentation**: https://prometheus.io/docs/
 - **Grafana Documentation**: https://grafana.com/docs/
 - **PromQL Tutorial**: https://prometheus.io/docs/prometheus/latest/querying/basics/

@@ -42,7 +42,7 @@ Environment variables for selecting local STT/TTS backends:
 - **Sherpa-ONNX**: Low-latency streaming ASR using ONNX runtime
 - **Kroko**: High-quality streaming ASR with 12+ languages (requires API key for hosted mode)
 - **Faster-Whisper**: Whisper inference via `faster-whisper` (model IDs like `base`, `small`, etc., or a local model directory depending on your install)
-- **Whisper.cpp**: Whisper inference via `whisper.cpp` (if built into your local-ai-server image)
+- **Whisper.cpp**: Whisper inference via `whisper.cpp` (if built into your `local_ai_server` image)
 
 **TTS Backends**:
 - **Piper**: Fast local TTS with multiple voices
@@ -68,6 +68,16 @@ This selection is intentionally flexible so you can keep safe defaults while sti
 
 - If your dialplan sets `AI_CONTEXT`, that context name is used.
 - Otherwise, the engine uses the `default` context.
+
+### Audio profile selection
+
+Audio profiles control the call’s negotiated sample rates/encodings (telephony wire format, provider input/output format, and internal pacing). They are defined under `profiles:` in `config/ai-agent.yaml`.
+
+Highest priority first:
+
+1. **Dialplan override**: `AI_AUDIO_PROFILE` (if set)
+2. **Context mapping**: `contexts.<name>.profile` (if set for the selected context)
+3. **Global default**: `profiles.default` (fallback is `telephony_ulaw_8k` if unset)
 
 ### Provider selection
 
@@ -240,21 +250,20 @@ Common pitfalls:
 
 - llm.initial_greeting: First message spoken by the agent (if provider supports explicit greeting or engine plays via TTS).
 - llm.prompt: Persona/system instruction used by LLMs.
-- llm.model: Baseline LLM name (used by some monolithic providers and Deepgram agent think stage).
 - llm.api_key: Optional API key for LLMs that require it.
 
 ## Providers
 
 ### OpenAI Realtime (monolithic agent)
 
-- providers.openai_realtime.api_key: Bearer auth.
+- providers.openai_realtime.api_key: injected from `OPENAI_API_KEY` (env-only; do not commit secrets to YAML).
 - providers.openai_realtime.model, voice, base_url: Model and voice.
 - providers.openai_realtime.instructions: Persona override. Leave empty to inherit `llm.prompt`.
 - providers.openai_realtime.greeting: Explicit greeting. Leave empty to inherit `llm.initial_greeting`.
 - providers.openai_realtime.response_modalities: `audio`, `text`.
 - providers.openai_realtime.provider_input_encoding/provider_input_sample_rate_hz: Format sent to OpenAI (typically PCM16); prefer matching this to the engine’s internal PCM rate to avoid extra resampling.
 - providers.openai_realtime.input_encoding/input_sample_rate_hz: Inbound format; use `ulaw` at 8 kHz when AudioSocket() is invoked with `,ulaw` (engine converts to PCM before sending to OpenAI).
-- providers.openai_realtime.output_encoding/output_sample_rate_hz: Provider output; for telephony, prefer `mulaw` at 8 kHz (`output_audio_format=g711_ulaw`) to avoid mid-stream 24 kHz PCM → 8 kHz μ-law conversion artifacts.
+- providers.openai_realtime.output_encoding/output_sample_rate_hz: Provider output; for telephony, prefer `mulaw` at 8 kHz (for example: `output_encoding: mulaw`, `output_sample_rate_hz: 8000`) to avoid mid-stream PCM → μ-law conversion artifacts.
 - providers.openai_realtime.target_encoding/target_sample_rate_hz: Downstream transport expectations (e.g., μ‑law at 8 kHz).
 - providers.openai_realtime.egress_pacer_enabled: When true, OpenAI provider emits fixed 20 ms audio cadence (silence on underrun); prefer `false` when downstream playback already paces reliably.
 - providers.openai_realtime.turn_detection: Server‑side VAD (type, silence_duration_ms, threshold, prefix_padding_ms); improves turn handling.
@@ -270,11 +279,12 @@ Modular OpenAI pipeline components use `type: openai` provider blocks:
 
 Requirements:
 
-- `OPENAI_API_KEY` must be set in the environment (or referenced via `${OPENAI_API_KEY}`).
+- `OPENAI_API_KEY` must be set in the environment.
 
 ### Deepgram Voice Agent
 
-- providers.deepgram.api_key, model, tts_model.
+- providers.deepgram.api_key: injected from `DEEPGRAM_API_KEY` (env-only; do not commit secrets to YAML).
+- providers.deepgram.model, providers.deepgram.tts_model: Deepgram Voice Agent + Aura TTS models.
 - `providers.deepgram.agent_language`: Language for Deepgram Voice Agent mode (default: `en`).
 - providers.deepgram.greeting: Agent greeting. Leave empty to inherit `llm.initial_greeting`.
 - providers.deepgram.instructions: Persona override for the “think” stage; leave empty to inherit `llm.prompt`.
@@ -310,11 +320,9 @@ Config notes:
 
 ### Google Live (monolithic agent)
 
-- `providers.google_live.api_key`: API key (`GOOGLE_API_KEY`) used for Gemini Live.
-- `providers.google_live.llm_model`: Live LLM model name (e.g., `gemini-2.0-flash-live-001-preview-09-2025`).
-- `providers.google_live.websocket_endpoint`: WebSocket endpoint for Gemini Live API.
-  - Default: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
-  - Override only if directed by Google or when fronting through a proxy.
+- `providers.google_live.api_key`: injected from `GOOGLE_API_KEY` (env-only; do not commit secrets to YAML).
+- `providers.google_live.llm_model`: Live LLM model name (see `config/ai-agent.yaml` for shipped defaults).
+- `providers.google_live.tts_voice_name`: Live voice name (provider-specific).
 
 ### Deepgram Voice Agent (monolithic agent)
 
@@ -326,15 +334,13 @@ Config notes:
 
 Full agent provider using ElevenLabs Conversational AI for premium voice quality.
 
-> **Scope Note**: ElevenLabs is supported as a **full agent only** (STT+LLM+TTS combined). TTS-only mode for hybrid pipelines is not currently supported. Use ElevenLabs when you want premium voice quality with their hosted agent handling the entire conversation.
+> **Scope Note**: ElevenLabs is supported as a full agent (`elevenlabs_agent`) and as a TTS-only pipeline adapter (`elevenlabs_tts`).
 
-- `providers.elevenlabs_agent.api_key`: ElevenLabs API key (or use `ELEVENLABS_API_KEY` env var).
-- `providers.elevenlabs_agent.agent_id`: ElevenLabs Agent ID from [ElevenLabs dashboard](https://elevenlabs.io/app/agents) (or use `ELEVENLABS_AGENT_ID` env var).
+- `providers.elevenlabs_agent.api_key`: injected from `ELEVENLABS_API_KEY` (env-only; do not commit secrets to YAML).
+- `providers.elevenlabs_agent.agent_id`: injected from `ELEVENLABS_AGENT_ID` (env-only).
 - `providers.elevenlabs_agent.voice_id`: Voice ID for TTS output (configured in agent dashboard).
 - `providers.elevenlabs_agent.model_id`: Model ID (e.g., `eleven_flash_v2_5`).
 - `providers.elevenlabs_agent.voice_settings`: Optional object with `stability`, `similarity_boost`, `style` (0.0-1.0).
-- `providers.elevenlabs_agent.input_sample_rate`: Input audio sample rate (default: `16000`).
-- `providers.elevenlabs_agent.output_sample_rate`: Output audio sample rate (default: `16000`).
 
 **Tool Calling**: ElevenLabs tools must be defined in the ElevenLabs dashboard. The engine executes tool calls locally based on matching function names. See [ElevenLabs Implementation Guide](contributing/references/Provider-ElevenLabs-Implementation.md) for tool schema format.
 
@@ -345,8 +351,6 @@ Example:
 providers:
   elevenlabs_agent:
     enabled: true
-    api_key: ${ELEVENLABS_API_KEY}
-    agent_id: ${ELEVENLABS_AGENT_ID}
     voice_id: "pNInz6obpgDQGcFmaJgB"
     model_id: "eleven_flash_v2_5"
 ```

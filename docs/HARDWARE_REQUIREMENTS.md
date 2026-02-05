@@ -45,7 +45,7 @@ Hardware requirements vary significantly based on your chosen configuration. Thi
 **Scaling**:
 - **Bottleneck**: Network bandwidth and latency to OpenAI
 - **Vertical**: Add CPU cores for more concurrent calls
-- **Horizontal**: Run multiple ai-engine instances behind load balancer
+- **Horizontal**: Run multiple `ai_engine` instances behind a load balancer
 
 ---
 
@@ -148,7 +148,7 @@ Total:                     ~600MB
 **Scaling**:
 - **Bottleneck**: Local-ai-server CPU processing (STT/TTS)
 - **Vertical**: Upgrade to modern CPU (2020+ architecture)
-- **Horizontal**: Run multiple local-ai-server instances (complex)
+- **Horizontal**: Run multiple `local_ai_server` instances (complex)
 
 ---
 
@@ -174,7 +174,7 @@ Fully Local mode runs **STT + LLM + TTS** on your own hardware with **no cloud A
 - **Response Time**: 1-3 seconds (with local LLM)
 - **Concurrent Calls**: 20-40 (GPU-accelerated)
 
-**Note**: The default local-ai-server image runs CPU-only. GPU acceleration is possible for local LLM inference via llama.cpp when you build/run with NVIDIA support (enable the Docker GPU config and tune `LOCAL_LLM_GPU_LAYERS`).
+**Note**: The default `local_ai_server` image runs CPU-only. GPU acceleration is possible for local LLM inference via llama.cpp when you build/run with NVIDIA support (enable the Docker GPU config and tune `LOCAL_LLM_GPU_LAYERS`).
 
 ---
 
@@ -244,11 +244,11 @@ Fully Local mode runs **STT + LLM + TTS** on your own hardware with **no cloud A
 
 | Port | Protocol | Direction | Purpose |
 |------|----------|-----------|---------|
-| 8088 | TCP | ai-engine → Asterisk | ARI/WebSocket |
-| 8090 | TCP | Asterisk → ai-engine | AudioSocket |
+| 8088 | TCP | `ai_engine` → Asterisk | ARI/WebSocket |
+| 8090 | TCP | Asterisk → `ai_engine` | AudioSocket |
 | 18080 | UDP | Bidirectional | ExternalMedia RTP |
-| 15000 | TCP | Monitoring → ai-engine | Health/Metrics |
-| 8765 | TCP | ai-engine → local-ai-server | WebSocket (Local Hybrid only) |
+| 15000 | TCP | Monitoring → `ai_engine` | Health/Metrics |
+| 8765 | TCP | `ai_engine` → `local_ai_server` | WebSocket (Local Hybrid only) |
 | 9090 | TCP | Browser → Prometheus | Monitoring (optional) |
 | 3000 | TCP | Browser → Grafana | Monitoring (optional) |
 

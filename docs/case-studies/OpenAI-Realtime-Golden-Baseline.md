@@ -157,7 +157,7 @@ Caller (μ-law 8kHz)
     ↓
 Asterisk (ExternalMedia RTP)
     ↓
-ai-engine RTP Server (μ-law → PCM16 8kHz)
+ai_engine RTP Server (μ-law → PCM16 8kHz)
     ↓
 OpenAI Realtime Provider
     ├─ Resample: 8kHz → 24kHz PCM16

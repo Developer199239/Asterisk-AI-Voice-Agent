@@ -12,7 +12,7 @@ The Asterisk AI Voice Agent v5.0 is a **production-ready, modular conversational
 
 ### Key Architecture Components
 
-- **Dual Transport Support** – ExternalMedia RTP (UDP) and AudioSocket (TCP). The shipped default config uses ExternalMedia; AudioSocket is supported and currently validated with `slin`.
+- **Dual Transport Support** – ExternalMedia RTP (UDP) and AudioSocket (TCP). The shipped `config/ai-agent.yaml` defaults to `audio_transport: audiosocket`; ExternalMedia is a validated option (especially for pipelines). AudioSocket is currently validated with `audiosocket.format: slin`.
 - **Adaptive Streaming** – Downstream audio with automatic jitter buffering and file playback fallback
 - **Modular Pipelines** – Independent STT, LLM, and TTS provider selection via YAML configuration
 - **Production Monitoring** – Bring-your-own Prometheus/Grafana; metrics are intentionally low-cardinality. Use Call History for per-call debugging.
@@ -179,7 +179,7 @@ Configuration changes propagate through the existing async watcher introduced in
 2. Streaming parameters, logging levels, and pipeline definitions reload in memory.
 3. Active calls keep their current pipeline; new calls use the updated configuration.
 
-Operators can trigger a reload manually with `make engine-reload` (wrapper around `kill -HUP $(pgrep -f ai-engine)` on the host). This preserves uptime while enabling rapid iteration on streaming quality or provider selection.
+Operators can trigger a reload manually with `make engine-reload` (wrapper around `docker compose up -d ai_engine`). This preserves uptime while enabling rapid iteration on streaming quality or provider selection.
 
 ### Monitoring & Analytics
 
@@ -208,7 +208,7 @@ The legacy bundled Prometheus/Grafana compose + dashboards were removed from the
 
 ### Health Endpoint
 
-- A minimal health endpoint is available from the `ai-engine` (default `0.0.0.0:15000/health`). It reports:
+- A minimal health endpoint is available from `ai_engine` (default `0.0.0.0:15000/health`). It reports:
   - `ari_connected`: ARI WebSocket/HTTP status
   - `rtp_server_running`: whether the RTP server is active
   - `audiosocket_listening`: whether the built-in AudioSocket listener is running

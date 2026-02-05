@@ -18,7 +18,7 @@ This section is for operators upgrading an existing repo checkout (not a fresh i
 
 ### 1) Pull the new release
 
-Once `v5.3.1` is published (GA: 2026-02-01):
+To upgrade to the tagged `v5.3.1` release:
 
 ```bash
 git fetch --tags
@@ -155,6 +155,7 @@ If preflight reports warnings or failures, resolve them first, then re-run prefl
 - `.env`:
   - Review ARI settings: `ASTERISK_ARI_PORT`, `ASTERISK_ARI_SCHEME`, `ASTERISK_ARI_SSL_VERIFY`
   - If using rootless Docker/Podman, set a persistent `DOCKER_SOCK=...` in `.env` (not only `export ...`)
+  - Reference: `docs/ENVIRONMENT_VARIABLES.md`
 - Admin UI “save vs apply”:
   - `.env` edits from the UI may normalize quoting and remove duplicate keys; this is expected in 4.6+
 - OpenAI Realtime:
@@ -278,7 +279,7 @@ Notes:
 
 **Local note:** This project does **not** bundle models in images. For recommended local build/run profiles (including a smaller `local-core` build), see `docs/LOCAL_PROFILES.md`.
 
-**Kroko note:** `INCLUDE_KROKO_EMBEDDED` is off by default to keep the local-ai-server image lighter. Enable it only if you need embedded Kroko (see `docs/LOCAL_PROFILES.md`).
+**Kroko note:** `INCLUDE_KROKO_EMBEDDED` is off by default to keep the `local_ai_server` image lighter. Enable it only if you need embedded Kroko (see `docs/LOCAL_PROFILES.md`).
 
 **Container OS note:** `admin_ui` and `ai_engine` ship on Debian `bookworm` (Python `3.11`). `local_ai_server` ships on Debian `trixie` intentionally (for embedded Kroko glibc compatibility).
 
@@ -449,7 +450,7 @@ docker compose -p asterisk-ai-voice-agent up --build -d
 
 > IMPORTANT: First startup time (local models)
 >
-> If you selected a Local or Hybrid workflow, the `local-ai-server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
+> If you selected a Local or Hybrid workflow, the `local_ai_server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
 >
 > ```bash
 > docker compose -p asterisk-ai-voice-agent logs -f local_ai_server

@@ -5,7 +5,7 @@
 Google AI integration provides two modes for the Asterisk AI Voice Agent:
 
 1. **Google Live (Recommended)** - Real-time bidirectional streaming with Gemini 2.5 Flash, native audio processing, ultra-low latency (<1s), and true duplex communication
-2. **Google Cloud Pipeline** - Traditional pipeline with separate STT (Chirp 3), LLM (Gemini), and TTS (Neural2) components
+2. **Modular Pipelines (optional)** - Operator-defined pipelines that use Google adapters (`google_stt`, `google_llm`, `google_tts`) for STT/LLM/TTS
 
 This guide covers setup for both modes.
 
@@ -31,7 +31,7 @@ In your Google Cloud Console, enable these APIs:
 Add your Google API key to `.env`:
 
 ```bash
-# Google Cloud AI (required for google_cloud_* pipelines)
+# Google AI (used by google_live and/or Google pipeline adapters)
 GOOGLE_API_KEY=your_api_key_here
 ```
 
@@ -60,14 +60,14 @@ exten => s,n,Hangup()
 [from-ai-agent]
 exten => s,1,NoOp(AI Voice Agent - Google Cloud Pipeline)
 exten => s,n,Set(AI_CONTEXT=demo_google)
-exten => s,n,Set(AI_PROVIDER=google_cloud_full)
+exten => s,n,Set(AI_PROVIDER=google_cloud_full)  ; example pipeline name (you define this in `pipelines:`)
 exten => s,n,Stasis(asterisk-ai-voice-agent)
 exten => s,n,Hangup()
 ```
 
 **Recommended**: Set `AI_CONTEXT` and `AI_PROVIDER` when you want an explicit per-extension override:
 - `AI_CONTEXT` selects the context (greeting, prompt, profile, tools)
-- `AI_PROVIDER` selects the provider (e.g., `google_live`, `google_cloud_full`)
+- `AI_PROVIDER` selects the provider (e.g., `google_live`) or a pipeline name you defined under `pipelines:` (e.g., `google_cloud_full`)
 
 If you omit these, the engine will select a context/provider using the precedence rules in `docs/Configuration-Reference.md`.
 
@@ -77,69 +77,49 @@ If you omit these, the engine will select a context/provider using the precedenc
 asterisk -rx "dialplan reload"
 ```
 
-## Available Pipelines
+## Pipelines (Optional / Operator-Defined)
 
-### google_cloud_full (Recommended)
-**Best quality and features**
+Pipeline names are **not shipped/validated by default**. If you want a Google-based pipeline, you define it under `pipelines:` and then select it via `default_provider` or `AI_PROVIDER`.
 
-- **STT**: Google Chirp 3 (latest_long model, 16kHz)
-- **LLM**: Gemini 2.5 Flash (latest stable, fast, intelligent)
-- **TTS**: Neural2-A (natural female voice)
-- **Cost**: ~$0.0024/min
-- **Use Cases**: Customer service, demos, quality-focused deployments
+### 1) Enable Google pipeline adapters
 
-**Dialplan:**
-```ini
-exten => s,n,Set(AI_CONTEXT=demo_google)
-exten => s,n,Set(AI_PROVIDER=google_cloud_full)
+Google pipeline adapters are registered from `providers.google` (this is separate from the full-agent `providers.google_live`).
+
+```yaml
+providers:
+  google:
+    # Credentials are loaded from the environment (env-only):
+    # - GOOGLE_API_KEY (API key auth) OR
+    # - GOOGLE_APPLICATION_CREDENTIALS (service account JSON path)
+    enabled: true
 ```
 
----
+### 2) Example pipeline templates
 
-### google_cloud_cost_optimized
-**Budget-friendly option**
+**Example A: all-Google pipeline**
 
-- **STT**: Google Standard model (8kHz telephony)
-- **LLM**: Gemini 2.5 Flash
-- **TTS**: Standard-C voice
-- **Cost**: ~$0.0015/min (38% lower than full)
-- **Use Cases**: High-volume, cost-sensitive deployments
-
-**Dialplan:**
-```ini
-exten => s,n,Set(AI_CONTEXT=demo_google_cost)
-exten => s,n,Set(AI_PROVIDER=google_cloud_cost_optimized)
+```yaml
+pipelines:
+  google_cloud_full:        # example pipeline name
+    stt: google_stt
+    llm: google_llm
+    tts: google_tts
+    options:
+      stt:
+        language_code: en-US
+      tts:
+        voice_name: "en-US-Neural2-A"
 ```
 
----
+**Example B: Google STT/TTS + OpenAI LLM**
 
-### google_hybrid_openai
-**Best LLM quality**
-
-- **STT**: Google Chirp 3
-- **LLM**: OpenAI GPT-4o-mini (superior reasoning)
-- **TTS**: Google Neural2-A
-- **Cost**: ~$0.003/min
-- **Use Cases**: Complex conversations, reasoning tasks
-
-**Dialplan:**
-```ini
-exten => s,n,Set(AI_CONTEXT=demo_google_hybrid)
-exten => s,n,Set(AI_PROVIDER=google_hybrid_openai)
+```yaml
+pipelines:
+  google_hybrid_openai:     # example pipeline name
+    stt: google_stt
+    llm: openai_llm
+    tts: google_tts
 ```
-
-**Note**: Requires both `GOOGLE_API_KEY` and `OPENAI_API_KEY`.
-
-## Cost Comparison
-
-| Pipeline | STT | LLM | TTS | Est. Cost/min |
-|----------|-----|-----|-----|---------------|
-| google_cloud_full | Chirp 3 | Gemini 2.5 | Neural2 | $0.0024 |
-| google_cloud_cost_optimized | Standard | Gemini 2.5 | Standard | $0.0015 |
-| google_hybrid_openai | Chirp 3 | GPT-4o-mini | Neural2 | $0.003 |
-| deepgram (reference) | Nova-2 | GPT-4o-mini | Aura | $0.0043 |
-
-*Estimates based on typical 3-minute call with 60% talk time*
 
 ## Troubleshooting
 
@@ -150,7 +130,7 @@ exten => s,n,Set(AI_PROVIDER=google_hybrid_openai)
 **Solution**: 
 1. Enable all three APIs in Google Cloud Console (see Quick Start)
 2. Verify API key has permissions for Speech-to-Text, Text-to-Speech, and Generative Language
-3. Restart ai-engine container
+3. Restart `ai_engine` container
 
 ### Issue: Falls back to local_hybrid pipeline
 
@@ -168,8 +148,8 @@ exten => s,n,Set(AI_PROVIDER=google_cloud_full)
 
 **Solution**: 
 1. Check `docker logs ai_engine` for pipeline validation results
-2. Verify spelling: `google_cloud_full`, `google_cloud_cost_optimized`, `google_hybrid_openai`
-3. Ensure all three should show "Pipeline validation SUCCESS"
+2. Verify the pipeline name exists under `pipelines:` (names are operator-defined)
+3. Fix any validation errors printed during engine startup
 
 ### Verify Configuration
 
@@ -180,9 +160,6 @@ docker logs ai_engine 2>&1 | grep -E "google|Pipeline validation|Engine started"
 
 Expected output:
 ```
-Pipeline validation SUCCESS ... pipeline=google_cloud_full
-Pipeline validation SUCCESS ... pipeline=google_cloud_cost_optimized
-Pipeline validation SUCCESS ... pipeline=google_hybrid_openai
 Engine started and listening for calls
 ```
 
@@ -323,14 +300,36 @@ Asterisk (8kHz µ-law)
 
 ## Configuration
 
-Google Live uses the Google provider config:
+Google Live is configured under `providers.google_live` in `config/ai-agent.yaml`:
 
 ```yaml
-google:
-  api_key: ${GOOGLE_API_KEY}
-  llm_model: "gemini-2.5-flash"  # Model with Live API support
-  tts_voice_name: "en-US-Neural2-A"
-  initial_greeting: "Hi! I'm powered by Google Gemini Live API."
+providers:
+  google_live:
+    # Credentials are loaded from the environment (env-only):
+    # - GOOGLE_API_KEY (API key auth) OR
+    # - GOOGLE_APPLICATION_CREDENTIALS (service account JSON path)
+    enabled: true
+    type: full
+    capabilities: ["stt", "llm", "tts"]
+
+    # Transport/provider audio formats
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    provider_input_encoding: linear16
+    provider_input_sample_rate_hz: 16000
+    output_encoding: linear16
+    output_sample_rate_hz: 24000
+    target_encoding: ulaw
+    target_sample_rate_hz: 8000
+
+    # Model/voice
+    llm_model: gemini-2.5-flash-native-audio-preview-12-2025
+    tts_voice_name: Aoede
+
+    # Session behavior
+    greeting: "Hi! I'm powered by Google Gemini Live API."
+    instructions: "You are a helpful voice assistant. Be concise."
+    response_modalities: audio
 ```
 
 ## Features
@@ -384,10 +383,10 @@ Conversation context is maintained automatically:
 
 | Mode | Cost per Minute | Components |
 |------|----------------|------------|
-| **Pipeline** | ~$0.0024 | STT + LLM + TTS separate |
-| **Live API** | ~$0.003* | All-in-one native audio |
+| **Pipeline** | Varies | STT + LLM + TTS billed separately |
+| **Live API** | Varies | All-in-one native audio session |
 
-*Estimated based on preview pricing
+Pricing changes frequently; verify current rates and quotas in your Google Cloud console before production rollout.
 
 ## Troubleshooting
 
@@ -406,7 +405,7 @@ Conversation context is maintained automatically:
 
 **Solutions**:
 1. Check logs for `Google Live audio output` messages
-2. Verify audio transcoding: `grep "resample" logs/ai-engine.log`
+2. Verify audio transcoding in logs: `docker logs ai_engine 2>&1 | grep -i resample`
 3. Test with pipeline mode first to isolate issue
 
 ### Issue: Google Live mis-hears English as other languages (CRITICAL)
@@ -436,15 +435,15 @@ Conversation context is maintained automatically:
 
 **Note**: Barge-in is **automatic** with Google Live. If not working:
 1. Confirm using `AI_PROVIDER=google_live` (not pipeline)
-2. Check VAD is active: `grep "VAD" logs/ai-engine.log`
-3. Verify WebSocket messages: `grep "inputTranscription" logs/ai-engine.log`
+2. Check VAD is active: `docker logs ai_engine 2>&1 | grep -i vad`
+3. Verify WebSocket messages: `docker logs ai_engine 2>&1 | grep -i inputtranscription`
 
 ## Migration from Pipeline to Live
 
 ### Before (Pipeline Mode)
 ```asterisk
 Set(AI_CONTEXT=demo_google)
-; AI_PROVIDER defaults to google_cloud_full
+; AI_PROVIDER defaults to your configured `default_provider`
 Stasis(asterisk-ai-voice-agent)
 ```
 

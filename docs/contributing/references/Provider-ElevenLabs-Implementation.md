@@ -404,7 +404,7 @@ ElevenLabs outputs PCM16 audio at 16kHz sample rate.
 ```
 Asterisk AudioSocket (μ-law 8kHz)
     ↓
-ai-engine: Convert to PCM16 16kHz
+ai_engine: Convert to PCM16 16kHz
     ↓
 Send to ElevenLabs (base64 PCM16)
     ↓
@@ -412,7 +412,7 @@ ElevenLabs processes
     ↓
 Receive PCM16 16kHz
     ↓
-ai-engine: Resample to 8kHz, convert to μ-law
+ai_engine: Resample to 8kHz, convert to μ-law
     ↓
 Asterisk AudioSocket
 ```

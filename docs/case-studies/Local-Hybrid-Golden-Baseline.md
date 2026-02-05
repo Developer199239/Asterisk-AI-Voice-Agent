@@ -121,7 +121,7 @@ Caller (μ-law 8kHz)
     ↓
 Asterisk (ExternalMedia RTP)
     ↓
-ai-engine RTP Server
+ai_engine RTP Server
     ├─ Decode: μ-law → PCM16 8kHz
     └─ Resample: 8kHz → 16kHz ✅ (CRITICAL FIX)
     ↓
@@ -224,12 +224,12 @@ Tools Used: None (not implemented for pipelines)
 
 **Audio Flow (NEW DEBUG LOGS)**:
 ```
-# ai-engine: Audio routing to pipeline
+# ai_engine: Audio routing to pipeline
 🎤 STT send_audio called → input_bytes=5120 format=pcm16_16k
 🎤 STT audio converted and sending to server → pcm16_bytes=5120 base64_size=6828
-🎤 STT audio sent to local-ai-server → pcm16_bytes=5120
+🎤 STT audio sent to `local_ai_server` → pcm16_bytes=5120
 
-# local-ai-server: Vosk processing
+# local_ai_server: Vosk processing
 🎤 AUDIO PAYLOAD RECEIVED → call_id=XXX mode=stt
 🎤 AUDIO DECODED → bytes=5120 base64_len=6828
 🎤 ROUTING TO STT → mode=stt bytes=5120 rate=16000
@@ -354,8 +354,8 @@ external_media:
 **Problem**: Zero visibility into audio flow made debugging impossible.
 
 **Solution**: Added extensive logging at every step:
-- ai-engine: `send_audio` calls with byte counts
-- local-ai-server: Audio payload receipt, decoding, routing
+- ai_engine: `send_audio` calls with byte counts
+- local_ai_server: Audio payload receipt, decoding, routing
 - Vosk processing: RMS calculation, sample counts, has_final status
 
 **Impact**: Can now diagnose issues in seconds instead of hours.
@@ -427,7 +427,7 @@ rms = math.sqrt(sum(s*s for s in samples) / len(samples))
 - ⚠️ Accuracy: Vosk less accurate than Deepgram/Google
 - ⚠️ Hardware: Requires 4+ cores, 8GB+ RAM
 - ⚠️ Tools: No tool support yet (architectural limitation)
-- ⚠️ Setup: More complex (requires local-ai-server container)
+- ⚠️ Setup: More complex (requires `local_ai_server` container)
 
 **Recommended For**:
 - Healthcare: HIPAA compliance (audio privacy)

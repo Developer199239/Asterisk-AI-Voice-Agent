@@ -41,7 +41,7 @@ The `ARIClient` implements automatic reconnection with exponential backoff:
 
 ## 3. Health Checks
 
-The `ai-engine` exposes health endpoints on port 15000 (binds to `0.0.0.0` by default in `docker-compose.yml` so `admin_ui` can reach it). For production hardening, restrict access via firewall/VPN/reverse proxy, or bind it to localhost using `HEALTH_BIND_HOST=127.0.0.1`.
+The `ai_engine` service exposes health endpoints on port 15000 (binds to `0.0.0.0` by default in `docker-compose.yml` so `admin_ui` can reach it). For production hardening, restrict access via firewall/VPN/reverse proxy, or bind it to localhost using `HEALTH_BIND_HOST=127.0.0.1`.
 
 ### 3.1 Endpoints
 
@@ -59,7 +59,7 @@ The `ai-engine` exposes health endpoints on port 15000 (binds to `0.0.0.0` by de
   "status": "healthy",
   "ari_connected": true,
   "rtp_server_running": true,
-  "audio_transport": "externalmedia",
+  "audio_transport": "audiosocket",
   "active_calls": 0,
   "providers": {"deepgram": {"ready": true}, ...}
 }
