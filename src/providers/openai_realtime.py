@@ -636,18 +636,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         )
 
                     try:
+                        farewell_response: Dict[str, Any] = {
+                            "instructions": (
+                                "Say the following sentence to the user exactly, then stop. "
+                                f"Do not call any tools: {farewell_text}"
+                            ),
+                        }
+                        if not self._is_ga:
+                            farewell_response["modalities"] = self._response_modalities
+                            farewell_response["input"] = []
                         await self._send_json(
                             {
                                 "type": "response.create",
                                 "event_id": f"resp-farewell-{uuid.uuid4()}",
-                                "response": {
-                                    self._modalities_key: self._response_modalities,
-                                    "instructions": (
-                                        "Say the following sentence to the user exactly, then stop. "
-                                        f"Do not call any tools: {farewell_text}"
-                                    ),
-                                    "input": [],
-                                },
+                                "response": farewell_response,
                             }
                         )
                         self._pending_response = True
@@ -817,50 +819,43 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         input_enc = (getattr(self.config, "provider_input_encoding", None) or "linear16").lower()
 
         if self._is_ga:
-            # GA uses MIME-type format strings: audio/pcm, audio/pcmu, audio/pcma
-            def _ga_audio_fmt(enc: str) -> str:
-                enc = enc.lower()
-                if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-                    return "audio/pcmu"
-                elif enc in ("alaw", "g711_alaw"):
-                    return "audio/pcma"
-                return "audio/pcm"  # PCM16 linear
-
-            in_fmt = _ga_audio_fmt(input_enc)
-            out_fmt = _ga_audio_fmt(output_enc)
-
-            # GA requires minimum 24000 Hz — set via YAML config
-            in_rate = getattr(self.config, "provider_input_sample_rate_hz", 24000)
-            out_rate = getattr(self.config, "output_sample_rate_hz", 24000)
-
-            audio_input: Dict[str, Any] = {
-                "format": {"type": in_fmt, "rate": in_rate},
+            # GA API: verified working schema from Voximplant GA example
+            # - voice under audio.output.voice
+            # - transcription under audio.input.transcription
+            # - turn_detection at session level (NOT under audio.input)
+            # - NO format objects needed (auto-negotiated)
+            session: Dict[str, Any] = {
+                "type": "realtime",
+                "audio": {
+                    "output": {
+                        "voice": self.config.voice,
+                    },
+                    "input": {
+                        "transcription": {
+                            "model": "whisper-1",
+                        },
+                    },
+                },
             }
-            # GA: turn_detection lives under audio.input
+            # GA: turn_detection at session level (same as Beta)
             if getattr(self.config, "turn_detection", None):
                 try:
                     td = self.config.turn_detection
-                    audio_input["turn_detection"] = {
+                    session["turn_detection"] = {
                         "type": td.type,
                         "silence_duration_ms": td.silence_duration_ms,
                         "threshold": td.threshold,
                         "prefix_padding_ms": td.prefix_padding_ms,
+                        "create_response": True,
                     }
                 except Exception:
                     logger.debug("Failed to build turn_detection for GA", call_id=self._call_id, exc_info=True)
-
-            session: Dict[str, Any] = {
-                "type": "realtime",
-                "output_modalities": ["audio"],  # GA only accepts single: ["audio"] or ["text"]
-                "audio": {
-                    "input": audio_input,
-                    "output": {
-                        "format": {"type": out_fmt},
-                        "voice": self.config.voice,
-                    },
-                },
-                # GA does not accept input_audio_transcription at session level
-            }
+            else:
+                # Default server_vad if not configured
+                session["turn_detection"] = {
+                    "type": "server_vad",
+                    "create_response": True,
+                }
         else:
             # Beta API: flat format strings (pcm16, g711_ulaw, g711_alaw)
             def _beta_audio_fmt(enc: str) -> str:
@@ -988,18 +983,27 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Small delay to ensure VAD disable is processed
         await asyncio.sleep(0.1)
 
-        # REVERT TO WORKING FORMAT - voice is a SESSION parameter, NOT response parameter
-        # The working version used simpler instructions without voice in response.create
-        response_payload: Dict[str, Any] = {
-            "type": "response.create",
-            "event_id": f"resp-{uuid.uuid4()}",
-            "response": {
-                self._modalities_key: self._response_modalities,
-                # Simple instruction that was working before
-                "instructions": f"Please greet the user with the following: {greeting}",
-                "input": [],  # Empty input to avoid distractions
-            },
-        }
+        # Build response.create payload
+        if self._is_ga:
+            # GA: minimal response object — modalities set via session, not response
+            response_payload: Dict[str, Any] = {
+                "type": "response.create",
+                "event_id": f"resp-{uuid.uuid4()}",
+                "response": {
+                    "instructions": f"Please greet the user with the following: {greeting}",
+                },
+            }
+        else:
+            # Beta: include modalities and input
+            response_payload: Dict[str, Any] = {
+                "type": "response.create",
+                "event_id": f"resp-{uuid.uuid4()}",
+                "response": {
+                    "modalities": self._response_modalities,
+                    "instructions": f"Please greet the user with the following: {greeting}",
+                    "input": [],
+                },
+            }
         
         logger.info(
             "🎤 Sending greeting response.create",
@@ -1091,16 +1095,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if self._pending_response or not self.websocket or self.websocket.state.name != "OPEN":
             return
 
+        resp_obj: Dict[str, Any] = {}
+        if not self._is_ga:
+            resp_obj[self._modalities_key] = self._response_modalities
+        resp_obj["metadata"] = {"call_id": self._call_id}
+        if self.config.instructions:
+            resp_obj["instructions"] = self.config.instructions
+
         response_payload: Dict[str, Any] = {
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
-            "response": {
-                self._modalities_key: self._response_modalities,
-                "metadata": {"call_id": self._call_id},
-            },
+            "response": resp_obj,
         }
-        if self.config.instructions:
-            response_payload["response"]["instructions"] = self.config.instructions
 
         await self._send_json(response_payload)
         self._pending_response = True
@@ -2610,7 +2616,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             pass
         if self._is_ga:
-            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm"}}}}
+            # GA auto-negotiates format; skip format override
+            logger.info("GA mode: skipping PCM switch (format auto-negotiated)", call_id=call_id)
+            return
         else:
             pcm_session = {"output_audio_format": "pcm16"}
         payload: Dict[str, Any] = {
