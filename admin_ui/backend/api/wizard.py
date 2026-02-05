@@ -783,10 +783,13 @@ async def start_engine(action: str = "start"):
             add_step("build", "complete", "Image built successfully")
         
         # Step 5: Start/restart container using docker compose
+        #
+        # NOTE: `docker compose restart` does NOT re-read env_file (.env). For wizard flows we want
+        # env updates (keys/transport/etc.) to apply reliably, so use `up --force-recreate --no-build`.
         if action == "restart" and container_running:
             add_step("restart", "running", "Restarting AI Engine...")
             result = subprocess.run(
-                ["docker", "compose", "-p", "asterisk-ai-voice-agent", "restart", "ai_engine"],
+                ["docker", "compose", "-p", "asterisk-ai-voice-agent", "up", "-d", "--force-recreate", "--no-build", "ai_engine"],
                 cwd=PROJECT_ROOT,
                 capture_output=True, text=True, timeout=60
             )
