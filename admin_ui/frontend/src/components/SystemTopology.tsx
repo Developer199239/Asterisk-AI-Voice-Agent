@@ -491,7 +491,8 @@ export const SystemTopology = () => {
                 {state.configuredPipelines.map(pipeline => {
                   const activeCount = activePipelines.get(pipeline.name) || 0;
                   const isActive = activeCount > 0;
-                  const isDefault = pipeline.name === state.activePipeline;
+                  // Check both activePipeline and defaultProvider since default_provider can be a pipeline name
+                  const isDefault = pipeline.name === state.activePipeline || pipeline.name === state.defaultProvider;
                   
                   return (
                     <div key={pipeline.name} className="flex flex-col">
