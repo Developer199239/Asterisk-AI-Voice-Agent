@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Plus, Trash2, Settings } from 'lucide-react';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { Modal } from '../ui/Modal';
+import { EmailTemplateModal } from './EmailTemplateModal';
 
 interface ToolFormProps {
     config: any;
@@ -30,10 +31,6 @@ const ToolForm = ({ config, contexts, onChange }: ToolFormProps) => {
         const [showTranscriptEmailAdvanced, setShowTranscriptEmailAdvanced] = useState(false);
         const [templateModalOpen, setTemplateModalOpen] = useState(false);
         const [templateModalTool, setTemplateModalTool] = useState<'send_email_summary' | 'request_transcript'>('send_email_summary');
-        const [templateModalSection, setTemplateModalSection] = useState<'send_email_summary' | 'request_transcript'>('send_email_summary');
-        const [templateModalPreviewHtml, setTemplateModalPreviewHtml] = useState<string>('');
-        const [templateModalPreviewError, setTemplateModalPreviewError] = useState<string | null>(null);
-        const [templateModalPreviewing, setTemplateModalPreviewing] = useState(false);
 
         // Per-context override draft rows
         const [summaryAdminCtx, setSummaryAdminCtx] = useState('');
@@ -106,45 +103,6 @@ const ToolForm = ({ config, contexts, onChange }: ToolFormProps) => {
         return typeof raw === 'string' && raw.trim().length > 0;
     };
 
-    const setTemplateOverrideEnabled = (tool: 'send_email_summary' | 'request_transcript', section: string, enabled: boolean) => {
-        if (enabled) {
-            const defaultTpl = getDefaultEmailTemplate(tool);
-            if (!defaultTpl) {
-                toast.error('Default template not loaded. You can still paste your own template.');
-                updateNestedConfig(section, 'html_template', config?.[section]?.html_template || '');
-                return;
-            }
-            updateNestedConfig(section, 'html_template', defaultTpl);
-            return;
-        }
-        unsetNestedConfig(section, 'html_template');
-    };
-
-    const previewEmailTemplate = async (tool: 'send_email_summary' | 'request_transcript', section: string) => {
-        try {
-            setTemplateModalPreviewError(null);
-            setTemplateModalPreviewHtml('');
-            setTemplateModalPreviewing(true);
-
-            const htmlTemplate = (config?.[section]?.html_template || '').trim() || null;
-            const includeTranscript = tool === 'send_email_summary' ? (config?.send_email_summary?.include_transcript ?? true) : true;
-            const res = await axios.post('/api/tools/email-templates/preview', {
-                tool,
-                html_template: htmlTemplate,
-                include_transcript: includeTranscript,
-            });
-            if (res.data?.success) {
-                setTemplateModalPreviewHtml(res.data.html || '');
-                return;
-            }
-            setTemplateModalPreviewError(res.data?.error || 'Preview failed.');
-        } catch (e: any) {
-            setTemplateModalPreviewError(e?.response?.data?.detail || e?.message || 'Preview failed.');
-        } finally {
-            setTemplateModalPreviewing(false);
-        }
-    };
-
     const loadEmailDefaults = async () => {
         try {
             setEmailDefaultsError(null);
@@ -176,9 +134,6 @@ const ToolForm = ({ config, contexts, onChange }: ToolFormProps) => {
 
     const openTemplateModal = (tool: 'send_email_summary' | 'request_transcript') => {
         setTemplateModalTool(tool);
-        setTemplateModalSection(tool);
-        setTemplateModalPreviewHtml('');
-        setTemplateModalPreviewError(null);
         setTemplateModalOpen(true);
         if (!emailDefaults && !emailDefaultsError) {
             loadEmailDefaults();
@@ -1116,85 +1071,32 @@ const ToolForm = ({ config, contexts, onChange }: ToolFormProps) => {
                 </div>
             </Modal>
 
-            <Modal
+            <EmailTemplateModal
                 isOpen={templateModalOpen}
                 onClose={() => setTemplateModalOpen(false)}
-                title={templateModalTool === 'send_email_summary' ? 'Send Email Summary – Email Template' : 'Request Transcript – Email Template'}
-                footer={
-                    <div className="flex items-center justify-between w-full">
-                        <div className="text-xs text-muted-foreground">
-                            {emailDefaultsError ? `Defaults: ${emailDefaultsError}` : (emailDefaults ? 'Defaults loaded' : 'Defaults loading…')}
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={async () => {
-                                    const ok = await loadEmailDefaults();
-                                    if (ok) toast.success('Loaded default templates');
-                                    else toast.error('Failed to load defaults');
-                                }}
-                                className="px-3 py-1 text-xs border rounded hover:bg-accent"
-                            >
-                                Retry Load Defaults
-                            </button>
-                            <button onClick={() => setTemplateModalOpen(false)} className="px-4 py-2 border rounded hover:bg-accent">
-                                Close
-                            </button>
-                        </div>
-                    </div>
+                tool={templateModalTool}
+                currentTemplate={(config?.[templateModalTool]?.html_template || '').trim() ? (config?.[templateModalTool]?.html_template || '') : null}
+                includeTranscript={templateModalTool === 'send_email_summary' ? (config?.send_email_summary?.include_transcript ?? true) : true}
+                defaultTemplate={getDefaultEmailTemplate(templateModalTool)}
+                variableNames={(emailDefaults?.variables || []).map((v: any) => v?.name).filter(Boolean)}
+                defaultsStatusText={
+                    emailDefaultsError
+                        ? `Defaults error: ${emailDefaultsError}`
+                        : (emailDefaults ? 'Defaults loaded' : 'Defaults loading…')
                 }
-            >
-                <div className="space-y-4">
-                    <div className="flex items-center justify-between gap-3">
-                        <label className="flex items-center gap-2 text-sm">
-                            <input
-                                type="checkbox"
-                                checked={isTemplateOverrideEnabled(templateModalSection)}
-                                onChange={(e) => setTemplateOverrideEnabled(templateModalTool, templateModalSection, e.target.checked)}
-                            />
-                            Customize (store `html_template` in YAML)
-                        </label>
-                        <button
-                            type="button"
-                            onClick={() => previewEmailTemplate(templateModalTool, templateModalSection)}
-                            disabled={templateModalPreviewing}
-                            className="px-3 py-1 text-xs border rounded hover:bg-accent disabled:opacity-50"
-                        >
-                            {templateModalPreviewing ? 'Previewing…' : 'Preview'}
-                        </button>
-                    </div>
-
-                    {!!emailDefaults?.variables?.length && (
-                        <div className="text-xs text-muted-foreground">
-                            Variables: {emailDefaults.variables.map((v: any) => v?.name).filter(Boolean).join(', ')}
-                        </div>
-                    )}
-
-                    {isTemplateOverrideEnabled(templateModalSection) ? (
-                        <textarea
-                            className="w-full p-3 rounded-md border border-input bg-transparent text-xs min-h-[260px] font-mono"
-                            value={config?.[templateModalSection]?.html_template || ''}
-                            onChange={(e) => updateNestedConfig(templateModalSection, 'html_template', e.target.value)}
-                        />
-                    ) : (
-                        <pre className="w-full p-3 rounded-md border border-input bg-transparent text-xs whitespace-pre-wrap font-mono max-h-[260px] overflow-auto">
-                            {getDefaultEmailTemplate(templateModalTool) || 'Loading default template…'}
-                        </pre>
-                    )}
-
-                    {templateModalPreviewError && (
-                        <div className="text-sm text-destructive">{templateModalPreviewError}</div>
-                    )}
-                    {!templateModalPreviewError && templateModalPreviewHtml && (
-                        <iframe
-                            title="Email Preview"
-                            sandbox=""
-                            className="w-full h-[520px] border rounded"
-                            srcDoc={templateModalPreviewHtml}
-                        />
-                    )}
-                </div>
-            </Modal>
+                onReloadDefaults={async () => {
+                    const ok = await loadEmailDefaults();
+                    if (ok) toast.success('Loaded default templates');
+                    else toast.error('Failed to load defaults');
+                }}
+                onSave={(nextTemplate) => {
+                    if (!nextTemplate) {
+                        unsetNestedConfig(templateModalTool, 'html_template');
+                        return;
+                    }
+                    updateNestedConfig(templateModalTool, 'html_template', nextTemplate);
+                }}
+            />
         </div>
     );
 };
