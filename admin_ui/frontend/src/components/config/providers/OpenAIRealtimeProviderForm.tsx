@@ -140,21 +140,28 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             onChange={(e) => handleChange('voice', e.target.value)}
                         >
                             <optgroup label="Original Voices">
-                                <option value="alloy">Alloy</option>
-                                <option value="echo">Echo</option>
-                                <option value="shimmer">Shimmer</option>
+                                <option value="alloy">Alloy (neutral, balanced)</option>
+                                <option value="ash">Ash (clear, direct)</option>
+                                <option value="ballad">Ballad (warm, storytelling)</option>
+                                <option value="coral">Coral (friendly, conversational)</option>
+                                <option value="echo">Echo (soft, calm)</option>
+                                <option value="sage">Sage (wise, authoritative)</option>
+                                <option value="shimmer">Shimmer (bright, optimistic)</option>
+                                <option value="verse">Verse (expressive, dynamic)</option>
                             </optgroup>
-                            <optgroup label="New Voices (Oct 2024)">
-                                <option value="ash">Ash</option>
-                                <option value="ballad">Ballad</option>
-                                <option value="coral">Coral</option>
-                                <option value="sage">Sage</option>
-                                <option value="verse">Verse</option>
+                            <optgroup label="New Voices (gpt-realtime)">
+                                <option value="cedar">Cedar (warm, natural)</option>
+                                <option value="marin">Marin (clear, professional)</option>
+                            </optgroup>
+                            <optgroup label="Legacy TTS Voices">
+                                <option value="fable">Fable (British, narrative)</option>
+                                <option value="nova">Nova (youthful, energetic)</option>
+                                <option value="onyx">Onyx (deep, resonant)</option>
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            All voices support multilingual output. New voices (Ash, Ballad, etc.) added Oct 2024.
-                            <a href="https://platform.openai.com/docs/api-reference/audio" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Voice Docs ↗</a>
+                            All voices support multilingual output. Cedar &amp; Marin are optimized for gpt-realtime model.
+                            <a href="https://platform.openai.com/docs/guides/realtime" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Voice Docs ↗</a>
                         </p>
                     </div>
                     <div className="space-y-2">
