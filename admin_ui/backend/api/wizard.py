@@ -35,6 +35,34 @@ DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 DISK_BLOCK_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB (hard stop for downloads)
 
 
+def _parse_optional_bool(raw: Optional[str]) -> Optional[bool]:
+    """Parse common bool env values; return None when unset/unknown."""
+    if raw is None:
+        return None
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _detect_gpu_from_env_or_runtime() -> bool:
+    """
+    Detect GPU availability for admin recommendations and startup behavior.
+    Prefers GPU_AVAILABLE from .env (injected as container env), falls back to nvidia-smi.
+    """
+    gpu_env = _parse_optional_bool(os.environ.get("GPU_AVAILABLE"))
+    if gpu_env is not None:
+        return gpu_env
+
+    try:
+        result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=2)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _format_bytes(num_bytes: int) -> str:
     """Format bytes into a human-readable string."""
     if num_bytes < 0:
@@ -893,21 +921,7 @@ async def get_available_models(language: Optional[str] = None):
     ram_gb = psutil.virtual_memory().total // (1024**3)
     cpu_cores = psutil.cpu_count() or 1
 
-    # GPU detection: prefer GPU_AVAILABLE from .env (set by preflight.sh), fallback to nvidia-smi
-    # AAVA-140: preflight.sh detects GPU on host and writes to .env
-    gpu_detected = False
-    gpu_env = os.environ.get("GPU_AVAILABLE", "").lower()
-    if gpu_env == "true":
-        gpu_detected = True
-    elif gpu_env == "false":
-        gpu_detected = False
-    else:
-        # Fallback: try nvidia-smi in container (works if GPU passthrough enabled)
-        try:
-            result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=2)
-            gpu_detected = result.returncode == 0
-        except Exception:
-            gpu_detected = False
+    gpu_detected = _detect_gpu_from_env_or_runtime()
     
     # Get the full catalog or filtered by language
     if language:
@@ -982,22 +996,7 @@ async def detect_local_tier():
         cpu_count = psutil.cpu_count()
         ram_gb = psutil.virtual_memory().total // (1024**3)
         
-        # GPU detection: prefer GPU_AVAILABLE from .env (set by preflight.sh)
-        # AAVA-140: preflight.sh detects GPU on host and writes to .env
-        gpu_detected = False
-        gpu_env = os.environ.get("GPU_AVAILABLE", "").lower()
-        if gpu_env == "true":
-            gpu_detected = True
-        elif gpu_env == "false":
-            gpu_detected = False
-        else:
-            # Fallback: try nvidia-smi in container (works if GPU passthrough enabled)
-            try:
-                result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=5)
-                if result.returncode == 0:
-                    gpu_detected = True
-            except:
-                pass
+        gpu_detected = _detect_gpu_from_env_or_runtime()
         
         # Determine tier
         if gpu_detected:
@@ -1951,13 +1950,13 @@ async def start_local_ai_server():
     print(f"DEBUG: Media setup result: {media_setup}")
     
     try:
-        # AAVA-140: Check if GPU is available (set by preflight.sh)
-        gpu_available = os.environ.get("GPU_AVAILABLE", "").lower() == "true"
+        # AAVA-140: Check if GPU is available (set by preflight.sh, accepts true/false and 1/0)
+        gpu_available = _detect_gpu_from_env_or_runtime()
 
         # Build docker compose command - use GPU override file if GPU detected
         cmd_base = ["docker", "compose", "-p", "asterisk-ai-voice-agent"]
         if gpu_available:
-            print("DEBUG: GPU detected (GPU_AVAILABLE=true), using docker-compose.gpu.yml")
+            print("DEBUG: GPU detected, using docker-compose.gpu.yml")
             cmd_base += ["-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml"]
 
         # Fast path: start from existing image (avoid triggering a rebuild on every click)
