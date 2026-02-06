@@ -24,6 +24,45 @@ MAX_BACKUPS = 5
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+def _is_prefix(key: str, prefixes: tuple[str, ...]) -> bool:
+    return any(key.startswith(p) for p in prefixes)
+
+
+def _ai_engine_env_key(key: str) -> bool:
+    return (
+        _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_"))
+        or key in (
+            "OPENAI_API_KEY",
+            "GROQ_API_KEY",
+            "DEEPGRAM_API_KEY",
+            "GOOGLE_API_KEY",
+            "RESEND_API_KEY",
+            "ELEVENLABS_API_KEY",
+            "ELEVENLABS_AGENT_ID",
+            "TZ",
+            "STREAMING_LOG_LEVEL",
+        )
+        or _is_prefix(key, ("AUDIO_TRANSPORT", "DOWNSTREAM_MODE", "AUDIOSOCKET_", "EXTERNAL_MEDIA_", "BARGE_IN_"))
+        or _is_prefix(key, ("SMTP_",))
+        # Local provider runtime uses these env vars via ${LOCAL_WS_*} placeholders in ai-agent.yaml
+        or _is_prefix(key, ("LOCAL_WS_",))
+    )
+
+
+def _local_ai_env_key(key: str) -> bool:
+    return (
+        _is_prefix(key, ("LOCAL_", "KROKO_", "FASTER_WHISPER_", "WHISPER_CPP_", "MELOTTS_", "KOKORO_"))
+        or key in ("SHERPA_MODEL_PATH",)
+    )
+
+
+def _admin_ui_env_key(key: str) -> bool:
+    return (
+        key in ("JWT_SECRET", "DOCKER_SOCK", "DOCKER_GID", "TZ")
+        or _is_prefix(key, ("UVICORN_", "ADMIN_UI_"))
+    )
+
+
 def _assert_no_duplicate_yaml_keys(node: yaml.Node) -> None:
     """
     Detect duplicate mapping keys before calling yaml.safe_load().
@@ -640,41 +679,6 @@ async def update_env(env_data: Dict[str, Optional[str]]):
         
         changed_keys = sorted(set(keys_to_update) | set(keys_to_delete))
 
-        def _is_prefix(key: str, prefixes: tuple[str, ...]) -> bool:
-            return any(key.startswith(p) for p in prefixes)
-
-        def _ai_engine_env_key(key: str) -> bool:
-            return (
-                _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_"))
-                or key in (
-                    "OPENAI_API_KEY",
-                    "GROQ_API_KEY",
-                    "DEEPGRAM_API_KEY",
-                    "GOOGLE_API_KEY",
-                    "RESEND_API_KEY",
-                    "ELEVENLABS_API_KEY",
-                    "ELEVENLABS_AGENT_ID",
-                    "TZ",
-                    "STREAMING_LOG_LEVEL",
-                )
-                or _is_prefix(key, ("AUDIO_TRANSPORT", "DOWNSTREAM_MODE", "AUDIOSOCKET_", "EXTERNAL_MEDIA_", "BARGE_IN_"))
-                or _is_prefix(key, ("SMTP_",))
-                # Local provider runtime uses these env vars via ${LOCAL_WS_*} placeholders in ai-agent.yaml
-                or _is_prefix(key, ("LOCAL_WS_",))
-            )
-
-        def _local_ai_env_key(key: str) -> bool:
-            return (
-                _is_prefix(key, ("LOCAL_", "KROKO_", "FASTER_WHISPER_", "WHISPER_CPP_", "MELOTTS_", "KOKORO_"))
-                or key in ("SHERPA_MODEL_PATH",)
-            )
-
-        def _admin_ui_env_key(key: str) -> bool:
-            return (
-                key in ("JWT_SECRET", "DOCKER_SOCK", "DOCKER_GID", "TZ")
-                or _is_prefix(key, ("UVICORN_", "ADMIN_UI_"))
-            )
-
         impacts_ai_engine = any(_ai_engine_env_key(k) for k in changed_keys)
         impacts_local_ai = any(_local_ai_env_key(k) for k in changed_keys)
         impacts_admin_ui = any(_admin_ui_env_key(k) for k in changed_keys)
@@ -706,6 +710,81 @@ async def update_env(env_data: Dict[str, Optional[str]]):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/env/status")
+async def get_env_status():
+    """
+    Detect whether the running containers are out-of-sync with the project's `.env` file.
+
+    This allows the UI to keep showing a correct "Apply Changes" plan even after a refresh,
+    since `.env` edits persist but container environments only update on recreate/restart.
+    """
+    try:
+        from dotenv import dotenv_values
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="python-dotenv is required for env status") from e
+
+    env_map = dotenv_values(settings.ENV_PATH) if os.path.exists(settings.ENV_PATH) else {}
+    env_map = {k: str(v) for k, v in (env_map or {}).items() if k and v is not None}
+
+    try:
+        import docker  # type: ignore
+        client = docker.from_env()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Docker unavailable for env status: {str(e)}")
+
+    def _container_env(name: str) -> Dict[str, str]:
+        try:
+            c = client.containers.get(name)
+            raw = (c.attrs.get("Config", {}) or {}).get("Env", []) or []
+            out: Dict[str, str] = {}
+            for item in raw:
+                if not isinstance(item, str) or "=" not in item:
+                    continue
+                k, v = item.split("=", 1)
+                out[str(k)] = str(v)
+            return out
+        except Exception:
+            return {}
+
+    ai_env = _container_env("ai_engine")
+    local_env = _container_env("local_ai_server")
+    admin_env = _container_env("admin_ui")
+
+    def _diff_keys(*, desired: Dict[str, str], actual: Dict[str, str], key_pred) -> list[str]:
+        keys = set()
+        keys.update([k for k in desired.keys() if key_pred(k)])
+        keys.update([k for k in actual.keys() if key_pred(k)])
+        diffs = []
+        for k in sorted(keys):
+            want = str(desired.get(k, "") or "")
+            got = str(actual.get(k, "") or "")
+            if want != got:
+                diffs.append(k)
+        return diffs
+
+    drift_ai = _diff_keys(desired=env_map, actual=ai_env, key_pred=_ai_engine_env_key)
+    drift_local = _diff_keys(desired=env_map, actual=local_env, key_pred=_local_ai_env_key)
+    drift_admin = _diff_keys(desired=env_map, actual=admin_env, key_pred=_admin_ui_env_key)
+
+    apply_plan = []
+    if drift_local:
+        apply_plan.append({"service": "local_ai_server", "method": "recreate", "endpoint": "/api/system/containers/local_ai_server/restart"})
+    if drift_ai:
+        apply_plan.append({"service": "ai_engine", "method": "recreate", "endpoint": "/api/system/containers/ai_engine/restart"})
+    if drift_admin:
+        apply_plan.append({"service": "admin_ui", "method": "restart", "endpoint": "/api/system/containers/admin_ui/restart"})
+
+    return {
+        "pending_restart": bool(apply_plan),
+        "apply_plan": apply_plan,
+        "drift": {
+            "ai_engine": drift_ai,
+            "local_ai_server": drift_local,
+            "admin_ui": drift_admin,
+        },
+    }
 
 class ProviderTestRequest(BaseModel):
     name: str

@@ -112,6 +112,17 @@ const EnvPage = () => {
             if ((loadedEnv['KOKORO_MODE'] || '').toLowerCase() === 'hf') {
                 setShowAdvancedKokoro(true);
             }
+            // After loading `.env`, check whether any running containers are out-of-sync.
+            try {
+                const statusRes = await axios.get('/api/config/env/status', {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                const plan = (statusRes.data?.apply_plan || []) as Array<{ service: string; method: string; endpoint: string }>;
+                setApplyPlan(plan);
+                setPendingRestart(Boolean(statusRes.data?.pending_restart));
+            } catch {
+                // Best-effort: status endpoint may be unavailable on older builds.
+            }
         } catch (err: any) {
             console.error('Failed to load env', err);
             setError(err.response?.data?.detail || 'Failed to load environment variables');
@@ -178,6 +189,10 @@ const EnvPage = () => {
     const handleApplyChanges = async (force: boolean = false) => {
         setRestartingEngine(true);
         try {
+            if (!applyPlan || applyPlan.length === 0) {
+                toast.info('No pending changes to apply');
+                return;
+            }
             // Apply in safe order: local_ai_server → ai_engine → admin_ui
             const ordered = ['local_ai_server', 'ai_engine', 'admin_ui'];
             const planByService = new Map(applyPlan.map((p) => [p.service, p]));
@@ -418,7 +433,7 @@ const EnvPage = () => {
                 </div>
                 <button
                     onClick={() => handleApplyChanges(false)}
-                    disabled={restartingEngine}
+                    disabled={restartingEngine || applyPlan.length === 0}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
                         pendingRestart 
                             ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium' 
