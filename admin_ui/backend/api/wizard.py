@@ -63,6 +63,16 @@ def _detect_gpu_from_env_or_runtime() -> bool:
         return False
 
 
+def _gpu_override_enabled_from_preflight() -> bool:
+    """
+    Enable GPU compose override only when preflight has explicitly set GPU_AVAILABLE.
+    This avoids breaking CPU fallback on hosts where nvidia-smi exists but Docker GPU
+    passthrough is not configured yet.
+    """
+    gpu_env = _parse_optional_bool(os.environ.get("GPU_AVAILABLE"))
+    return gpu_env is True
+
+
 def _format_bytes(num_bytes: int) -> str:
     """Format bytes into a human-readable string."""
     if num_bytes < 0:
@@ -1950,13 +1960,14 @@ async def start_local_ai_server():
     print(f"DEBUG: Media setup result: {media_setup}")
     
     try:
-        # AAVA-140: Check if GPU is available (set by preflight.sh, accepts true/false and 1/0)
-        gpu_available = _detect_gpu_from_env_or_runtime()
+        # Use preflight-derived flag to decide compose override.
+        # Do not infer from runtime nvidia-smi here because passthrough may be unavailable.
+        gpu_available = _gpu_override_enabled_from_preflight()
 
         # Build docker compose command - use GPU override file if GPU detected
         cmd_base = ["docker", "compose", "-p", "asterisk-ai-voice-agent"]
         if gpu_available:
-            print("DEBUG: GPU detected, using docker-compose.gpu.yml")
+            print("DEBUG: GPU override enabled (GPU_AVAILABLE=true), using docker-compose.gpu.yml")
             cmd_base += ["-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml"]
 
         # Fast path: start from existing image (avoid triggering a rebuild on every click)
