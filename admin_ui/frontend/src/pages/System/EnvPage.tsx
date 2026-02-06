@@ -155,16 +155,28 @@ const EnvPage = () => {
             const response = await axios.post('/api/config/env', envToSave, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            const plan = (response.data?.apply_plan || []) as Array<{ service: string; method: string; endpoint: string }>;
             const keys = (response.data?.changed_keys || []) as string[];
-            setApplyPlan(plan);
             setChangedKeys(keys);
-            setPendingRestart(plan.length > 0);
+
+            // Prefer drift-based status (source of truth for whether containers need recreate),
+            // but fall back to the immediate apply_plan from the save response.
+            let plan = (response.data?.apply_plan || []) as Array<{ service: string; method: string; endpoint: string }>;
+            try {
+                const statusRes = await axios.get('/api/config/env/status', {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                plan = (statusRes.data?.apply_plan || plan) as Array<{ service: string; method: string; endpoint: string }>;
+                setPendingRestart(Boolean(statusRes.data?.pending_restart));
+            } catch {
+                setPendingRestart(plan.length > 0);
+            }
+            setApplyPlan(plan);
+
             const services = Array.from(new Set(plan.map((p) => p.service))).sort();
             if (plan.length > 0) {
                 toast.success('Environment saved', { description: `Apply changes by restarting: ${services.join(', ')}` });
             } else {
-                toast.success('Environment saved');
+                toast.success('Environment saved (no restart needed)');
             }
         } catch (err: any) {
             console.error('Failed to save env', err);
