@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Phone, Cpu, Server, Mic, MessageSquare, Volume2, Zap, Radio, CheckCircle2, XCircle, Layers } from 'lucide-react';
 import axios from 'axios';
 import yaml from 'js-yaml';
@@ -75,6 +76,7 @@ export const SystemTopology = () => {
     activeCalls: new Map(),
   });
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   // Fetch health status
   useEffect(() => {
@@ -277,10 +279,13 @@ export const SystemTopology = () => {
           {/* === ROW 1: Asterisk → AI Engine → Providers === */}
           
           {/* Asterisk PBX */}
-          <div className={`relative p-4 rounded-lg border-2 transition-all duration-300 ${
+          <div 
+            onClick={() => navigate('/env')}
+            title="Go to Asterisk Settings →"
+            className={`relative p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer hover:opacity-80 ${
             hasAsteriskChannels 
               ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
-              : 'border-border bg-card'
+              : 'border-border bg-card hover:border-primary/40'
           }`}>
             {hasAsteriskChannels && (
               <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
@@ -327,12 +332,15 @@ export const SystemTopology = () => {
           </div>
 
           {/* AI Engine Core */}
-          <div className={`relative p-4 rounded-lg border-2 transition-all duration-300 ${
+          <div 
+            onClick={() => navigate('/env#ai-engine')}
+            title="Go to AI Engine Settings →"
+            className={`relative p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer hover:opacity-80 ${
             state.aiEngineStatus === 'error'
               ? 'border-red-500 bg-red-500/10'
               : hasActiveCalls 
                 ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
-                : 'border-border bg-card'
+                : 'border-border bg-card hover:border-primary/40'
           }`}>
             {hasActiveCalls && state.aiEngineStatus === 'connected' && (
               <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
@@ -377,7 +385,11 @@ export const SystemTopology = () => {
 
           {/* Providers (Full Agents Only) */}
           <div>
-            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Providers</div>
+            <div 
+              onClick={() => navigate('/providers')}
+              title="Go to Providers →"
+              className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center cursor-pointer hover:text-primary transition-colors"
+            >Providers</div>
             <div className="flex flex-col gap-2">
               {state.configuredProviders.length === 0 ? (
                 <div className="p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center">
@@ -403,7 +415,9 @@ export const SystemTopology = () => {
                   return (
                     <div 
                       key={provider.name}
-                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${cellClass}`}
+                      onClick={() => navigate('/providers')}
+                      title={`Configure ${provider.displayName} →`}
+                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${cellClass}`}
                     >
                       {isActive && (
                         <div className="absolute inset-0 rounded-lg border border-green-500 animate-ping opacity-20" />
@@ -481,7 +495,11 @@ export const SystemTopology = () => {
           
           {/* Pipelines with sub-components */}
           <div>
-            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Pipelines</div>
+            <div 
+              onClick={() => navigate('/pipelines')}
+              title="Go to Pipelines →"
+              className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center cursor-pointer hover:text-primary transition-colors"
+            >Pipelines</div>
             {state.configuredPipelines.length === 0 ? (
               <div className="p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center">
                 No pipelines
@@ -495,7 +513,7 @@ export const SystemTopology = () => {
                   const isDefault = pipeline.name === state.activePipeline || pipeline.name === state.defaultProvider;
                   
                   return (
-                    <div key={pipeline.name} className="flex flex-col">
+                    <div key={pipeline.name} onClick={() => navigate('/pipelines')} title={`Configure ${pipeline.name.replace(/_/g, ' ')} →`} className="flex flex-col cursor-pointer hover:opacity-80">
                       {/* Pipeline name header */}
                       <div 
                         className={`relative flex items-center gap-2 p-2 rounded-t-lg border border-b-0 transition-all ${
@@ -554,10 +572,13 @@ export const SystemTopology = () => {
           {/* Local AI Server (aligned with AI Engine above) */}
           <div>
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Local AI Server</div>
-            <div className={`relative p-4 rounded-lg border-2 transition-all duration-300 ${
+            <div 
+              onClick={() => navigate('/models')}
+              title="Go to Models →"
+              className={`relative p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer hover:opacity-80 ${
               state.localAIStatus === 'error'
                 ? 'border-red-500 bg-red-500/10'
-                : 'border-border bg-card'
+                : 'border-border bg-card hover:border-primary/40'
             }`}>
               <div className="flex flex-col items-center gap-2">
                 <Server className={`w-8 h-8 ${
@@ -594,10 +615,14 @@ export const SystemTopology = () => {
 
           {/* STT / LLM / TTS Models */}
           <div>
-            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Models</div>
+            <div 
+              onClick={() => navigate('/models')}
+              title="Go to Models →"
+              className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center cursor-pointer hover:text-primary transition-colors"
+            >Models</div>
             <div className="flex flex-col gap-2">
               {/* STT */}
-              <div className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
+              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${
                 activeLocalModels.stt && state.localAIModels?.stt?.loaded
                   ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
                   : state.localAIModels?.stt?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
@@ -620,7 +645,7 @@ export const SystemTopology = () => {
               </div>
 
               {/* LLM */}
-              <div className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
+              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${
                 activeLocalModels.llm && state.localAIModels?.llm?.loaded
                   ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
                   : state.localAIModels?.llm?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
@@ -643,7 +668,7 @@ export const SystemTopology = () => {
               </div>
 
               {/* TTS */}
-              <div className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 ${
+              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${
                 activeLocalModels.tts && state.localAIModels?.tts?.loaded
                   ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
                   : state.localAIModels?.tts?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
