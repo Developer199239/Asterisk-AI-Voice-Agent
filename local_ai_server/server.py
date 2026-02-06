@@ -1105,15 +1105,6 @@ class LocalAIServer:
         except Exception as exc:
             logging.debug("GPU detection via nvidia-smi failed: %s", exc)
 
-        visible_devices = (os.getenv("NVIDIA_VISIBLE_DEVICES", "") or "").strip().lower()
-        if visible_devices and visible_devices not in {"void", "none", "no", "-1"}:
-            logging.info(
-                "🎮 GPU passthrough detected via NVIDIA_VISIBLE_DEVICES=%s, using %s layers",
-                visible_devices,
-                auto_default_layers,
-            )
-            return auto_default_layers
-
         # Last fallback for environments that include torch.
         try:
             import torch
