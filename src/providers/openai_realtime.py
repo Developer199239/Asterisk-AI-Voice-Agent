@@ -592,7 +592,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 'ari_client': getattr(self, '_ari_client', None),
                 'config': getattr(self, '_full_config', None),
                 'allowed_tools': self._allowed_tools,
-                'websocket': self.websocket
+                'websocket': self.websocket,
+                'is_ga': self._is_ga,  # Pass API version to adapter for correct response.create format
             }
             
             # Execute tool via adapter

@@ -276,13 +276,23 @@ class OpenAIToolAdapter:
             tool_message = safe_result.get('message', '')
             ai_should_speak = safe_result.get('ai_should_speak', True)
             
-            # Use EXACT same format as greeting which reliably produces audio
-            response_config = {
-                "modalities": ["text", "audio"],
-                "input": [],  # Empty input to avoid context confusion (matches greeting)
-            }
+            # Check if using GA API (modalities not supported in response.create for GA)
+            is_ga = context.get('is_ga', True)  # Default to GA for safety
+            
+            # Build response config based on API version
+            response_config = {}
+            
+            # Only add modalities and input for Beta API
+            # GA API only accepts instructions in response.create
+            if not is_ga:
+                response_config["modalities"] = ["text", "audio"]
+                response_config["input"] = []  # Empty input to avoid context confusion
+                logger.debug("Using Beta API format for response.create (with modalities)")
+            else:
+                logger.debug("Using GA API format for response.create (no modalities)")
             
             # If tool has a message and AI should speak, add direct instruction to speak it
+            # Instructions work in both GA and Beta modes
             if tool_message and ai_should_speak:
                 # Use direct instruction format like greeting: "Please say: {text}"
                 response_config["instructions"] = f"Please say the following to the user: {tool_message}"
