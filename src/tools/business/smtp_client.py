@@ -188,7 +188,10 @@ async def send_email(
     max_retries: int = 1,
 ) -> Optional[Dict[str, Any]]:
     if not _smtp_configured():
-        logger.error("SMTP not configured (SMTP_HOST missing)", call_id=call_id)
+        logger.error(
+            "SMTP not configured (SMTP_HOST missing). Set SMTP_HOST in .env and force-recreate ai_engine to apply env_file changes.",
+            call_id=call_id,
+        )
         return None
 
     if not await _dedupe_should_send(email_data, call_id=call_id, log_label=log_label, recipient=recipient):

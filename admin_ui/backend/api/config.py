@@ -9,6 +9,9 @@ import glob
 import tempfile
 import sys
 import logging
+import ssl
+import smtplib
+from email.message import EmailMessage
 from contextlib import contextmanager
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, Union
@@ -666,11 +669,14 @@ async def update_env(env_data: Dict[str, Optional[str]]):
         impacts_admin_ui = any(_admin_ui_env_key(k) for k in changed_keys)
 
         apply_plan = []
+        # NOTE: For ai_engine/local_ai_server, env_file (.env) changes require a force-recreate.
+        # The frontend calls /restart?recreate=true for these services.
         if impacts_ai_engine:
-            apply_plan.append({"service": "ai_engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"})
+            apply_plan.append({"service": "ai_engine", "method": "recreate", "endpoint": "/api/system/containers/ai_engine/restart"})
         if impacts_local_ai:
-            apply_plan.append({"service": "local_ai_server", "method": "restart", "endpoint": "/api/system/containers/local_ai_server/restart"})
+            apply_plan.append({"service": "local_ai_server", "method": "recreate", "endpoint": "/api/system/containers/local_ai_server/restart"})
         if impacts_admin_ui:
+            # Admin UI reads .env from disk at startup; a restart is sufficient in most cases.
             apply_plan.append({"service": "admin_ui", "method": "restart", "endpoint": "/api/system/containers/admin_ui/restart"})
 
         message = "Environment saved. Restart impacted services to apply changes."
@@ -693,6 +699,12 @@ async def update_env(env_data: Dict[str, Optional[str]]):
 class ProviderTestRequest(BaseModel):
     name: str
     config: Dict[str, Any]
+
+class SmtpTestRequest(BaseModel):
+    to_email: str
+    from_email: Optional[str] = None
+    subject: Optional[str] = None
+    text: Optional[str] = None
 
 @router.post("/providers/test")
 async def test_provider_connection(request: ProviderTestRequest):
@@ -1070,6 +1082,103 @@ async def export_configuration():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/env/smtp/test")
+async def test_smtp_settings(req: SmtpTestRequest):
+    """
+    Send a test email using SMTP_* settings from the project's .env file.
+
+    This validates connectivity + auth using the *configured* SMTP settings (as saved by the UI),
+    even before the ai_engine container is force-recreated to pick up env_file changes.
+    """
+    try:
+        from dotenv import dotenv_values
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="python-dotenv is required for SMTP test") from e
+
+    if not (req.to_email or "").strip():
+        raise HTTPException(status_code=400, detail="to_email is required")
+
+    env_map = dotenv_values(settings.ENV_PATH) if os.path.exists(settings.ENV_PATH) else {}
+
+    host = str((env_map or {}).get("SMTP_HOST") or "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="SMTP_HOST is not set in .env")
+
+    tls_mode = str((env_map or {}).get("SMTP_TLS_MODE") or "starttls").strip().lower()
+    if tls_mode not in {"starttls", "smtps", "none"}:
+        raise HTTPException(status_code=400, detail="SMTP_TLS_MODE must be starttls, smtps, or none")
+
+    port_raw = str((env_map or {}).get("SMTP_PORT") or "").strip()
+    try:
+        port = int(port_raw) if port_raw else (465 if tls_mode == "smtps" else 587)
+    except Exception:
+        raise HTTPException(status_code=400, detail="SMTP_PORT must be an integer")
+
+    username = str((env_map or {}).get("SMTP_USERNAME") or "").strip() or None
+    password = str((env_map or {}).get("SMTP_PASSWORD") or "").strip() or None
+
+    timeout_raw = str((env_map or {}).get("SMTP_TIMEOUT_SECONDS") or "10").strip()
+    try:
+        timeout_s = float(timeout_raw or "10")
+    except Exception:
+        timeout_s = 10.0
+
+    tls_verify = str((env_map or {}).get("SMTP_TLS_VERIFY") or "true").strip().lower() in {"1", "true", "yes", "on"}
+    context = ssl.create_default_context()
+    if not tls_verify:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    from_email = (req.from_email or "").strip()
+    if not from_email:
+        # Best-effort default: many SMTP servers expect From to match the authenticated mailbox.
+        from_email = (username or "test@localhost")
+
+    subject = (req.subject or "").strip() or "Asterisk AI Voice Agent - SMTP Test"
+    text = (req.text or "").strip() or (
+        "This is a test email sent by the Admin UI to verify your SMTP settings.\n\n"
+        "If you received this, SMTP is configured correctly."
+    )
+
+    msg = EmailMessage()
+    msg["To"] = req.to_email.strip()
+    msg["From"] = from_email
+    msg["Subject"] = subject
+    msg.set_content(text)
+
+    def _send_sync() -> None:
+        if tls_mode == "smtps":
+            with smtplib.SMTP_SSL(host=host, port=port, timeout=timeout_s, context=context) as smtp:
+                smtp.ehlo()
+                if username and password:
+                    smtp.login(username, password)
+                smtp.send_message(msg, to_addrs=[req.to_email.strip()])
+            return
+
+        with smtplib.SMTP(host=host, port=port, timeout=timeout_s) as smtp:
+            smtp.ehlo()
+            if tls_mode == "starttls":
+                smtp.starttls(context=context)
+                smtp.ehlo()
+            if username and password:
+                smtp.login(username, password)
+            smtp.send_message(msg, to_addrs=[req.to_email.strip()])
+
+    try:
+        await asyncio.to_thread(_send_sync)
+        return {
+            "success": True,
+            "message": "Test email accepted by SMTP server",
+            "host": host,
+            "port": port,
+            "tls_mode": tls_mode,
+            "tls_verify": tls_verify,
+        }
+    except Exception as e:
+        # Do not echo secrets; only return the error string.
+        raise HTTPException(status_code=500, detail=f"SMTP test failed: {str(e)}")
 
 @router.get("/export-logs")
 async def export_logs():

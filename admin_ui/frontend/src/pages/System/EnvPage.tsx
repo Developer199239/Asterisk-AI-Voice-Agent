@@ -59,6 +59,9 @@ const EnvPage = () => {
     const [applyPlan, setApplyPlan] = useState<Array<{ service: string; method: string; endpoint: string }>>([]);
     const [changedKeys, setChangedKeys] = useState<string[]>([]);
     const [showAdvancedKokoro, setShowAdvancedKokoro] = useState(false);
+    const [smtpTestTo, setSmtpTestTo] = useState('');
+    const [smtpTesting, setSmtpTesting] = useState(false);
+    const [smtpTestResult, setSmtpTestResult] = useState<{success: boolean; message?: string; error?: string} | null>(null);
 
     const [error, setError] = useState<string | null>(null);
 
@@ -260,6 +263,32 @@ const EnvPage = () => {
             });
         } finally {
             setAriTesting(false);
+        }
+    };
+
+    const testSmtp = async () => {
+        const toEmail = (smtpTestTo || '').trim();
+        if (!toEmail) {
+            toast.error('Enter a recipient email for the SMTP test.');
+            return;
+        }
+        setSmtpTesting(true);
+        setSmtpTestResult(null);
+        try {
+            const res = await axios.post('/api/config/env/smtp/test', {
+                to_email: toEmail,
+                from_email: (env['SMTP_USERNAME'] || '').trim() || undefined,
+            }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setSmtpTestResult({ success: true, message: res.data?.message || 'Test email accepted by SMTP server.' });
+        } catch (err: any) {
+            setSmtpTestResult({
+                success: false,
+                error: err.response?.data?.detail || err.message || 'SMTP test failed'
+            });
+        } finally {
+            setSmtpTesting(false);
         }
     };
 
@@ -673,6 +702,53 @@ const EnvPage = () => {
                                     onChange={(e) => updateEnv('SMTP_TIMEOUT_SECONDS', e.target.value)}
                                     placeholder="10"
                                 />
+                                <div className="md:col-span-2">
+                                    <div className="flex flex-col md:flex-row md:items-end gap-3">
+                                        <div className="flex-1">
+                                            <FormInput
+                                                label="Send Test Email To"
+                                                value={smtpTestTo}
+                                                onChange={(e) => setSmtpTestTo(e.target.value)}
+                                                placeholder="you@company.com"
+                                                tooltip="Sends a one-off test email using SMTP_* values from the saved .env file."
+                                            />
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={testSmtp}
+                                            disabled={smtpTesting}
+                                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
+                                            title="Validates SMTP connectivity/auth. For live calls to use SMTP, click Apply Changes to recreate ai_engine."
+                                        >
+                                            {smtpTesting ? (
+                                                <>
+                                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                                    Sending...
+                                                </>
+                                            ) : (
+                                                'Send Test Email'
+                                            )}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-2">
+                                        Note: Live calls use the AI Engine container environment. After saving SMTP settings, click “Apply Changes” to recreate <code>ai_engine</code>.
+                                    </p>
+                                    {smtpTestResult && (
+                                        <div className={`flex items-center gap-2 text-sm mt-2 ${smtpTestResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                                            {smtpTestResult.success ? (
+                                                <>
+                                                    <CheckCircle className="w-4 h-4" />
+                                                    <span>{smtpTestResult.message || 'SMTP test succeeded.'}</span>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <XCircle className="w-4 h-4" />
+                                                    <span>{smtpTestResult.error || 'SMTP test failed.'}</span>
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </ConfigCard>
                     </ConfigSection>
