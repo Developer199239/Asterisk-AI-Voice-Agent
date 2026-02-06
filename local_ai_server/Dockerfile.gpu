@@ -29,6 +29,14 @@ WORKDIR /usr/src/app
 # Create virtual environment
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+ENV CUDA_HOME=/usr/local/cuda
+ENV LIBRARY_PATH="${CUDA_HOME}/lib64/stubs:${LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64/stubs:${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+
+# Make libcuda SONAME discoverable during build-time linking in containers.
+RUN if [ -f "${CUDA_HOME}/lib64/stubs/libcuda.so" ] && [ ! -e "${CUDA_HOME}/lib64/stubs/libcuda.so.1" ]; then \
+        ln -s "${CUDA_HOME}/lib64/stubs/libcuda.so" "${CUDA_HOME}/lib64/stubs/libcuda.so.1"; \
+    fi
 
 # Copy requirements first for optimal caching
 COPY requirements.txt .
@@ -72,7 +80,9 @@ RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
     fi
 
 RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \
-        CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 pip install --no-cache-dir llama-cpp-python==0.3.16; \
+        CMAKE_ARGS="-DGGML_CUDA=on -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=OFF" \
+        FORCE_CMAKE=1 \
+        pip install --no-cache-dir llama-cpp-python==0.3.16; \
     fi
 
 # Pre-install spacy model for Kokoro TTS (only if Kokoro included)
