@@ -57,7 +57,10 @@ def _detect_gpu_from_env_or_runtime() -> bool:
         return gpu_env
 
     try:
-        result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=2)
+        nvidia_smi = shutil.which("nvidia-smi")
+        if not nvidia_smi:
+            return False
+        result = subprocess.run([nvidia_smi], capture_output=True, timeout=2)
         return result.returncode == 0
     except Exception:
         return False

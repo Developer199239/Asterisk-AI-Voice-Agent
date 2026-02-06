@@ -10,6 +10,7 @@ ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false
 ARG INCLUDE_LLAMA=true
+ARG MELOTTS_GIT_REF=b633f243412169b999526e19eb6fcac0974b5d30
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -63,7 +64,7 @@ RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
     fi
 
 RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
-        pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git && \
+        pip install --no-cache-dir "git+https://github.com/myshell-ai/MeloTTS.git@${MELOTTS_GIT_REF}" && \
         python -m unidic download && \
         python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')" && \
         python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" && \
@@ -117,6 +118,10 @@ RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
         tar -xzf /tmp/onnxruntime.tgz -C /tmp && \
         mv /tmp/onnxruntime-linux-x64-1.17.1/lib/* /usr/lib/ && \
         rm -rf /tmp/onnxruntime* && \
+        if [ -z "$KROKO_SERVER_SHA256" ]; then \
+            echo "KROKO_SERVER_SHA256 must be set when INCLUDE_KROKO_EMBEDDED=true. Build aborted." && \
+            exit 1; \
+        fi && \
         wget -q https://download.kroko.ai/binaries/kroko-onnx-online-websocket-server \
             -O /usr/local/bin/kroko-server && \
         ACTUAL_KROKO_SHA=$(sha256sum /usr/local/bin/kroko-server | cut -d' ' -f1) && \

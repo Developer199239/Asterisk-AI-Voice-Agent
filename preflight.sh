@@ -1871,7 +1871,6 @@ check_asterisk_uid_gid() {
 check_gpu() {
     GPU_AVAILABLE=false
     GPU_NAME=""
-    GPU_PASSTHROUGH_OK=false
     
     # Step 1: Check if nvidia-smi exists on host
     if ! command -v nvidia-smi &>/dev/null; then
@@ -1947,7 +1946,6 @@ check_gpu() {
     done
 
     if [ "$passthrough_test_ok" = true ]; then
-        GPU_PASSTHROUGH_OK=true
         log_ok "Docker GPU passthrough working"
         log_info "  Verified with image: $working_cuda_test_image"
         update_env_gpu "true"

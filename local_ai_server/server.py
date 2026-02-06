@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1067,9 +1068,12 @@ class LocalAIServer:
 
         # Prefer host/runtime GPU detection via nvidia-smi (works without torch).
         try:
+            nvidia_smi = shutil.which("nvidia-smi")
+            if not nvidia_smi:
+                raise FileNotFoundError("nvidia-smi not found on PATH")
             query = subprocess.run(
                 [
-                    "nvidia-smi",
+                    nvidia_smi,
                     "--query-gpu=name,memory.total",
                     "--format=csv,noheader,nounits",
                 ],
