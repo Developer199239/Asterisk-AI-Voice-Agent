@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 import { toast } from 'sonner';
 import { Plus, Trash2, Settings } from 'lucide-react';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
@@ -6,6 +7,7 @@ import { Modal } from '../ui/Modal';
 
 interface ToolFormProps {
     config: any;
+    contexts?: Record<string, any>;
     onChange: (newConfig: any) => void;
 }
 
@@ -19,9 +21,26 @@ const DEFAULT_ATTENDED_CALLER_DECLINED_PROMPT =
 // Note: Hangup guardrails (markers, policy modes) removed in v5.0
 // Call ending behavior is now controlled via context prompts
 
-const ToolForm = ({ config, onChange }: ToolFormProps) => {
+const ToolForm = ({ config, contexts, onChange }: ToolFormProps) => {
 	    const [editingDestination, setEditingDestination] = useState<string | null>(null);
 	    const [destinationForm, setDestinationForm] = useState<any>({});
+        const [emailDefaults, setEmailDefaults] = useState<any>(null);
+        const [showSummaryEmailAdvanced, setShowSummaryEmailAdvanced] = useState(false);
+        const [showTranscriptEmailAdvanced, setShowTranscriptEmailAdvanced] = useState(false);
+        const [emailPreviewOpen, setEmailPreviewOpen] = useState(false);
+        const [emailPreviewTitle, setEmailPreviewTitle] = useState<string>('');
+        const [emailPreviewHtml, setEmailPreviewHtml] = useState<string>('');
+        const [emailPreviewError, setEmailPreviewError] = useState<string | null>(null);
+
+        // Per-context override draft rows
+        const [summaryAdminCtx, setSummaryAdminCtx] = useState('');
+        const [summaryAdminVal, setSummaryAdminVal] = useState('');
+        const [summaryFromCtx, setSummaryFromCtx] = useState('');
+        const [summaryFromVal, setSummaryFromVal] = useState('');
+        const [transcriptAdminCtx, setTranscriptAdminCtx] = useState('');
+        const [transcriptAdminVal, setTranscriptAdminVal] = useState('');
+        const [transcriptFromCtx, setTranscriptFromCtx] = useState('');
+        const [transcriptFromVal, setTranscriptFromVal] = useState('');
 
     const updateConfig = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
@@ -36,6 +55,109 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
             }
         });
     };
+
+    const unsetNestedConfig = (section: string, field: string) => {
+        const next = { ...config };
+        const current = next[section];
+        if (!current || typeof current !== 'object') return;
+        const copy = { ...current };
+        delete copy[field];
+        next[section] = copy;
+        onChange(next);
+    };
+
+    const updateByContextMap = (section: string, key: string, contextName: string, value: string) => {
+        const next = { ...config };
+        const toolCfg = { ...(next[section] || {}) };
+        const mapKey = `${key}_by_context`;
+        const existing = (toolCfg as any)[mapKey];
+        const map = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? { ...existing } : {};
+        (map as any)[contextName] = value;
+        (toolCfg as any)[mapKey] = map;
+        next[section] = toolCfg;
+        onChange(next);
+    };
+
+    const removeByContextKey = (section: string, key: string, contextName: string) => {
+        const next = { ...config };
+        const toolCfg = { ...(next[section] || {}) };
+        const mapKey = `${key}_by_context`;
+        const existing = (toolCfg as any)[mapKey];
+        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return;
+        const map = { ...existing };
+        delete (map as any)[contextName];
+        (toolCfg as any)[mapKey] = map;
+        next[section] = toolCfg;
+        onChange(next);
+    };
+
+    const contextNames = Object.keys(contexts || {}).slice().sort();
+
+    const getDefaultEmailTemplate = (tool: 'send_email_summary' | 'request_transcript') => {
+        if (!emailDefaults) return '';
+        return tool === 'send_email_summary' ? (emailDefaults.send_email_summary || '') : (emailDefaults.request_transcript || '');
+    };
+
+    const isTemplateOverrideEnabled = (section: string) => {
+        const raw = config?.[section]?.html_template;
+        return typeof raw === 'string' && raw.trim().length > 0;
+    };
+
+    const setTemplateOverrideEnabled = (tool: 'send_email_summary' | 'request_transcript', section: string, enabled: boolean) => {
+        if (enabled) {
+            const defaultTpl = getDefaultEmailTemplate(tool);
+            if (!defaultTpl) {
+                toast.error('Default template not loaded yet. Try again in a moment.');
+                return;
+            }
+            updateNestedConfig(section, 'html_template', defaultTpl);
+            return;
+        }
+        unsetNestedConfig(section, 'html_template');
+    };
+
+    const previewEmailTemplate = async (tool: 'send_email_summary' | 'request_transcript', section: string) => {
+        try {
+            setEmailPreviewError(null);
+            setEmailPreviewHtml('');
+            setEmailPreviewTitle(tool === 'send_email_summary' ? 'Send Email Summary – Preview' : 'Request Transcript – Preview');
+
+            const htmlTemplate = (config?.[section]?.html_template || '').trim() || null;
+            const includeTranscript = tool === 'send_email_summary' ? (config?.send_email_summary?.include_transcript ?? true) : true;
+            const res = await axios.post('/api/tools/email-templates/preview', {
+                tool,
+                html_template: htmlTemplate,
+                include_transcript: includeTranscript,
+            });
+            if (res.data?.success) {
+                setEmailPreviewHtml(res.data.html || '');
+                setEmailPreviewOpen(true);
+                return;
+            }
+            setEmailPreviewError(res.data?.error || 'Preview failed.');
+            setEmailPreviewOpen(true);
+        } catch (e: any) {
+            setEmailPreviewError(e?.response?.data?.detail || e?.message || 'Preview failed.');
+            setEmailPreviewOpen(true);
+        }
+    };
+
+    useEffect(() => {
+        let cancelled = false;
+        const load = async () => {
+            try {
+                const res = await axios.get('/api/tools/email-templates/defaults');
+                if (cancelled) return;
+                setEmailDefaults(res.data || null);
+            } catch (e) {
+                // Non-fatal: template editor can still be used without defaults.
+            }
+        };
+        load();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const handleAttendedTransferToggle = (enabled: boolean) => {
         const existing = config.attended_transfer || {};
@@ -545,6 +667,188 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 checked={config.send_email_summary?.include_transcript ?? true}
                                 onChange={(e) => updateNestedConfig('send_email_summary', 'include_transcript', e.target.checked)}
                             />
+                            <div className="md:col-span-2 border-t border-border pt-4 mt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowSummaryEmailAdvanced(!showSummaryEmailAdvanced)}
+                                    className="text-sm font-medium text-primary hover:underline"
+                                >
+                                    {showSummaryEmailAdvanced ? 'Hide' : 'Show'} Advanced Email Format
+                                </button>
+
+                                {showSummaryEmailAdvanced && (
+                                    <div className="mt-4 space-y-4">
+                                        <div className="space-y-2">
+                                            <FormLabel>Per-Context Overrides</FormLabel>
+                                            <p className="text-xs text-muted-foreground">
+                                                Override recipients and sender per context (uses the call’s resolved context name).
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">Admin Email Overrides</div>
+                                            {Object.entries(config.send_email_summary?.admin_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.send_email_summary?.admin_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`summary-admin-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('send_email_summary', 'admin_email', ctx, e.target.value)}
+                                                                placeholder="admin@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('send_email_summary', 'admin_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryAdminCtx}
+                                                    onChange={(e) => setSummaryAdminCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`summary-admin-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryAdminVal}
+                                                    onChange={(e) => setSummaryAdminVal(e.target.value)}
+                                                    placeholder="admin@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!summaryAdminCtx || !summaryAdminVal) return;
+                                                        updateByContextMap('send_email_summary', 'admin_email', summaryAdminCtx, summaryAdminVal);
+                                                        setSummaryAdminCtx('');
+                                                        setSummaryAdminVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">From Email Overrides</div>
+                                            {Object.entries(config.send_email_summary?.from_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.send_email_summary?.from_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`summary-from-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('send_email_summary', 'from_email', ctx, e.target.value)}
+                                                                placeholder="agent@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('send_email_summary', 'from_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryFromCtx}
+                                                    onChange={(e) => setSummaryFromCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`summary-from-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryFromVal}
+                                                    onChange={(e) => setSummaryFromVal(e.target.value)}
+                                                    placeholder="agent@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!summaryFromCtx || !summaryFromVal) return;
+                                                        updateByContextMap('send_email_summary', 'from_email', summaryFromCtx, summaryFromVal);
+                                                        setSummaryFromCtx('');
+                                                        setSummaryFromVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2 pt-2 border-t border-border">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <div className="text-sm font-medium">HTML Template</div>
+                                                    <div className="text-xs text-muted-foreground">Advanced: customize the full email HTML (Jinja2).</div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => previewEmailTemplate('send_email_summary', 'send_email_summary')}
+                                                        className="px-3 py-1 text-xs border rounded hover:bg-accent"
+                                                    >
+                                                        Preview
+                                                    </button>
+                                                    <label className="flex items-center gap-2 text-xs">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isTemplateOverrideEnabled('send_email_summary')}
+                                                            onChange={(e) => setTemplateOverrideEnabled('send_email_summary', 'send_email_summary', e.target.checked)}
+                                                        />
+                                                        Customize
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {isTemplateOverrideEnabled('send_email_summary') ? (
+                                                <textarea
+                                                    className="w-full p-3 rounded-md border border-input bg-transparent text-xs min-h-[220px] font-mono"
+                                                    value={config.send_email_summary?.html_template || ''}
+                                                    onChange={(e) => updateNestedConfig('send_email_summary', 'html_template', e.target.value)}
+                                                />
+                                            ) : (
+                                                <pre className="w-full p-3 rounded-md border border-input bg-transparent text-xs whitespace-pre-wrap font-mono max-h-[220px] overflow-auto">
+                                                    {getDefaultEmailTemplate('send_email_summary') || 'Loading default template…'}
+                                                </pre>
+                                            )}
+
+                                            {!!emailDefaults?.variables?.length && (
+                                                <div className="text-xs text-muted-foreground">
+                                                    Variables: {emailDefaults.variables.map((v: any) => v?.name).filter(Boolean).join(', ')}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -592,6 +896,188 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 checked={config.request_transcript?.validate_domain ?? true}
                                 onChange={(e) => updateNestedConfig('request_transcript', 'validate_domain', e.target.checked)}
                             />
+                            <div className="md:col-span-2 border-t border-border pt-4 mt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTranscriptEmailAdvanced(!showTranscriptEmailAdvanced)}
+                                    className="text-sm font-medium text-primary hover:underline"
+                                >
+                                    {showTranscriptEmailAdvanced ? 'Hide' : 'Show'} Advanced Email Format
+                                </button>
+
+                                {showTranscriptEmailAdvanced && (
+                                    <div className="mt-4 space-y-4">
+                                        <div className="space-y-2">
+                                            <FormLabel>Per-Context Overrides</FormLabel>
+                                            <p className="text-xs text-muted-foreground">
+                                                Override BCC (admin) and sender per context.
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">Admin Email (BCC) Overrides</div>
+                                            {Object.entries(config.request_transcript?.admin_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.request_transcript?.admin_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`transcript-admin-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('request_transcript', 'admin_email', ctx, e.target.value)}
+                                                                placeholder="admin@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('request_transcript', 'admin_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptAdminCtx}
+                                                    onChange={(e) => setTranscriptAdminCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`transcript-admin-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptAdminVal}
+                                                    onChange={(e) => setTranscriptAdminVal(e.target.value)}
+                                                    placeholder="admin@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!transcriptAdminCtx || !transcriptAdminVal) return;
+                                                        updateByContextMap('request_transcript', 'admin_email', transcriptAdminCtx, transcriptAdminVal);
+                                                        setTranscriptAdminCtx('');
+                                                        setTranscriptAdminVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">From Email Overrides</div>
+                                            {Object.entries(config.request_transcript?.from_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.request_transcript?.from_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`transcript-from-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('request_transcript', 'from_email', ctx, e.target.value)}
+                                                                placeholder="agent@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('request_transcript', 'from_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptFromCtx}
+                                                    onChange={(e) => setTranscriptFromCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`transcript-from-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptFromVal}
+                                                    onChange={(e) => setTranscriptFromVal(e.target.value)}
+                                                    placeholder="agent@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!transcriptFromCtx || !transcriptFromVal) return;
+                                                        updateByContextMap('request_transcript', 'from_email', transcriptFromCtx, transcriptFromVal);
+                                                        setTranscriptFromCtx('');
+                                                        setTranscriptFromVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2 pt-2 border-t border-border">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <div className="text-sm font-medium">HTML Template</div>
+                                                    <div className="text-xs text-muted-foreground">Advanced: customize the full email HTML (Jinja2).</div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => previewEmailTemplate('request_transcript', 'request_transcript')}
+                                                        className="px-3 py-1 text-xs border rounded hover:bg-accent"
+                                                    >
+                                                        Preview
+                                                    </button>
+                                                    <label className="flex items-center gap-2 text-xs">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isTemplateOverrideEnabled('request_transcript')}
+                                                            onChange={(e) => setTemplateOverrideEnabled('request_transcript', 'request_transcript', e.target.checked)}
+                                                        />
+                                                        Customize
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {isTemplateOverrideEnabled('request_transcript') ? (
+                                                <textarea
+                                                    className="w-full p-3 rounded-md border border-input bg-transparent text-xs min-h-[220px] font-mono"
+                                                    value={config.request_transcript?.html_template || ''}
+                                                    onChange={(e) => updateNestedConfig('request_transcript', 'html_template', e.target.value)}
+                                                />
+                                            ) : (
+                                                <pre className="w-full p-3 rounded-md border border-input bg-transparent text-xs whitespace-pre-wrap font-mono max-h-[220px] overflow-auto">
+                                                    {getDefaultEmailTemplate('request_transcript') || 'Loading default template…'}
+                                                </pre>
+                                            )}
+
+                                            {!!emailDefaults?.variables?.length && (
+                                                <div className="text-xs text-muted-foreground">
+                                                    Variables: {emailDefaults.variables.map((v: any) => v?.name).filter(Boolean).join(', ')}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -647,6 +1133,31 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                         onChange={(e) => setDestinationForm({ ...destinationForm, description: e.target.value })}
                         placeholder="e.g., Sales Support"
                     />
+                </div>
+            </Modal>
+
+            <Modal
+                isOpen={emailPreviewOpen}
+                onClose={() => setEmailPreviewOpen(false)}
+                title={emailPreviewTitle || 'Email Template Preview'}
+                footer={
+                    <button onClick={() => setEmailPreviewOpen(false)} className="px-4 py-2 border rounded hover:bg-accent">
+                        Close
+                    </button>
+                }
+            >
+                <div className="space-y-3">
+                    {emailPreviewError && (
+                        <div className="text-sm text-destructive">{emailPreviewError}</div>
+                    )}
+                    {!emailPreviewError && (
+                        <iframe
+                            title="Email Preview"
+                            sandbox=""
+                            className="w-full h-[520px] border rounded"
+                            srcDoc={emailPreviewHtml}
+                        />
+                    )}
                 </div>
             </Modal>
         </div>

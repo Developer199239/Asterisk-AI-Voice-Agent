@@ -77,6 +77,141 @@ def _substitute_variables(template: str, values: Dict[str, str]) -> str:
     return result
 
 
+def _normalize_template(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    return s or None
+
+
+def _format_pretty_html(text: str) -> str:
+    # Keep in sync with AI Engine email tools.
+    safe = (text or "")
+    safe = safe.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    safe = safe.replace('"', "&quot;").replace("'", "&#39;")
+    safe = safe.replace("\r\n", "\n").replace("\r", "\n")
+    return safe.replace("\n", "<br/>\n")
+
+
+def _load_email_template_defaults() -> Dict[str, Any]:
+    """
+    Load default templates/variable reference from the main project tree.
+
+    The Admin UI container mounts the repo at /app/project (PROJECT_ROOT), but for local
+    dev we also fall back to resolving the repo root relative to this file.
+    """
+    import sys
+
+    project_root = os.environ.get("PROJECT_ROOT")
+    if not project_root:
+        here = os.path.abspath(os.path.dirname(__file__))
+        project_root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
+
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    try:
+        from src.tools.business.email_templates import (  # type: ignore
+            DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
+            DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
+            EMAIL_TEMPLATE_VARIABLES,
+        )
+    except Exception as e:  # pragma: no cover - environment-specific
+        raise HTTPException(status_code=500, detail=f"Failed to load email templates from project: {e}") from e
+
+    return {
+        "send_email_summary": DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
+        "request_transcript": DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
+        "variables": EMAIL_TEMPLATE_VARIABLES,
+    }
+
+
+class EmailTemplateDefaultsResponse(BaseModel):
+    send_email_summary: str
+    request_transcript: str
+    variables: List[Dict[str, str]]
+
+
+@router.get("/email-templates/defaults", response_model=EmailTemplateDefaultsResponse)
+async def get_email_template_defaults():
+    """Return default HTML templates and variable reference for email tools."""
+    return _load_email_template_defaults()
+
+
+class EmailTemplatePreviewRequest(BaseModel):
+    tool: str
+    html_template: Optional[str] = None
+    include_transcript: Optional[bool] = True
+    test_values: Dict[str, str] = {}
+
+
+class EmailTemplatePreviewResponse(BaseModel):
+    success: bool
+    html: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/email-templates/preview", response_model=EmailTemplatePreviewResponse)
+async def preview_email_template(request: EmailTemplatePreviewRequest):
+    """
+    Render a Jinja2 email template using safe test values for preview.
+
+    Templates are sandboxed. If no `html_template` is provided, the default template
+    for the requested tool is used.
+    """
+    from jinja2.sandbox import SandboxedEnvironment
+
+    defaults = _load_email_template_defaults()
+    tool = (request.tool or "").strip()
+    if tool not in ("send_email_summary", "request_transcript"):
+        raise HTTPException(status_code=400, detail="Unsupported tool; use send_email_summary or request_transcript")
+
+    default_template = defaults[tool]
+    override = _normalize_template(request.html_template)
+    template_str = override or default_template
+
+    # Merge default test values with caller-provided overrides.
+    test_values = {**DEFAULT_TEST_VALUES, **(request.test_values or {})}
+
+    # Email-specific placeholders
+    transcript_text = (
+        "[00:00:03] Caller: Hi, I need help with my account.\n"
+        "[00:00:06] Agent: Sure — what seems to be the issue?\n"
+        "[00:00:12] Caller: I can’t log in.\n"
+    )
+
+    variables: Dict[str, Any] = {
+        "call_id": test_values.get("call_id", "1234567890.123"),
+        "context_name": test_values.get("context_name", "test-context"),
+        "recipient_email": "caller@example.com",
+        "call_date": "2026-02-05 12:34:56",
+        "call_start_time": "2026-02-05 12:34:56",
+        "call_end_time": "2026-02-05 12:37:11",
+        "duration": "2m 15s",
+        "duration_seconds": 135,
+        "caller_name": test_values.get("caller_name", "Test Caller"),
+        "caller_number": test_values.get("caller_number", "+15551234567"),
+        "called_number": test_values.get("called_number", "+18005551234"),
+        "outcome": "Completed",
+        "include_transcript": bool(request.include_transcript) if request.include_transcript is not None else True,
+        "transcript": transcript_text,
+        "transcript_html": _format_pretty_html(transcript_text),
+        "transcript_note": None,
+    }
+
+    env = SandboxedEnvironment(autoescape=False)
+    try:
+        rendered = env.from_string(template_str).render(**variables)
+        # Prevent accidental huge responses (and keep UI responsive)
+        if len(rendered) > 500_000:
+            raise ValueError("Rendered HTML too large for preview")
+        return EmailTemplatePreviewResponse(success=True, html=rendered)
+    except Exception as e:
+        return EmailTemplatePreviewResponse(success=False, error=str(e))
+
+
 def _extract_json_paths(obj: Any, prefix: str = "") -> List[Dict[str, str]]:
     """
     Extract all JSON paths from a response object for suggested mappings.

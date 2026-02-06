@@ -871,6 +871,10 @@ tools:
     # admin_email_by_context:
     #   support: "support@yourdomain.com"
     #   sales: "sales@yourdomain.com"
+    # Optional: route sender address per context
+    # from_email_by_context:
+    #   support: "support-bot@yourdomain.com"
+    #   sales: "sales-bot@yourdomain.com"
     include_transcript: true
     include_metadata: true
     # Optional: subject prefix and per-context overrides
@@ -878,6 +882,9 @@ tools:
     # subject_prefix_by_context:
     #   support: "[Support]"
     #   sales: "[Sales]"
+    # Optional: override full HTML template (Jinja2). You can edit/preview in Admin UI → Tools.
+    # html_template: |
+    #   <html>...</html>
   
   # ----------------------------------------------------------------------------
   # REQUEST_TRANSCRIPT - Caller-initiated transcript requests
@@ -892,6 +899,10 @@ tools:
     # admin_email_by_context:
     #   support: "support@yourdomain.com"
     #   sales: "sales@yourdomain.com"
+    # Optional: route sender address per context
+    # from_email_by_context:
+    #   support: "support-bot@yourdomain.com"
+    #   sales: "sales-bot@yourdomain.com"
     confirm_email: true                # AI reads back email
     validate_domain: true              # DNS MX lookup
     # Note: by default, only the most recent confirmed email is used per call.
@@ -899,6 +910,9 @@ tools:
     # allow_multiple_recipients: false
     max_attempts: 2                    # Retry attempts for invalid email
     common_domains: ["gmail.com", "yahoo.com", "outlook.com"]
+    # Optional: override full HTML template (Jinja2). You can edit/preview in Admin UI → Tools.
+    # html_template: |
+    #   <html>...</html>
 ```
 
 ### Enable Tools per Context / Pipeline (Allowlisting)

@@ -263,6 +263,7 @@ const ToolsPage = () => {
                         <ConfigCard>
                             <ToolForm
                                 config={{ ...(config.tools || {}), farewell_hangup_delay_sec: config.farewell_hangup_delay_sec }}
+                                contexts={config.contexts || {}}
                                 onChange={updateToolsConfig}
                             />
                         </ConfigCard>
