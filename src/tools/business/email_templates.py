@@ -215,11 +215,12 @@ EMAIL_TEMPLATE_VARIABLES = [
     {"name": "caller_name", "description": "Caller name (string, may be empty)."},
     {"name": "caller_number", "description": "Caller phone number (string)."},
     {"name": "called_number", "description": "Called phone number (string, may be empty)."},
-    {"name": "outcome", "description": "Call outcome (string, may be empty)."},
+    {"name": "outcome", "description": "Call outcome (string). For hangup tracking this is typically 'caller_hangup' or 'agent_hangup' (or 'transferred')."},
+    {"name": "call_outcome", "description": "Alias for outcome (string)."},
+    {"name": "hangup_initiator", "description": "Derived from outcome: 'caller' | 'agent' | 'system' | ''."},
     {"name": "include_transcript", "description": "Whether transcript is included (boolean)."},
     {"name": "transcript", "description": "Transcript as plain text (string)."},
     {"name": "transcript_html", "description": "Transcript rendered as HTML with <br/> newlines (string)."},
     {"name": "transcript_note", "description": "Optional transcript note (string, may be empty)."},
     {"name": "recipient_email", "description": "Request Transcript only: caller recipient email (string)."},
 ]
-

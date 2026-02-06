@@ -162,6 +162,16 @@ class SendEmailSummaryTool(Tool):
             # for all providers including OpenAI Realtime with server_vad
         
         include_transcript = bool(config.get("include_transcript", True))
+        call_outcome = outcome
+        hangup_initiator = ""
+        if isinstance(call_outcome, str):
+            if call_outcome == "caller_hangup":
+                hangup_initiator = "caller"
+            elif call_outcome == "agent_hangup":
+                hangup_initiator = "agent"
+            elif call_outcome == "transferred":
+                hangup_initiator = "system"
+
         variables = {
             "call_id": call_id,
             "context_name": context_name,
@@ -174,6 +184,8 @@ class SendEmailSummaryTool(Tool):
             "caller_number": caller_number,
             "called_number": called_number,
             "outcome": outcome,
+            "call_outcome": call_outcome,
+            "hangup_initiator": hangup_initiator,
             "include_transcript": include_transcript,
             "transcript": transcript,
             "transcript_html": transcript_html,

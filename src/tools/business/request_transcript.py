@@ -334,6 +334,17 @@ class RequestTranscriptTool(Tool):
             "caller_name": caller_name,
             "caller_number": caller_number,
             "called_number": called_number,
+            "outcome": getattr(session, "call_outcome", ""),
+            "call_outcome": getattr(session, "call_outcome", ""),
+            "hangup_initiator": (
+                "caller"
+                if getattr(session, "call_outcome", "") == "caller_hangup"
+                else "agent"
+                if getattr(session, "call_outcome", "") == "agent_hangup"
+                else "system"
+                if getattr(session, "call_outcome", "") == "transferred"
+                else ""
+            ),
             "transcript": transcript,
             "transcript_html": transcript_html,
         }
