@@ -412,7 +412,7 @@ export const SystemTopology = () => {
                       <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
                         {provider.displayName}
                       </span>
-                      {isDefault && <span className="text-yellow-500 text-[10px] ml-auto flex-shrink-0">⭐</span>}
+                      {isDefault && <div className="w-2.5 h-2.5 rounded-full bg-yellow-500 ml-auto flex-shrink-0" title="Default Provider" />}
                       {isActive && (
                         <span className="ml-auto px-1.5 py-0.5 rounded-full bg-green-500 text-white text-[10px] font-bold flex-shrink-0">
                           {activeCount}
@@ -507,7 +507,7 @@ export const SystemTopology = () => {
                         <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
                           {pipeline.name.replace(/_/g, ' ')}
                         </span>
-                        {isDefault && <span className="text-yellow-500 text-[10px] ml-auto flex-shrink-0">⭐</span>}
+                        {isDefault && <div className="w-2.5 h-2.5 rounded-full bg-yellow-500 ml-auto flex-shrink-0" title="Default Pipeline" />}
                       </div>
                       {/* Pipeline components (STT/LLM/TTS) */}
                       <div className={`flex flex-col gap-0.5 p-1.5 rounded-b-lg border transition-all ${
@@ -682,7 +682,7 @@ export const SystemTopology = () => {
             <span>Not Ready</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="text-yellow-500">⭐</span>
+            <div className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
             <span>Default</span>
           </div>
         </div>
