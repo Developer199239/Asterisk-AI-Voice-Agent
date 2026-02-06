@@ -45,7 +45,7 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
 
             {/* API Version Section */}
             <div>
-                <h4 className="font-semibold mb-3">API Version</h4>
+                <h4 className="font-semibold mb-3">API Version & Project</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Realtime API Version</label>
@@ -66,6 +66,25 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             <strong>GA</strong> uses nested audio schema (no beta header).
                             <strong className="ml-1">Beta</strong> uses flat schema with the <code>OpenAI-Beta</code> header.
                             Both support <code>gpt-4o-realtime-preview</code> models.
+                        </p>
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">
+                            Project ID
+                            <span className="text-xs text-muted-foreground ml-2">(optional)</span>
+                        </label>
+                        <input
+                            type="text"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.project_id || ''}
+                            onChange={(e) => handleChange('project_id', e.target.value || null)}
+                            placeholder="proj_..."
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            OpenAI Project ID for usage tracking. Find it at{' '}
+                            <a href="https://platform.openai.com/settings/organization/general" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
+                                platform.openai.com/settings
+                            </a>
                         </p>
                     </div>
                 </div>

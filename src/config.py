@@ -357,6 +357,7 @@ class OpenAIRealtimeProviderConfig(BaseModel):
     base_url: str = Field(default="wss://api.openai.com/v1/realtime")
     instructions: Optional[str] = None
     organization: Optional[str] = None
+    project_id: Optional[str] = None  # OpenAI project ID for usage tracking (OpenAI-Project header)
     input_encoding: str = Field(default="slin16")  # AudioSocket inbound default (8 kHz PCM16)
     input_sample_rate_hz: int = Field(default=8000)  # AudioSocket source sample rate
     provider_input_encoding: str = Field(default="linear16")  # Provider expects PCM16 LE

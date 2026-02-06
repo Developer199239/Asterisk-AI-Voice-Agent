@@ -369,6 +369,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             headers.append(("OpenAI-Beta", "realtime=v1"))
         if self.config.organization:
             headers.append(("OpenAI-Organization", self.config.organization))
+        if self.config.project_id:
+            headers.append(("OpenAI-Project", self.config.project_id))
 
         logger.info("Connecting to OpenAI Realtime", url=url, call_id=call_id, api_version="beta" if use_beta else "ga")
         try:
@@ -2248,6 +2250,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     headers.append(("OpenAI-Beta", "realtime=v1"))
                 if self.config.organization:
                     headers.append(("OpenAI-Organization", self.config.organization))
+                if self.config.project_id:
+                    headers.append(("OpenAI-Project", self.config.project_id))
                 logger.info("Reconnecting to OpenAI Realtime", call_id=call_id, attempt=attempt)
                 self.websocket = await websockets.connect(url, additional_headers=headers)
                 # Reset minor state
