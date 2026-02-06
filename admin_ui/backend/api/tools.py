@@ -103,29 +103,57 @@ def _load_email_template_defaults() -> Dict[str, Any]:
     dev we also fall back to resolving the repo root relative to this file.
     """
     import sys
+    import importlib
+
+    global _EMAIL_TEMPLATE_DEFAULTS_CACHE
+    if _EMAIL_TEMPLATE_DEFAULTS_CACHE is not None:
+        return _EMAIL_TEMPLATE_DEFAULTS_CACHE
 
     project_root = os.environ.get("PROJECT_ROOT")
     if not project_root:
         here = os.path.abspath(os.path.dirname(__file__))
         project_root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
 
+    if not os.path.isdir(project_root) or not os.path.isdir(os.path.join(project_root, "src")):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Project source not mounted yet at PROJECT_ROOT={project_root}",
+        )
+
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-    try:
-        from src.tools.business.email_templates import (  # type: ignore
-            DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
-            DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
-            EMAIL_TEMPLATE_VARIABLES,
-        )
-    except Exception as e:  # pragma: no cover - environment-specific
-        raise HTTPException(status_code=500, detail=f"Failed to load email templates from project: {e}") from e
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            importlib.invalidate_caches()
+            from src.tools.business.email_templates import (  # type: ignore
+                DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
+                DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
+                EMAIL_TEMPLATE_VARIABLES,
+            )
+            _EMAIL_TEMPLATE_DEFAULTS_CACHE = {
+                "send_email_summary": DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
+                "request_transcript": DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
+                "variables": EMAIL_TEMPLATE_VARIABLES,
+            }
+            return _EMAIL_TEMPLATE_DEFAULTS_CACHE
+        except Exception as e:  # pragma: no cover - environment-specific
+            last_exc = e
+            time.sleep(0.15 * (attempt + 1))
+            continue
 
-    return {
-        "send_email_summary": DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
-        "request_transcript": DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
-        "variables": EMAIL_TEMPLATE_VARIABLES,
-    }
+    logger.exception("Failed to load email template defaults", exc_info=last_exc)
+    raise HTTPException(
+        status_code=503,
+        detail=f"Failed to load email templates from project: {last_exc}",
+    ) from last_exc
+
+    # Unreachable; kept for type checkers.
+    return {}
+
+
+_EMAIL_TEMPLATE_DEFAULTS_CACHE: Optional[Dict[str, Any]] = None
 
 
 class EmailTemplateDefaultsResponse(BaseModel):
