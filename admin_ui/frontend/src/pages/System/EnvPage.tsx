@@ -278,6 +278,13 @@ const EnvPage = () => {
             const res = await axios.post('/api/config/env/smtp/test', {
                 to_email: toEmail,
                 from_email: (env['SMTP_USERNAME'] || '').trim() || undefined,
+                smtp_host: (env['SMTP_HOST'] || '').trim() || undefined,
+                smtp_port: (env['SMTP_PORT'] || '').trim() || undefined,
+                smtp_username: (env['SMTP_USERNAME'] || '').trim() || undefined,
+                smtp_password: (env['SMTP_PASSWORD'] || '').toString() || undefined,
+                smtp_tls_mode: (env['SMTP_TLS_MODE'] || '').trim() || undefined,
+                smtp_tls_verify: isTrue(env['SMTP_TLS_VERIFY'] || 'true'),
+                smtp_timeout_seconds: (env['SMTP_TIMEOUT_SECONDS'] || '').trim() || undefined,
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -731,7 +738,7 @@ const EnvPage = () => {
                                         </button>
                                     </div>
                                     <p className="text-xs text-muted-foreground mt-2">
-                                        Note: Live calls use the AI Engine container environment. After saving SMTP settings, click “Apply Changes” to recreate <code>ai_engine</code>.
+                                        Note: This test uses the values currently shown above. Live calls use the AI Engine container environment. After saving SMTP settings, click “Apply Changes” to recreate <code>ai_engine</code>.
                                     </p>
                                     {smtpTestResult && (
                                         <div className={`flex items-center gap-2 text-sm mt-2 ${smtpTestResult.success ? 'text-green-600' : 'text-red-600'}`}>

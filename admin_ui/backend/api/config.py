@@ -705,6 +705,14 @@ class SmtpTestRequest(BaseModel):
     from_email: Optional[str] = None
     subject: Optional[str] = None
     text: Optional[str] = None
+    # Optional overrides (when testing unsaved UI form values).
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[Union[int, str]] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_tls_mode: Optional[str] = None  # starttls | smtps | none
+    smtp_tls_verify: Optional[Union[bool, str]] = None
+    smtp_timeout_seconds: Optional[Union[float, str]] = None
 
 @router.post("/providers/test")
 async def test_provider_connection(request: ProviderTestRequest):
@@ -1102,30 +1110,34 @@ async def test_smtp_settings(req: SmtpTestRequest):
 
     env_map = dotenv_values(settings.ENV_PATH) if os.path.exists(settings.ENV_PATH) else {}
 
-    host = str((env_map or {}).get("SMTP_HOST") or "").strip()
+    host = str((req.smtp_host if req.smtp_host is not None else (env_map or {}).get("SMTP_HOST")) or "").strip()
     if not host:
-        raise HTTPException(status_code=400, detail="SMTP_HOST is not set in .env")
+        raise HTTPException(status_code=400, detail="SMTP_HOST is not set (save it in .env or pass smtp_host)")
 
-    tls_mode = str((env_map or {}).get("SMTP_TLS_MODE") or "starttls").strip().lower()
+    tls_mode = str((req.smtp_tls_mode if req.smtp_tls_mode is not None else (env_map or {}).get("SMTP_TLS_MODE")) or "starttls").strip().lower()
     if tls_mode not in {"starttls", "smtps", "none"}:
         raise HTTPException(status_code=400, detail="SMTP_TLS_MODE must be starttls, smtps, or none")
 
-    port_raw = str((env_map or {}).get("SMTP_PORT") or "").strip()
+    port_raw = str((req.smtp_port if req.smtp_port is not None else (env_map or {}).get("SMTP_PORT")) or "").strip()
     try:
         port = int(port_raw) if port_raw else (465 if tls_mode == "smtps" else 587)
     except Exception:
         raise HTTPException(status_code=400, detail="SMTP_PORT must be an integer")
 
-    username = str((env_map or {}).get("SMTP_USERNAME") or "").strip() or None
-    password = str((env_map or {}).get("SMTP_PASSWORD") or "").strip() or None
+    username = str((req.smtp_username if req.smtp_username is not None else (env_map or {}).get("SMTP_USERNAME")) or "").strip() or None
+    password = str((req.smtp_password if req.smtp_password is not None else (env_map or {}).get("SMTP_PASSWORD")) or "").strip() or None
 
-    timeout_raw = str((env_map or {}).get("SMTP_TIMEOUT_SECONDS") or "10").strip()
+    timeout_raw = str((req.smtp_timeout_seconds if req.smtp_timeout_seconds is not None else (env_map or {}).get("SMTP_TIMEOUT_SECONDS")) or "10").strip()
     try:
         timeout_s = float(timeout_raw or "10")
     except Exception:
         timeout_s = 10.0
 
-    tls_verify = str((env_map or {}).get("SMTP_TLS_VERIFY") or "true").strip().lower() in {"1", "true", "yes", "on"}
+    tls_verify_raw = req.smtp_tls_verify if req.smtp_tls_verify is not None else (env_map or {}).get("SMTP_TLS_VERIFY")
+    if isinstance(tls_verify_raw, bool):
+        tls_verify = tls_verify_raw
+    else:
+        tls_verify = str(tls_verify_raw or "true").strip().lower() in {"1", "true", "yes", "on"}
     context = ssl.create_default_context()
     if not tls_verify:
         context.check_hostname = False
