@@ -646,8 +646,19 @@ async def update_env(env_data: Dict[str, Optional[str]]):
         def _ai_engine_env_key(key: str) -> bool:
             return (
                 _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_"))
-                or key in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "GOOGLE_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "TZ", "STREAMING_LOG_LEVEL")
+                or key in (
+                    "OPENAI_API_KEY",
+                    "GROQ_API_KEY",
+                    "DEEPGRAM_API_KEY",
+                    "GOOGLE_API_KEY",
+                    "RESEND_API_KEY",
+                    "ELEVENLABS_API_KEY",
+                    "ELEVENLABS_AGENT_ID",
+                    "TZ",
+                    "STREAMING_LOG_LEVEL",
+                )
                 or _is_prefix(key, ("AUDIO_TRANSPORT", "DOWNSTREAM_MODE", "AUDIOSOCKET_", "EXTERNAL_MEDIA_", "BARGE_IN_"))
+                or _is_prefix(key, ("SMTP_",))
                 # Local provider runtime uses these env vars via ${LOCAL_WS_*} placeholders in ai-agent.yaml
                 or _is_prefix(key, ("LOCAL_WS_",))
             )
