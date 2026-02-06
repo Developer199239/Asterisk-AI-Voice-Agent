@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1056,19 +1057,76 @@ class LocalAIServer:
         if self.llm_gpu_layers > 0:
             return self.llm_gpu_layers  # User specified exact count
         
-        # Auto-detect (-1): check if CUDA is available
+        # Auto-detect (-1): prefer nvidia-smi, then NVIDIA runtime env, then torch.
+        # Keep torch as a last fallback because it is optional in this image.
+        auto_default_layers = 35
+        raw_auto_default_layers = os.getenv("LOCAL_LLM_GPU_LAYERS_AUTO_DEFAULT", "35").strip()
+        try:
+            auto_default_layers = max(1, int(raw_auto_default_layers))
+        except Exception:
+            auto_default_layers = 35
+
+        # Prefer host/runtime GPU detection via nvidia-smi (works without torch).
+        try:
+            nvidia_smi = shutil.which("nvidia-smi")
+            if not nvidia_smi:
+                raise FileNotFoundError("nvidia-smi not found on PATH")
+            query = subprocess.run(
+                [
+                    nvidia_smi,
+                    "--query-gpu=name,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if query.returncode == 0 and query.stdout.strip():
+                first_line = query.stdout.strip().splitlines()[0]
+                gpu_name, _, gpu_mem_raw = first_line.partition(",")
+                gpu_name = gpu_name.strip() or "NVIDIA GPU"
+                gpu_mem_mb = int((gpu_mem_raw or "0").strip() or "0")
+                gpu_mem_gb = gpu_mem_mb / 1024 if gpu_mem_mb > 0 else 0.0
+
+                # Conservative defaults by VRAM to reduce OOM at model load time.
+                if gpu_mem_mb >= 18000:
+                    layers = 50
+                elif gpu_mem_mb >= 11000:
+                    layers = 35
+                elif gpu_mem_mb >= 7000:
+                    layers = 20
+                else:
+                    layers = min(12, auto_default_layers)
+
+                logging.info(
+                    "🎮 GPU detected via nvidia-smi: %s (%.1f GB), using %s layers",
+                    gpu_name,
+                    gpu_mem_gb,
+                    layers,
+                )
+                return layers
+        except Exception as exc:
+            logging.debug("GPU detection via nvidia-smi failed: %s", exc)
+
+        # Last fallback for environments that include torch.
         try:
             import torch
+
             if torch.cuda.is_available():
                 gpu_name = torch.cuda.get_device_name(0)
                 gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                logging.info("🎮 GPU detected: %s (%.1f GB)", gpu_name, gpu_mem)
-                # Use 35 layers for most models (good balance)
-                return 35
+                logging.info(
+                    "🎮 GPU detected via torch: %s (%.1f GB), using %s layers",
+                    gpu_name,
+                    gpu_mem,
+                    auto_default_layers,
+                )
+                return auto_default_layers
         except ImportError:
-            logging.debug("PyTorch not available for GPU detection")
-        except Exception as e:
-            logging.debug("GPU detection failed: %s", e)
+            logging.debug("PyTorch not available for GPU detection fallback")
+        except Exception as exc:
+            logging.debug("GPU detection via torch failed: %s", exc)
         
         return 0  # Default to CPU
 

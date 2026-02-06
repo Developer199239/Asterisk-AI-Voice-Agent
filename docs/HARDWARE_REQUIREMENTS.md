@@ -174,7 +174,13 @@ Fully Local mode runs **STT + LLM + TTS** on your own hardware with **no cloud A
 - **Response Time**: 1-3 seconds (with local LLM)
 - **Concurrent Calls**: 20-40 (GPU-accelerated)
 
-**Note**: The default `local_ai_server` image runs CPU-only. GPU acceleration is possible for local LLM inference via llama.cpp when you build/run with NVIDIA support (enable the Docker GPU config and tune `LOCAL_LLM_GPU_LAYERS`).
+**Note**: The default `local_ai_server` image runs CPU-only. GPU acceleration is available via the GPU override compose file (`docker-compose.gpu.yml`), which builds `local_ai_server/Dockerfile.gpu` for CUDA-enabled llama.cpp. Tune `LOCAL_LLM_GPU_LAYERS` and verify with `docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec local_ai_server nvidia-smi`.
+
+Implementation checks without a GPU host:
+
+- Verify compose wiring: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml config | rg -n "Dockerfile.gpu|local-ai-server-gpu|driver: nvidia|capabilities:"`
+- Verify CUDA build recipe: `rg -n "GGML_CUDA=on|llama-cpp-python==0.3.16" local_ai_server/Dockerfile.gpu`
+- Verify auto-detect fallback no longer depends only on torch: `rg -n "nvidia-smi|NVIDIA_VISIBLE_DEVICES|LOCAL_LLM_GPU_LAYERS_AUTO_DEFAULT" local_ai_server/server.py`
 
 ---
 
