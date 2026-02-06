@@ -139,7 +139,7 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             value={config.voice || 'alloy'}
                             onChange={(e) => handleChange('voice', e.target.value)}
                         >
-                            <optgroup label="Original Voices">
+                            <optgroup label="Realtime Voices">
                                 <option value="alloy">Alloy – Female (neutral, balanced)</option>
                                 <option value="ash">Ash – Male (clear, direct)</option>
                                 <option value="ballad">Ballad – Male (warm, storytelling)</option>
@@ -148,15 +148,8 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                                 <option value="sage">Sage – Female (wise, authoritative)</option>
                                 <option value="shimmer">Shimmer – Female (bright, optimistic)</option>
                                 <option value="verse">Verse – Male (expressive, dynamic)</option>
-                            </optgroup>
-                            <optgroup label="New Voices (gpt-realtime)">
                                 <option value="cedar">Cedar – Male (warm, natural)</option>
                                 <option value="marin">Marin – Female (clear, professional)</option>
-                            </optgroup>
-                            <optgroup label="Legacy TTS Voices">
-                                <option value="fable">Fable – Male (British, narrative)</option>
-                                <option value="nova">Nova – Female (youthful, energetic)</option>
-                                <option value="onyx">Onyx – Male (deep, resonant)</option>
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
