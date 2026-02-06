@@ -140,23 +140,23 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             onChange={(e) => handleChange('voice', e.target.value)}
                         >
                             <optgroup label="Original Voices">
-                                <option value="alloy">Alloy (neutral, balanced)</option>
-                                <option value="ash">Ash (clear, direct)</option>
-                                <option value="ballad">Ballad (warm, storytelling)</option>
-                                <option value="coral">Coral (friendly, conversational)</option>
-                                <option value="echo">Echo (soft, calm)</option>
-                                <option value="sage">Sage (wise, authoritative)</option>
-                                <option value="shimmer">Shimmer (bright, optimistic)</option>
-                                <option value="verse">Verse (expressive, dynamic)</option>
+                                <option value="alloy">Alloy – Female (neutral, balanced)</option>
+                                <option value="ash">Ash – Male (clear, direct)</option>
+                                <option value="ballad">Ballad – Male (warm, storytelling)</option>
+                                <option value="coral">Coral – Female (friendly, conversational)</option>
+                                <option value="echo">Echo – Male (soft, calm)</option>
+                                <option value="sage">Sage – Female (wise, authoritative)</option>
+                                <option value="shimmer">Shimmer – Female (bright, optimistic)</option>
+                                <option value="verse">Verse – Male (expressive, dynamic)</option>
                             </optgroup>
                             <optgroup label="New Voices (gpt-realtime)">
-                                <option value="cedar">Cedar (warm, natural)</option>
-                                <option value="marin">Marin (clear, professional)</option>
+                                <option value="cedar">Cedar – Male (warm, natural)</option>
+                                <option value="marin">Marin – Female (clear, professional)</option>
                             </optgroup>
                             <optgroup label="Legacy TTS Voices">
-                                <option value="fable">Fable (British, narrative)</option>
-                                <option value="nova">Nova (youthful, energetic)</option>
-                                <option value="onyx">Onyx (deep, resonant)</option>
+                                <option value="fable">Fable – Male (British, narrative)</option>
+                                <option value="nova">Nova – Female (youthful, energetic)</option>
+                                <option value="onyx">Onyx – Male (deep, resonant)</option>
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
