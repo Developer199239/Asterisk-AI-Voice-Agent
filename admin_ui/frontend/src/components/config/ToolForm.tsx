@@ -800,6 +800,21 @@ const ToolForm = ({ config, contexts, onChange }: ToolFormProps) => {
                                                     </button>
                                                 </div>
                                             </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                                <FormInput
+                                                    label="Subject Prefix (Optional)"
+                                                    value={config.send_email_summary?.subject_prefix || ''}
+                                                    onChange={(e) => updateNestedConfig('send_email_summary', 'subject_prefix', e.target.value)}
+                                                    placeholder="[AAVA] "
+                                                    tooltip="Prepended to the email subject. A space is automatically added if missing."
+                                                />
+                                                <FormSwitch
+                                                    label="Include Context Tag in Subject"
+                                                    checked={config.send_email_summary?.include_context_in_subject ?? true}
+                                                    onChange={(e) => updateNestedConfig('send_email_summary', 'include_context_in_subject', e.target.checked)}
+                                                    description="If enabled, subjects include a prefix like [support] or [demo_deepgram]."
+                                                />
+                                            </div>
                                             <div className="text-xs text-muted-foreground">
                                                 Status: {isTemplateOverrideEnabled('send_email_summary') ? 'Custom template enabled' : 'Using default template'}
                                             </div>
@@ -1005,6 +1020,21 @@ const ToolForm = ({ config, contexts, onChange }: ToolFormProps) => {
                                                         Edit / Preview
                                                     </button>
                                                 </div>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                                <FormInput
+                                                    label="Subject Prefix (Optional)"
+                                                    value={config.request_transcript?.subject_prefix || ''}
+                                                    onChange={(e) => updateNestedConfig('request_transcript', 'subject_prefix', e.target.value)}
+                                                    placeholder="[AAVA] "
+                                                    tooltip="Prepended to the email subject. A space is automatically added if missing."
+                                                />
+                                                <FormSwitch
+                                                    label="Include Context Tag in Subject"
+                                                    checked={config.request_transcript?.include_context_in_subject ?? true}
+                                                    onChange={(e) => updateNestedConfig('request_transcript', 'include_context_in_subject', e.target.checked)}
+                                                    description="If enabled, subjects include a prefix like [support] or [demo_openai]."
+                                                />
                                             </div>
                                             <div className="text-xs text-muted-foreground">
                                                 Status: {isTemplateOverrideEnabled('request_transcript') ? 'Custom template enabled' : 'Using default template'}

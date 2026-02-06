@@ -212,7 +212,8 @@ class SendEmailSummaryTool(Tool):
         subject_prefix = str(subject_prefix or "").strip()
         if subject_prefix and not subject_prefix.endswith(" "):
             subject_prefix = subject_prefix + " "
-        context_tag = f"[{context_name}] " if context_name else ""
+        include_context_in_subject = bool(config.get("include_context_in_subject", True))
+        context_tag = f"[{context_name}] " if (include_context_in_subject and context_name) else ""
         
         return {
             "to": admin_email,

@@ -882,6 +882,8 @@ tools:
     # subject_prefix_by_context:
     #   support: "[Support]"
     #   sales: "[Sales]"
+    # Optional: include context tag like [support] in the subject
+    # include_context_in_subject: true
     # Optional: override full HTML template (Jinja2). You can edit/preview in Admin UI → Tools.
     # html_template: |
     #   <html>...</html>
@@ -905,6 +907,8 @@ tools:
     #   sales: "sales-bot@yourdomain.com"
     confirm_email: true                # AI reads back email
     validate_domain: true              # DNS MX lookup
+    # Optional: include context tag like [support] in the subject
+    # include_context_in_subject: true
     # Note: by default, only the most recent confirmed email is used per call.
     # Set to true to allow multiple recipients (not recommended for most deployments).
     # allow_multiple_recipients: false
