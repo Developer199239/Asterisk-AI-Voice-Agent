@@ -73,6 +73,18 @@ interface CompatibilityIssue {
     requiresRebuild: boolean;
 }
 
+interface RuntimeGpuStatus {
+    host_preflight_detected?: boolean | null;
+    host_preflight_raw?: string | null;
+    runtime_detected?: boolean;
+    runtime_usable?: boolean;
+    source?: string;
+    name?: string | null;
+    memory_gb?: number | null;
+    error?: string | null;
+    checked_at_epoch_ms?: number | null;
+}
+
 const ModelsPage = () => {
     const { confirm } = useConfirmDialog();
     const [catalog, setCatalog] = useState<{ stt: ModelInfo[]; tts: ModelInfo[]; llm: ModelInfo[] }>({ stt: [], tts: [], llm: [] });
@@ -97,6 +109,7 @@ const ModelsPage = () => {
     const [capabilities, setCapabilities] = useState<BackendCapabilities | null>(null);
     const [envConfig, setEnvConfig] = useState<Record<string, string>>({});
     const [forceIncompatibleApply, setForceIncompatibleApply] = useState(false);
+    const [runtimeGpu, setRuntimeGpu] = useState<RuntimeGpuStatus | null>(null);
 
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         const id = Date.now();
@@ -194,6 +207,7 @@ const ModelsPage = () => {
             const localAI = healthRes.value.data?.local_ai_server;
             if (localAI?.status === 'connected') {
                 setServerStatus('connected');
+                setRuntimeGpu((localAI.details?.gpu || null) as RuntimeGpuStatus | null);
                 setActiveModels({
                     stt: {
                         backend: localAI.details?.models?.stt?.backend || 'unknown',
@@ -212,9 +226,11 @@ const ModelsPage = () => {
                 });
             } else {
                 setServerStatus('error');
+                setRuntimeGpu(null);
             }
         } else {
             setServerStatus('error');
+            setRuntimeGpu(null);
         }
 
         if (modelsRes.status === 'fulfilled' && modelsRes.value.data) {
@@ -385,6 +401,9 @@ const ModelsPage = () => {
     const fasterWhisperDevice = (envConfig.FASTER_WHISPER_DEVICE || 'cpu').trim().toLowerCase();
     const melottsDevice = (envConfig.MELOTTS_DEVICE || 'cpu').trim().toLowerCase();
     const gpuStatusKnown = typeof envConfig.GPU_AVAILABLE !== 'undefined';
+    const runtimeGpuKnown = runtimeGpu !== null && typeof runtimeGpu.runtime_detected === 'boolean';
+    const runtimeGpuDetected = runtimeGpu?.runtime_detected === true;
+    const runtimeGpuUsable = runtimeGpu?.runtime_usable === true;
 
     const getCompatibilityIssues = (changes: { stt?: string; tts?: string; llm?: string }): CompatibilityIssue[] => {
         const issues: CompatibilityIssue[] = [];
@@ -416,6 +435,20 @@ const ModelsPage = () => {
             issues.push({
                 key: 'melotts_cuda_without_gpu',
                 message: 'MELOTTS_DEVICE is set to CUDA but preflight reports no GPU. Use CPU in Env page unless forcing this config.',
+                requiresRebuild: false
+            });
+        }
+        if (runtimeGpuKnown && !runtimeGpuUsable && sttSel.backend === 'faster_whisper' && fasterWhisperDevice === 'cuda') {
+            issues.push({
+                key: 'fw_cuda_runtime_unavailable',
+                message: `Runtime GPU is unavailable in local_ai_server${runtimeGpu?.error ? ` (${runtimeGpu.error})` : ''}. Faster-Whisper on CUDA is likely to fail.`,
+                requiresRebuild: false
+            });
+        }
+        if (runtimeGpuKnown && !runtimeGpuUsable && ttsSel.backend === 'melotts' && melottsDevice === 'cuda') {
+            issues.push({
+                key: 'melotts_cuda_runtime_unavailable',
+                message: `Runtime GPU is unavailable in local_ai_server${runtimeGpu?.error ? ` (${runtimeGpu.error})` : ''}. MeloTTS on CUDA is likely to fail.`,
                 requiresRebuild: false
             });
         }
@@ -531,13 +564,30 @@ const ModelsPage = () => {
                                 'Loading...'
                             )}
                         </span>
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            gpuStatusKnown
-                                ? (gpuDetected ? 'bg-green-500/10 text-green-500' : 'bg-amber-500/10 text-amber-500')
-                                : 'bg-muted text-muted-foreground'
-                        }`}>
-                            {gpuStatusKnown ? (gpuDetected ? 'GPU detected (preflight)' : 'No GPU detected (preflight)') : 'GPU status unknown'}
-                        </span>
+                        <div className="flex items-center gap-1 text-xs">
+                            <span className="text-muted-foreground">GPU Detected:</span>
+                            <span
+                                className={`px-2 py-0.5 rounded-full font-medium ${
+                                    gpuStatusKnown
+                                        ? (gpuDetected ? 'bg-green-500/10 text-green-500' : 'bg-amber-500/10 text-amber-500')
+                                        : 'bg-muted text-muted-foreground'
+                                }`}
+                                title={`Host/preflight signal from .env GPU_AVAILABLE=${envConfig.GPU_AVAILABLE ?? 'unset'}`}
+                            >
+                                Host
+                            </span>
+                            <span className="text-muted-foreground">/</span>
+                            <span
+                                className={`px-2 py-0.5 rounded-full font-medium ${
+                                    runtimeGpuKnown
+                                        ? (runtimeGpuDetected ? 'bg-green-500/10 text-green-500' : 'bg-amber-500/10 text-amber-500')
+                                        : 'bg-muted text-muted-foreground'
+                                }`}
+                                title={runtimeGpu?.error || 'Runtime probe from local_ai_server status'}
+                            >
+                                Runtime
+                            </span>
+                        </div>
                     </div>
                     <div className="flex gap-1">
                         <Link
@@ -579,9 +629,26 @@ const ModelsPage = () => {
 
                 {serverStatus === 'connected' && activeModels && (
                     <div className="p-4 space-y-4">
+                        <div className="text-xs text-muted-foreground">
+                            {runtimeGpuKnown ? (
+                                <span>
+                                    Runtime probe: {runtimeGpuUsable ? 'GPU usable' : 'GPU not usable'}
+                                    {runtimeGpu?.source ? ` via ${runtimeGpu.source}` : ''}
+                                    {runtimeGpu?.name ? ` (${runtimeGpu.name}${runtimeGpu.memory_gb ? `, ${runtimeGpu.memory_gb} GB` : ''})` : ''}
+                                    {runtimeGpu?.error ? ` • ${runtimeGpu.error}` : ''}
+                                </span>
+                            ) : (
+                                <span>Runtime probe: unavailable (Local AI status did not report GPU details)</span>
+                            )}
+                        </div>
                         {!gpuDetected && (fasterWhisperDevice === 'cuda' || melottsDevice === 'cuda') && (
                             <div className="p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-300">
                                 CUDA device is configured for Local AI while preflight reports no GPU. This can cause degraded startup. Update device settings in <Link to="/env" className="underline">Env</Link> or force apply changes knowingly.
+                            </div>
+                        )}
+                        {runtimeGpuKnown && !runtimeGpuUsable && (fasterWhisperDevice === 'cuda' || melottsDevice === 'cuda') && (
+                            <div className="p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-300">
+                                Runtime probe reports GPU unavailable in local_ai_server{runtimeGpu?.error ? ` (${runtimeGpu.error})` : ''}. CUDA-based STT/TTS may fail until runtime GPU is fixed.
                             </div>
                         )}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -76,6 +76,22 @@ def build_status_response(server) -> Dict[str, Any]:
     if runtime_mode == "minimal":
         llm_loaded = False
 
+    gpu_status: Dict[str, Any]
+    try:
+        gpu_status = server.get_gpu_runtime_status()
+    except Exception as exc:  # pragma: no cover - defensive status path
+        gpu_status = {
+            "host_preflight_detected": None,
+            "host_preflight_raw": None,
+            "runtime_detected": False,
+            "runtime_usable": False,
+            "source": "none",
+            "name": None,
+            "memory_gb": None,
+            "error": str(exc),
+            "checked_at_epoch_ms": None,
+        }
+
     return {
         "type": "status_response",
         "status": "ok",
@@ -119,6 +135,7 @@ def build_status_response(server) -> Dict[str, Any]:
             "api_base_url": server.kokoro_api_base_url,
             "api_key_set": bool(server.kokoro_api_key),
         },
+        "gpu": gpu_status,
         "config": {
             "log_level": _level_name,
             "debug_audio": DEBUG_AUDIO_FLOW,
