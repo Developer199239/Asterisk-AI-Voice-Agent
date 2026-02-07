@@ -240,6 +240,13 @@ class GoogleProviderConfig(BaseModel):
     )
     # Provider-specific farewell hangup delay (overrides global)
     farewell_hangup_delay_sec: Optional[float] = None
+    # Fallback watchdog tuning (Google Live only)
+    hangup_fallback_audio_idle_sec: float = Field(default=1.25)
+    hangup_fallback_min_armed_sec: float = Field(default=0.8)
+    hangup_fallback_no_audio_timeout_sec: float = Field(default=4.0)
+    # Guard against premature fallback hangup before the provider emits turnComplete.
+    # If turnComplete never arrives, fallback still proceeds after this timeout.
+    hangup_fallback_turn_complete_timeout_sec: float = Field(default=2.5)
 
 
 class GroqSTTProviderConfig(BaseModel):

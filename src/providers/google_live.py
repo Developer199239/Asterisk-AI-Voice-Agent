@@ -149,6 +149,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._hangup_fallback_task: Optional[asyncio.Task] = None
         self._hangup_fallback_armed_at: Optional[float] = None
         self._hangup_fallback_audio_started: bool = False
+        self._hangup_fallback_turn_complete_seen: bool = False
+        self._hangup_fallback_wait_logged: bool = False
         self._last_audio_out_monotonic: Optional[float] = None
         self._user_end_intent: Optional[str] = None
         self._assistant_farewell_intent: Optional[str] = None
@@ -282,6 +284,37 @@ class GoogleLiveProvider(AIProviderInterface):
                 return m
         return None
 
+    def _should_wait_for_turn_complete_before_fallback(self, now: float, armed_at: float) -> bool:
+        if self._hangup_fallback_turn_complete_seen:
+            return False
+        try:
+            timeout_sec = float(getattr(self.config, "hangup_fallback_turn_complete_timeout_sec", 2.5) or 0.0)
+        except Exception:
+            timeout_sec = 0.0
+        if timeout_sec <= 0.0:
+            return False
+        return (now - armed_at) < timeout_sec
+
+    async def _flush_pending_user_transcription(self, *, reason: str) -> bool:
+        pending = (self._input_transcription_buffer or "").strip()
+        if not pending:
+            return False
+        if pending == (self._last_final_user_text or "").strip():
+            self._input_transcription_buffer = ""
+            self._last_input_transcription_fragment = ""
+            return False
+        await self._track_conversation_message("user", pending)
+        self._last_final_user_text = pending
+        self._input_transcription_buffer = ""
+        self._last_input_transcription_fragment = ""
+        logger.info(
+            "Google Live flushed pending user transcription before fallback hangup",
+            call_id=self._call_id,
+            reason=reason,
+            text=pending[:150],
+        )
+        return True
+
     async def _ensure_hangup_fallback_watchdog(self) -> None:
         if self._hangup_fallback_task and not self._hangup_fallback_task.done():
             return
@@ -304,6 +337,9 @@ class GoogleLiveProvider(AIProviderInterface):
         # Keep conservative defaults; engine still applies farewell_hangup_delay_sec before ARI hangup.
         idle_sec = float(getattr(self.config, "hangup_fallback_audio_idle_sec", 1.25) or 1.25)
         min_armed_sec = float(getattr(self.config, "hangup_fallback_min_armed_sec", 0.8) or 0.8)
+        turn_complete_timeout_sec = float(
+            getattr(self.config, "hangup_fallback_turn_complete_timeout_sec", 2.5) or 2.5
+        )
         # If the model called hangup_call but never produced any farewell audio, we still must end the call.
         # This commonly happens when the model emits toolCalls but does not follow up with an assistant turn.
         no_audio_timeout_sec = float(getattr(self.config, "hangup_fallback_no_audio_timeout_sec", 4.0) or 4.0)
@@ -320,10 +356,23 @@ class GoogleLiveProvider(AIProviderInterface):
                 now = time.monotonic()
                 last_audio = self._last_audio_out_monotonic
                 armed_at = self._hangup_fallback_armed_at or now
+                waiting_for_turn_complete = self._should_wait_for_turn_complete_before_fallback(now, armed_at)
                 if (now - armed_at) < min_armed_sec:
                     await asyncio.sleep(0.2)
                     continue
                 if not self._hangup_fallback_audio_started and (now - armed_at) >= no_audio_timeout_sec:
+                    if waiting_for_turn_complete:
+                        if not self._hangup_fallback_wait_logged:
+                            logger.info(
+                                "Hangup fallback waiting for turnComplete before no-audio fallback",
+                                call_id=call_id,
+                                wait_timeout_sec=turn_complete_timeout_sec,
+                                elapsed_sec=round((now - armed_at), 3),
+                            )
+                            self._hangup_fallback_wait_logged = True
+                        await asyncio.sleep(0.2)
+                        continue
+                    await self._flush_pending_user_transcription(reason="fallback_no_audio")
                     if self.on_event:
                         await self.on_event(
                             {
@@ -331,6 +380,7 @@ class GoogleLiveProvider(AIProviderInterface):
                                 "call_id": call_id,
                                 "reason": "fallback_no_audio",
                                 "had_audio": False,
+                                "turn_complete_seen": bool(self._hangup_fallback_turn_complete_seen),
                             }
                         )
                     self._hangup_ready_emitted = True
@@ -350,6 +400,18 @@ class GoogleLiveProvider(AIProviderInterface):
                     await asyncio.sleep(0.2)
                     continue
 
+                if waiting_for_turn_complete:
+                    if not self._hangup_fallback_wait_logged:
+                        logger.info(
+                            "Hangup fallback waiting for turnComplete before audio-idle fallback",
+                            call_id=call_id,
+                            wait_timeout_sec=turn_complete_timeout_sec,
+                            elapsed_sec=round((now - armed_at), 3),
+                        )
+                        self._hangup_fallback_wait_logged = True
+                    await asyncio.sleep(0.2)
+                    continue
+
                 # Audio has been idle long enough; treat as end-of-response.
                 had_audio = bool(self._hangup_fallback_audio_started)
                 if self._in_audio_burst:
@@ -363,6 +425,7 @@ class GoogleLiveProvider(AIProviderInterface):
                             }
                         )
 
+                await self._flush_pending_user_transcription(reason="fallback_audio_idle")
                 if self.on_event:
                     await self.on_event(
                         {
@@ -370,6 +433,7 @@ class GoogleLiveProvider(AIProviderInterface):
                             "call_id": call_id,
                             "reason": "fallback_audio_idle",
                             "had_audio": had_audio,
+                            "turn_complete_seen": bool(self._hangup_fallback_turn_complete_seen),
                         }
                     )
 
@@ -1171,9 +1235,10 @@ class GoogleLiveProvider(AIProviderInterface):
         
         # Check if model turn is complete - THIS is when we save the final transcription
         turn_complete = content.get("turnComplete", False)
-        
+
         # Save final transcriptions when turn completes (per API recommendation)
         if turn_complete:
+            self._hangup_fallback_turn_complete_seen = True
             # Save user speech if buffered
             if self._input_transcription_buffer:
                 self._last_final_user_text = self._input_transcription_buffer
@@ -1294,6 +1359,8 @@ class GoogleLiveProvider(AIProviderInterface):
             self._hangup_fallback_armed = True
             self._hangup_fallback_armed_at = time.monotonic()
             self._hangup_fallback_audio_started = False
+            self._hangup_fallback_turn_complete_seen = False
+            self._hangup_fallback_wait_logged = False
             await self._ensure_hangup_fallback_watchdog()
             logger.info(
                 "🔚 Armed cleanup_after_tts fallback (no toolCall required)",
@@ -1572,6 +1639,8 @@ class GoogleLiveProvider(AIProviderInterface):
                             self._hangup_fallback_armed = True
                             self._hangup_fallback_armed_at = time.monotonic()
                             self._hangup_fallback_audio_started = False
+                            self._hangup_fallback_turn_complete_seen = False
+                            self._hangup_fallback_wait_logged = False
                             await self._ensure_hangup_fallback_watchdog()
                         logger.info(
                             "🔚 Hangup tool executed - next response will trigger hangup",
@@ -1842,6 +1911,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._hangup_fallback_emitted = False
         self._hangup_fallback_armed_at = None
         self._hangup_fallback_audio_started = False
+        self._hangup_fallback_turn_complete_seen = False
+        self._hangup_fallback_wait_logged = False
         self._force_farewell_text = ""
         self._force_farewell_sent = False
         self._last_audio_out_monotonic = None
