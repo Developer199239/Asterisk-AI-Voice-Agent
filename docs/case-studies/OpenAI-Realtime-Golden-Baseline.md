@@ -189,7 +189,7 @@ Caller (μ-law 8kHz)
 [21:12:47] Call Start
 ---
 
-AI: Hi HAIDER JARRAL, I'm Ava with the OpenAI Realtime voice demo. 
+AI: Hi CALLER NAME, I'm Ava with the OpenAI Realtime voice demo. 
     Ask me anything about the Asterisk AI Voice Agent project.
 
 User: Tell me about OpenAI Realtime API.
@@ -203,13 +203,13 @@ User: Can you send me the transcript?
 AI: Sure, I can send you the transcript. Could you please provide your 
     email address?
 
-User: haiderkhalil at hotmail dot com
+User: caller at example dot com
 
-AI: Got it. haiderkhalil at hotmail dot com. Is that correct?
+AI: Got it. caller at example dot com. Is that correct?
 
 User: Yes.
 
-AI: Perfect! I'll send the complete transcript to haiderkhalil@hotmail.com 
+AI: Perfect! I'll send the complete transcript to caller@example.com 
     when our call ends.
 
 [Tool executed: request_transcript]
@@ -230,7 +230,7 @@ AI: Thank you for calling! Have a great day!
 ---
 Duration: 123 seconds
 Tools Executed: request_transcript, hangup_call
-Emails Sent: Summary (haider@jugaar.llc), Transcript (haiderkhalil@hotmail.com)
+Emails Sent: Summary (admin@yourdomain.com), Transcript (caller@example.com)
 Hangup: ✅ Automatic via hangup_call tool with audio
 ```
 
@@ -245,7 +245,7 @@ Added tools: transfer, cancel_transfer, hangup_call, leave_voicemail,
 
 **Conversation Tracking**:
 ```
-✅ Tracked conversation message (role=assistant): Hi HAIDER JARRAL...
+✅ Tracked conversation message (role=assistant): Hi CALLER NAME...
 ✅ Tracked conversation message (role=assistant): The OpenAI Realtime API...
 ✅ Tracked conversation message (role=assistant): Sure, I can send you the transcript...
 ✅ Tracked conversation message (role=assistant): Perfect! I'll send the complete transcript...
@@ -268,9 +268,9 @@ Added tools: transfer, cancel_transfer, hangup_call, leave_voicemail,
 
 **Email Delivery**:
 ```
-Email summary scheduled for sending → haider@jugaar.llc
+Email summary scheduled for sending → admin@yourdomain.com
 Email summary sent successfully → email_id: e44bade3-b449-4e6d-8405-6714e9427b85
-Sending transcript via Resend → haiderkhalil@hotmail.com
+Sending transcript via Resend → caller@example.com
 Transcript sent successfully → email_id: 9a225a3b-537b-4a5f-87d8-a6d1b7b3618b
 ```
 

@@ -25,7 +25,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
-- [🛠️ AI-Powered Actions](#-ai-powered-actions-v43)
+- [🛠️ AI-Powered Actions](#-ai-powered-actions)
 - [🩺 Agent CLI Tools](#-agent-cli-tools)
 - [⚙️ Configuration](#-configuration)
 - [🏗️ Project Architecture](#-project-architecture)
@@ -204,8 +204,8 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 - **🔄 Model Management**: Dynamic backend switching from Dashboard.
 - **📚 Documentation**: LOCAL_ONLY_SETUP.md guide.
 
-#### v4.4.1 - Admin UI v1.0
-- **🖥️ Admin UI v1.0**: Modern web interface (http://localhost:3003).
+#### v4.4.1 - Admin UI
+- **🖥️ Admin UI**: Modern web interface (http://localhost:3003).
 - **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider.
 - **🎵 Background Music**: Ambient music during AI calls.
 
@@ -281,7 +281,12 @@ Run your own local LLM using [Ollama](https://ollama.ai) - perfect for privacy-f
 
 ```yaml
 # In ai-agent.yaml
-active_pipeline: local_ollama
+active_pipeline: local_hybrid
+pipelines:
+  local_hybrid:
+    stt: local_stt
+    llm: ollama_llm
+    tts: local_tts
 ```
 
 **Features:**
@@ -317,7 +322,7 @@ active_pipeline: local_ollama
 - **State Management**: SessionStore for centralized, typed call state.
 - **Barge-In Support**: Interrupt handling with configurable gating.
 
-### 🖥️ Admin UI v1.0
+### 🖥️ Admin UI
 
 Modern web interface for configuration and system management.
 
@@ -355,7 +360,7 @@ Experience our production-ready configurations with a single phone call:
 
 ---
 
-## 🛠️ AI-Powered Actions (v4.3+)
+## 🛠️ AI-Powered Actions
 
 Your AI agent can perform real-world telephony actions through tool calling.
 
@@ -389,8 +394,41 @@ Agent: "I'll connect you to our sales team right away."
 | `cancel_transfer` | Cancel in-progress transfer (during ring) | ✅ |
 | `hangup_call` | End call gracefully with farewell message | ✅ |
 | `leave_voicemail` | Route caller to voicemail extension | ✅ |
-| `send_email_summary` | Auto-send call summaries to admins | ✅ |
-| `request_transcript` | Caller-initiated email transcripts | ✅ |
+| `send_email_summary` | Auto-send call summaries to admins | ⚙️ Disabled by default |
+| `request_transcript` | Caller-initiated email transcripts | ⚙️ Disabled by default |
+
+### HTTP Tools (Pre/In/Post-Call) Example
+
+```yaml
+# In ai-agent.yaml
+tools:
+  pre_call_lookup:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    is_global: false
+  post_call_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: true
+    is_global: false
+
+in_call_tools:
+  intent_router:
+    kind: in_call_http_lookup
+    enabled: true
+    is_global: false
+
+contexts:
+  default:
+    pre_call_tools:
+      - pre_call_lookup
+    tools:
+      - intent_router
+      - hangup_call
+    post_call_tools:
+      - post_call_webhook
+```
 
 ---
 

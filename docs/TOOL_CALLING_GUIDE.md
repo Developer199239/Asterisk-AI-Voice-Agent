@@ -276,13 +276,13 @@ AI: "Perfect! I'll send the transcript there shortly."
 
 **Example Email**:
 ```
-Subject: Call Summary - (925) 736-6718 - 2025-11-10 16:43
+Subject: Call Summary - +1 (555) 010-1234 - 2025-11-10 16:43
 
 Hello Admin,
 
 Call Summary
 Duration: 1m 24s
-Caller: John Smith ((925) 736-6718)
+Caller: John Smith (+1 (555) 010-1234)
 Time: November 10, 2025 at 4:43 PM
 
 Transcript:

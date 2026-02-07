@@ -115,6 +115,27 @@ const Wizard = () => {
     // Check if hostname is being used (requires server IP for RTP security)
     const isUsingHostname = !isIPAddress(config.asterisk_host) && config.asterisk_host !== 'localhost';
 
+    const getDialplanProviderOverride = (provider: string): string => {
+        const supported = new Set([
+            'google_live',
+            'openai_realtime',
+            'deepgram',
+            'local_hybrid',
+            'local',
+            'elevenlabs_agent',
+        ]);
+        return supported.has(provider) ? provider : 'openai_realtime';
+    };
+    const dialplanContextOverride = 'default';
+    const dialplanProviderOverride = getDialplanProviderOverride(config.provider);
+    const nonLocalDialplanSnippet = `; extensions_custom.conf
+[from-ai-agent]
+exten => s,1,NoOp(AI Agent Call)
+ same => n,Set(AI_CONTEXT=${dialplanContextOverride})
+ same => n,Set(AI_PROVIDER=${dialplanProviderOverride})
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()`;
+
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         setToast({ message, type });
         setTimeout(() => setToast(null), 4000);
@@ -2697,20 +2718,11 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                     </p>
                                     <div className="relative group">
                                         <pre className="bg-black text-green-400 p-4 rounded-md overflow-x-auto text-sm font-mono">
-                                            {`; extensions_custom.conf
-[from-ai-agent]
-exten => s,1,NoOp(AI Agent Call)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()`}
+                                            {nonLocalDialplanSnippet}
                                         </pre>
                                         <button
                                             onClick={() => {
-                                                const dialplan = `; extensions_custom.conf
-[from-ai-agent]
-exten => s,1,NoOp(AI Agent Call)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()`;
-                                                navigator.clipboard.writeText(dialplan);
+                                                navigator.clipboard.writeText(nonLocalDialplanSnippet);
                                             }}
                                             className="absolute top-2 right-2 p-1 bg-white/10 rounded hover:bg-white/20 text-white opacity-0 group-hover:opacity-100 transition-opacity"
                                             title="Copy to clipboard"

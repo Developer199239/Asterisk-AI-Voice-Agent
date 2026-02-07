@@ -172,7 +172,7 @@ Caller (μ-law 8kHz)
 [21:58:50] Call Start
 ---
 
-AI: Hi HAIDER JARRAL, I'm Ava with the local hybrid voice demo. I can 
+AI: Hi CALLER NAME, I'm Ava with the local hybrid voice demo. I can 
     explain how this project works in simple terms.
 
 User: Tell me how this project works.

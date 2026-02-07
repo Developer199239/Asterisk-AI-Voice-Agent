@@ -137,8 +137,8 @@ Expected: Email sent with full transcript
 tools:
   send_email_summary:
     enabled: true
-    default_recipient: haider@jugaar.llc
-    from_email: noreply@jugaar.llc
+    default_recipient: admin@yourdomain.com
+    from_email: agent@yourdomain.com
 ```
 
 ---

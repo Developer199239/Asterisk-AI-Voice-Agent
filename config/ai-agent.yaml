@@ -1526,7 +1526,7 @@ tools:
     enabled: true
     extension: '2765'
   request_transcript:
-    admin_email: haider@jugaar.llc
+    admin_email: admin@yourdomain.com
     api_key: ${RESEND_API_KEY}
     common_domains:
       - gmail.com
@@ -1535,17 +1535,17 @@ tools:
       - hotmail.com
       - icloud.com
     confirm_email: true
-    enabled: true
-    from_email: ava@jugaar.llc
+    enabled: false
+    from_email: agent@yourdomain.com
     from_name: AI Voice Agent
     max_attempts: 2
     provider: resend
     validate_domain: true
   send_email_summary:
-    admin_email: haider@jugaar.llc
+    admin_email: admin@yourdomain.com
     api_key: ${RESEND_API_KEY}
-    enabled: true
-    from_email: ava@jugaar.llc
+    enabled: false
+    from_email: agent@yourdomain.com
     from_name: AI Voice Agent
     include_metadata: true
     include_transcript: true
