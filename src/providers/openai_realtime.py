@@ -660,7 +660,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             "🎤 Farewell response.create sent (tools disabled)",
                             call_id=self._call_id,
                             farewell_preview=farewell_text[:80],
-                            modalities=output_modalities,
+                            modalities=farewell_response.get("modalities"),
                         )
                     except Exception:
                         logger.debug("Failed to send farewell response.create", call_id=self._call_id, exc_info=True)

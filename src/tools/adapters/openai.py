@@ -298,6 +298,12 @@ class OpenAIToolAdapter:
                 response_config["instructions"] = f"Please say the following to the user: {tool_message}"
                 logger.info(f"✅ Added speech instructions for tool response", 
                            message_preview=tool_message[:50] if tool_message else "")
+            else:
+                # Keep response.create explicit in GA mode to avoid sending an empty response object.
+                response_config["instructions"] = (
+                    "Please respond briefly to the user based on the latest tool result."
+                )
+                logger.debug("Using fallback instructions for tool response")
             
             response_event = {
                 "type": "response.create",
