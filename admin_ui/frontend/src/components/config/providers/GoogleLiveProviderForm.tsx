@@ -394,7 +394,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 step="0.05"
                                 className="w-full p-2 rounded border border-input bg-background"
                                 value={config.hangup_fallback_audio_idle_sec ?? 1.25}
-                                onChange={(e) => handleChange('hangup_fallback_audio_idle_sec', parseFloat(e.target.value))}
+                                onChange={(e) => handleChange('hangup_fallback_audio_idle_sec', e.target.value ? parseFloat(e.target.value) : null)}
                             />
                         </div>
                         <div className="space-y-2">
@@ -404,7 +404,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 step="0.05"
                                 className="w-full p-2 rounded border border-input bg-background"
                                 value={config.hangup_fallback_min_armed_sec ?? 0.8}
-                                onChange={(e) => handleChange('hangup_fallback_min_armed_sec', parseFloat(e.target.value))}
+                                onChange={(e) => handleChange('hangup_fallback_min_armed_sec', e.target.value ? parseFloat(e.target.value) : null)}
                             />
                         </div>
                         <div className="space-y-2">
@@ -414,7 +414,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 step="0.1"
                                 className="w-full p-2 rounded border border-input bg-background"
                                 value={config.hangup_fallback_no_audio_timeout_sec ?? 4.0}
-                                onChange={(e) => handleChange('hangup_fallback_no_audio_timeout_sec', parseFloat(e.target.value))}
+                                onChange={(e) => handleChange('hangup_fallback_no_audio_timeout_sec', e.target.value ? parseFloat(e.target.value) : null)}
                             />
                         </div>
                         <div className="space-y-2">
@@ -424,7 +424,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 step="0.1"
                                 className="w-full p-2 rounded border border-input bg-background"
                                 value={config.hangup_fallback_turn_complete_timeout_sec ?? 2.5}
-                                onChange={(e) => handleChange('hangup_fallback_turn_complete_timeout_sec', parseFloat(e.target.value))}
+                                onChange={(e) => handleChange('hangup_fallback_turn_complete_timeout_sec', e.target.value ? parseFloat(e.target.value) : null)}
                             />
                         </div>
                     </div>

@@ -180,7 +180,6 @@ const ContextsPage = () => {
                     variant: 'destructive'
                 });
                 if (confirmForce) {
-                    setRestartingEngine(false);
                     return handleApplyChanges(true);
                 }
                 return;
@@ -367,7 +366,7 @@ const ContextsPage = () => {
                                 variant: 'default'
                             });
                             if (confirmed) {
-                                handleApplyChanges(false);
+                                await handleApplyChanges(false);
                             }
                         }}
                         disabled={restartingEngine}

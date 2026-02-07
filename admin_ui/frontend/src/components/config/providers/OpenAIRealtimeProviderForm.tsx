@@ -56,7 +56,13 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
                             value={config.api_version || 'beta'}
-                            onChange={(e) => handleChange('api_version', e.target.value)}
+                            onChange={(e) => {
+                                const apiVersion = e.target.value;
+                                const defaultModel = apiVersion === 'ga'
+                                    ? 'gpt-realtime'
+                                    : 'gpt-4o-realtime-preview-2024-12-17';
+                                onChange({ ...config, api_version: apiVersion, model: defaultModel });
+                            }}
                         >
                             <option value="beta">Beta (default)</option>
                             <option value="ga">GA</option>
@@ -230,7 +236,7 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                         </div>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        `create_response` and `interrupt_response` are managed internally in GA mode.
+                        <code>create_response</code> and <code>interrupt_response</code> are managed internally in GA mode.
                     </p>
                 </div>
             </div>

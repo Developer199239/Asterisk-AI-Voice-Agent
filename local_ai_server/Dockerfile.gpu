@@ -86,7 +86,7 @@ RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \
 
 # Pre-install spacy model for Kokoro TTS (only if Kokoro included)
 RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
-        python -m spacy download en_core_web_sm || true; \
+        python -m spacy download en_core_web_sm; \
     fi
 
 # --- Stage 2: Final Runtime Image (CUDA runtime) ---

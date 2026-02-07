@@ -289,7 +289,7 @@ const Dashboard = () => {
                             <div className="flex items-center gap-1.5">
                                 <Globe className="w-3.5 h-3.5 text-muted-foreground" />
                                 <span className="text-muted-foreground">OS:</span>
-                                <span className="font-medium">{platformData?.platform?.os?.id} {platformData?.platform?.os?.version}</span>
+                                <span className="font-medium">{platformData?.platform?.os ? `${platformData.platform.os.id} ${platformData.platform.os.version}` : '--'}</span>
                             </div>
                             <div className="flex items-center gap-1.5">
                                 <Tag className="w-3.5 h-3.5 text-muted-foreground" />
@@ -322,7 +322,7 @@ const Dashboard = () => {
                     <CompactMetric
                         title="Memory"
                         value={metrics?.memory?.percent != null ? `${metrics.memory.percent.toFixed(1)}%` : '--'}
-                        subValue={`${formatBytes(metrics?.memory?.used ?? 0)} / ${formatBytes(metrics?.memory?.total ?? 0)}`}
+                        subValue={metrics?.memory ? `${formatBytes(metrics.memory.used)} / ${formatBytes(metrics.memory.total)}` : undefined}
                         icon={Activity}
                         color="text-green-500"
                     />

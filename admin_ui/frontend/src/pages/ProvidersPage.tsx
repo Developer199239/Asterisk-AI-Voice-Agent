@@ -218,13 +218,13 @@ const ProvidersPage: React.FC = () => {
                 target_encoding: 'ulaw',
                 target_sample_rate_hz: 8000
             },
-	            local_modular: {
-	                // This adds local_stt, local_llm, local_tts
-	                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
-	                local_llm: { type: 'local', capabilities: ['llm'], enabled: false, auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
-	                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' }
-	            }
-	        };
+            local_modular: {
+                // This adds local_stt, local_llm, local_tts
+                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+                local_llm: { type: 'local', capabilities: ['llm'], enabled: false, auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' }
+            }
+        };
 
         selectedTemplates.forEach(templateKey => {
             if (templateKey === 'local_modular') {
@@ -652,7 +652,7 @@ const ProvidersPage: React.FC = () => {
                                 </div>
                                 <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-2 flex-wrap">
-                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
+                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled ? 'text-muted-foreground' : ''}`}>{name}</h4>
                                         {config.default_provider === name && (
                                             <span className="text-xs bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0">
                                                 <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
@@ -796,7 +796,7 @@ const ProvidersPage: React.FC = () => {
                                 </div>
                                 <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-2 flex-wrap">
-                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
+                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled ? 'text-muted-foreground' : ''}`}>{name}</h4>
                                         {!providerData.enabled && (
                                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
                                         )}
