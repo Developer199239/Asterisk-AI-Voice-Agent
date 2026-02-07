@@ -96,6 +96,30 @@ class DocContent(BaseModel):
     next_doc: Optional[DocInfo] = None
 
 
+def _allowed_doc_files() -> set[str]:
+    files: set[str] = set()
+    for cat_data in DOC_CATEGORIES.values():
+        for doc in cat_data.get("docs", []):
+            file_name = doc.get("file")
+            if isinstance(file_name, str) and file_name:
+                files.add(file_name)
+    return files
+
+
+def _resolve_allowed_doc_path(docs_path: Path, file_path: str) -> Path:
+    requested = (file_path or "").strip()
+    if requested not in _allowed_doc_files():
+        raise HTTPException(status_code=404, detail=f"Documentation file not found: {file_path}")
+
+    docs_root = docs_path.resolve()
+    resolved = (docs_root / requested).resolve()
+    if not resolved.is_relative_to(docs_root):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail=f"Documentation file not found: {file_path}")
+    return resolved
+
+
 def get_docs_path() -> Path:
     """Get the path to the docs folder."""
     # Try different locations based on deployment context
@@ -132,19 +156,7 @@ async def get_categories():
 async def get_doc_content(file_path: str):
     """Get the content of a specific documentation file."""
     docs_path = get_docs_path()
-    full_path = docs_path / file_path
-    
-    # Security: ensure we're not escaping the docs directory
-    try:
-        full_path = full_path.resolve()
-        docs_path_resolved = docs_path.resolve()
-        if not str(full_path).startswith(str(docs_path_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except Exception:
-        raise HTTPException(status_code=403, detail="Invalid path")
-    
-    if not full_path.exists():
-        raise HTTPException(status_code=404, detail=f"Documentation file not found: {file_path}")
+    full_path = _resolve_allowed_doc_path(docs_path, file_path)
     
     try:
         content = full_path.read_text(encoding="utf-8")
