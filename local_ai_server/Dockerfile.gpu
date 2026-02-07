@@ -39,7 +39,6 @@ RUN if [ -f "${CUDA_HOME}/lib64/stubs/libcuda.so" ] && [ ! -e "${CUDA_HOME}/lib6
     fi
 
 # Copy requirements first for optimal caching
-COPY requirements.txt .
 COPY requirements-base.txt .
 
 # Install base dependencies (always required)
