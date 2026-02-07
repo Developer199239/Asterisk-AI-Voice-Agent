@@ -58,6 +58,21 @@ interface AvailableModels {
     llm: { name: string; path: string }[];
 }
 
+interface BackendCapabilities {
+    stt?: {
+        faster_whisper?: { available: boolean; reason?: string };
+    };
+    tts?: {
+        melotts?: { available: boolean; reason?: string };
+    };
+}
+
+interface CompatibilityIssue {
+    key: string;
+    message: string;
+    requiresRebuild: boolean;
+}
+
 const ModelsPage = () => {
     const { confirm } = useConfirmDialog();
     const [catalog, setCatalog] = useState<{ stt: ModelInfo[]; tts: ModelInfo[]; llm: ModelInfo[] }>({ stt: [], tts: [], llm: [] });
@@ -79,6 +94,9 @@ const ModelsPage = () => {
     const [restarting, setRestarting] = useState(false);
     const [pendingChanges, setPendingChanges] = useState<{ stt?: string; tts?: string; llm?: string }>({});
     const [startingServer, setStartingServer] = useState(false);
+    const [capabilities, setCapabilities] = useState<BackendCapabilities | null>(null);
+    const [envConfig, setEnvConfig] = useState<Record<string, string>>({});
+    const [forceIncompatibleApply, setForceIncompatibleApply] = useState(false);
 
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         const id = Date.now();
@@ -165,9 +183,15 @@ const ModelsPage = () => {
 
     // Fetch active models from Local AI Server health
     const fetchActiveModels = async () => {
-        try {
-            const healthRes = await axios.get('/api/system/health');
-            const localAI = healthRes.data?.local_ai_server;
+        const [healthRes, modelsRes, capabilitiesRes, envRes] = await Promise.allSettled([
+            axios.get('/api/system/health'),
+            axios.get('/api/local-ai/models'),
+            axios.get('/api/local-ai/capabilities'),
+            axios.get('/api/config/env')
+        ]);
+
+        if (healthRes.status === 'fulfilled') {
+            const localAI = healthRes.value.data?.local_ai_server;
             if (localAI?.status === 'connected') {
                 setServerStatus('connected');
                 setActiveModels({
@@ -189,14 +213,18 @@ const ModelsPage = () => {
             } else {
                 setServerStatus('error');
             }
-            
-            // Also fetch available models for switching
-            const modelsRes = await axios.get('/api/local-ai/models');
-            if (modelsRes.data) {
-                setAvailableModels(modelsRes.data);
-            }
-        } catch (err) {
+        } else {
             setServerStatus('error');
+        }
+
+        if (modelsRes.status === 'fulfilled' && modelsRes.value.data) {
+            setAvailableModels(modelsRes.value.data);
+        }
+        if (capabilitiesRes.status === 'fulfilled' && capabilitiesRes.value.data) {
+            setCapabilities(capabilitiesRes.value.data);
+        }
+        if (envRes.status === 'fulfilled' && envRes.value.data) {
+            setEnvConfig(envRes.value.data || {});
         }
     };
 
@@ -342,6 +370,122 @@ const ModelsPage = () => {
         return catalogMatch?.name || model.name;
     };
 
+    const isTruthy = (value: string | undefined | null): boolean => {
+        const raw = (value || '').trim().toLowerCase();
+        return ['1', 'true', 'yes', 'on'].includes(raw);
+    };
+
+    const parseSelection = (value: string | undefined): { backend: string; modelPath: string } => {
+        if (!value) return { backend: '', modelPath: '' };
+        const [backend, ...pathParts] = value.split(':');
+        return { backend, modelPath: pathParts.join(':') };
+    };
+
+    const gpuDetected = isTruthy(envConfig.GPU_AVAILABLE);
+    const fasterWhisperDevice = (envConfig.FASTER_WHISPER_DEVICE || 'cpu').trim().toLowerCase();
+    const melottsDevice = (envConfig.MELOTTS_DEVICE || 'cpu').trim().toLowerCase();
+    const gpuStatusKnown = typeof envConfig.GPU_AVAILABLE !== 'undefined';
+
+    const getCompatibilityIssues = (changes: { stt?: string; tts?: string; llm?: string }): CompatibilityIssue[] => {
+        const issues: CompatibilityIssue[] = [];
+        const sttSel = parseSelection(changes.stt);
+        const ttsSel = parseSelection(changes.tts);
+
+        if (sttSel.backend === 'faster_whisper' && capabilities && !capabilities.stt?.faster_whisper?.available) {
+            issues.push({
+                key: 'fw_rebuild',
+                message: 'Faster-Whisper is not installed in this Local AI image. Full container rebuild is required.',
+                requiresRebuild: true
+            });
+        }
+        if (ttsSel.backend === 'melotts' && capabilities && !capabilities.tts?.melotts?.available) {
+            issues.push({
+                key: 'melotts_rebuild',
+                message: 'MeloTTS is not installed in this Local AI image. Full container rebuild is required.',
+                requiresRebuild: true
+            });
+        }
+        if (!gpuDetected && sttSel.backend === 'faster_whisper' && fasterWhisperDevice === 'cuda') {
+            issues.push({
+                key: 'fw_cuda_without_gpu',
+                message: 'FASTER_WHISPER_DEVICE is set to CUDA but preflight reports no GPU. Use CPU in Env page unless forcing this config.',
+                requiresRebuild: false
+            });
+        }
+        if (!gpuDetected && ttsSel.backend === 'melotts' && melottsDevice === 'cuda') {
+            issues.push({
+                key: 'melotts_cuda_without_gpu',
+                message: 'MELOTTS_DEVICE is set to CUDA but preflight reports no GPU. Use CPU in Env page unless forcing this config.',
+                requiresRebuild: false
+            });
+        }
+
+        return issues;
+    };
+
+    const compatibilityIssues = getCompatibilityIssues(pendingChanges);
+    const requiresRebuild = {
+        fasterWhisper: compatibilityIssues.some(issue => issue.key === 'fw_rebuild'),
+        meloTts: compatibilityIssues.some(issue => issue.key === 'melotts_rebuild')
+    };
+    const requiresAnyRebuild = requiresRebuild.fasterWhisper || requiresRebuild.meloTts;
+
+    const applyPendingChanges = async () => {
+        if (Object.keys(pendingChanges).length === 0) return;
+        if (compatibilityIssues.length > 0 && !forceIncompatibleApply) {
+            showToast('Resolve compatibility warnings or enable force apply.', 'warning');
+            return;
+        }
+
+        setRestarting(true);
+        try {
+            const remainingChanges = { ...pendingChanges };
+
+            if (requiresAnyRebuild && forceIncompatibleApply) {
+                const sttSel = parseSelection(remainingChanges.stt);
+                const ttsSel = parseSelection(remainingChanges.tts);
+
+                const rebuildRes = await axios.post('/api/local-ai/rebuild', {
+                    include_faster_whisper: requiresRebuild.fasterWhisper,
+                    include_melotts: requiresRebuild.meloTts,
+                    stt_backend: sttSel.backend || undefined,
+                    stt_model: sttSel.modelPath || undefined,
+                    tts_backend: ttsSel.backend || undefined,
+                    tts_voice: ttsSel.modelPath || undefined
+                });
+
+                if (!rebuildRes.data?.success) {
+                    throw new Error(rebuildRes.data?.message || 'Local AI rebuild failed.');
+                }
+                showToast(rebuildRes.data?.message || 'Local AI rebuild completed.', 'success');
+
+                if (requiresRebuild.fasterWhisper) delete remainingChanges.stt;
+                if (requiresRebuild.meloTts) delete remainingChanges.tts;
+            }
+
+            for (const [type, value] of Object.entries(remainingChanges)) {
+                if (!value) continue;
+                if (type === 'llm') {
+                    await handleModelSwitch('llm', '', value);
+                } else {
+                    const [backend, ...pathParts] = value.split(':');
+                    await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'));
+                }
+            }
+
+            showToast(requiresAnyRebuild ? 'Compatibility override applied. Local AI has been rebuilt/restarted.' : 'Model switch requested. Server will restart.', 'success');
+            setPendingChanges({});
+            setForceIncompatibleApply(false);
+            setTimeout(() => {
+                fetchActiveModels();
+                setRestarting(false);
+            }, 15000);
+        } catch (err: any) {
+            showToast(`Failed to apply changes: ${err.response?.data?.detail || err.response?.data?.message || err.message}`, 'error');
+            setRestarting(false);
+        }
+    };
+
     return (
         <div className="p-6 space-y-6">
             {/* Toast notifications */}
@@ -387,6 +531,13 @@ const ModelsPage = () => {
                                 'Loading...'
                             )}
                         </span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                            gpuStatusKnown
+                                ? (gpuDetected ? 'bg-green-500/10 text-green-500' : 'bg-amber-500/10 text-amber-500')
+                                : 'bg-muted text-muted-foreground'
+                        }`}>
+                            {gpuStatusKnown ? (gpuDetected ? 'GPU detected (preflight)' : 'No GPU detected (preflight)') : 'GPU status unknown'}
+                        </span>
                     </div>
                     <div className="flex gap-1">
                         <Link
@@ -427,7 +578,13 @@ const ModelsPage = () => {
                 </div>
 
                 {serverStatus === 'connected' && activeModels && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
+                    <div className="p-4 space-y-4">
+                        {!gpuDetected && (fasterWhisperDevice === 'cuda' || melottsDevice === 'cuda') && (
+                            <div className="p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-300">
+                                CUDA device is configured for Local AI while preflight reports no GPU. This can cause degraded startup. Update device settings in <Link to="/env" className="underline">Env</Link> or force apply changes knowingly.
+                            </div>
+                        )}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         {/* STT Model */}
                         <div className="p-4 rounded-lg border border-border bg-muted/30">
                             <div className="flex items-center gap-2 mb-2">
@@ -449,12 +606,21 @@ const ModelsPage = () => {
                                 disabled={restarting}
                             >
                                 {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => (
+                                    backend === 'faster_whisper' ? null : (
                                     <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
                                         {models.map((m: any) => (
                                             <option key={m.path} value={`${backend}:${m.path}`}>{m.name}</option>
                                         ))}
                                     </optgroup>
+                                    )
                                 ))}
+                                <optgroup label="Faster Whisper">
+                                    <option value="faster_whisper:base">
+                                        Whisper Base {!capabilities?.stt?.faster_whisper?.available ? '(requires rebuild)' : ''}
+                                    </option>
+                                    <option value="faster_whisper:small">Whisper Small</option>
+                                    <option value="faster_whisper:medium">Whisper Medium</option>
+                                </optgroup>
                             </select>
                             <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.stt.path}>
                                 {getModelName(activeModels.stt.path)}
@@ -510,17 +676,27 @@ const ModelsPage = () => {
                                 disabled={restarting}
                             >
                                 {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => (
+                                    backend === 'melotts' ? null : (
                                     <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
                                         {models.map((m: any) => (
                                             <option key={m.path} value={`${backend}:${m.path}`}>{m.name}</option>
                                         ))}
                                     </optgroup>
+                                    )
                                 ))}
+                                <optgroup label="MeloTTS">
+                                    <option value="melotts:EN-US">
+                                        MeloTTS US {!capabilities?.tts?.melotts?.available ? '(requires rebuild)' : ''}
+                                    </option>
+                                    <option value="melotts:EN-BR">MeloTTS UK</option>
+                                    <option value="melotts:EN-AU">MeloTTS AU</option>
+                                </optgroup>
                             </select>
                             <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.tts.path}>
                                 {getModelName(activeModels.tts.path)}
                             </div>
                         </div>
+                    </div>
                     </div>
                 )}
 
@@ -556,52 +732,63 @@ const ModelsPage = () => {
 
                 {/* Apply Changes Button */}
                 {Object.keys(pendingChanges).length > 0 && (
-                    <div className="mt-4 flex gap-2">
-                        <button
-                            onClick={async () => {
-                                setRestarting(true);
-                                try {
-                                    for (const [type, value] of Object.entries(pendingChanges)) {
-                                        if (type === 'llm') {
-                                            await handleModelSwitch('llm', '', value);
-                                        } else {
-                                            const [backend, ...pathParts] = value.split(':');
-                                            await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'));
-                                        }
-                                    }
-                                    showToast('Model switch requested. Server will restart.', 'success');
+                    <div className="mt-4 space-y-3">
+                        {compatibilityIssues.length > 0 && (
+                            <div className="p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-sm">
+                                <div className="font-medium text-amber-700 dark:text-amber-300 mb-1">
+                                    Compatibility checks found warnings
+                                </div>
+                                <ul className="list-disc pl-5 space-y-1 text-amber-700 dark:text-amber-300">
+                                    {compatibilityIssues.map(issue => (
+                                        <li key={issue.key}>{issue.message}</li>
+                                    ))}
+                                </ul>
+                                {requiresAnyRebuild && (
+                                    <div className="mt-2 text-xs text-amber-800 dark:text-amber-200">
+                                        Force apply will trigger a full `local_ai_server` image rebuild and recreate.
+                                    </div>
+                                )}
+                                <label className="mt-2 flex items-center gap-2 text-xs text-amber-800 dark:text-amber-200">
+                                    <input
+                                        type="checkbox"
+                                        className="rounded border-amber-500/50"
+                                        checked={forceIncompatibleApply}
+                                        onChange={(e) => setForceIncompatibleApply(e.target.checked)}
+                                        disabled={restarting}
+                                    />
+                                    Force apply incompatible selections
+                                </label>
+                            </div>
+                        )}
+                        <div className="flex gap-2">
+                            <button
+                                onClick={applyPendingChanges}
+                                disabled={restarting || (compatibilityIssues.length > 0 && !forceIncompatibleApply)}
+                                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+                            >
+                                {restarting ? (
+                                    <>
+                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                        Restarting...
+                                    </>
+                                ) : (
+                                    <>
+                                        <CheckCircle2 className="w-4 h-4" />
+                                        {requiresAnyRebuild && forceIncompatibleApply ? 'Apply (Force + Rebuild)' : 'Apply Changes & Restart'}
+                                    </>
+                                )}
+                            </button>
+                            <button
+                                onClick={() => {
                                     setPendingChanges({});
-                                    setTimeout(() => {
-                                        fetchActiveModels();
-                                        setRestarting(false);
-                                    }, 15000);
-                                } catch (err: any) {
-                                    showToast(`Failed to switch model: ${err.response?.data?.detail || err.message}`, 'error');
-                                    setRestarting(false);
-                                }
-                            }}
-                            disabled={restarting}
-                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
-                        >
-                            {restarting ? (
-                                <>
-                                    <RefreshCw className="w-4 h-4 animate-spin" />
-                                    Restarting...
-                                </>
-                            ) : (
-                                <>
-                                    <CheckCircle2 className="w-4 h-4" />
-                                    Apply Changes & Restart
-                                </>
-                            )}
-                        </button>
-                        <button
-                            onClick={() => setPendingChanges({})}
-                            disabled={restarting}
-                            className="px-4 py-2 bg-muted text-muted-foreground rounded-md hover:bg-muted/80 transition-colors"
-                        >
-                            Cancel
-                        </button>
+                                    setForceIncompatibleApply(false);
+                                }}
+                                disabled={restarting}
+                                className="px-4 py-2 bg-muted text-muted-foreground rounded-md hover:bg-muted/80 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                        </div>
                     </div>
                 )}
             </div>
