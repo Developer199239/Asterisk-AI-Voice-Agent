@@ -171,7 +171,8 @@ class OpenAIProviderConfig(BaseModel):
     tools_enabled: bool = Field(default=True)
     # "ga" = GA Realtime API (no beta header, gpt-realtime models)
     # "beta" = Beta Realtime API (OpenAI-Beta header, gpt-4o-realtime-preview models)
-    api_version: str = Field(default="ga")
+    # Default to beta for widest account compatibility out-of-box.
+    api_version: str = Field(default="beta")
     realtime_base_url: str = Field(default="wss://api.openai.com/v1/realtime")
     chat_base_url: str = Field(default="https://api.openai.com/v1")
     stt_base_url: str = Field(default="https://api.openai.com/v1/audio/transcriptions")
@@ -358,7 +359,8 @@ class OpenAIRealtimeProviderConfig(BaseModel):
     api_key: Optional[str] = None
     # "ga" = GA Realtime API (no beta header, gpt-realtime models)
     # "beta" = Beta Realtime API (OpenAI-Beta header, gpt-4o-realtime-preview models)
-    api_version: str = Field(default="ga")
+    # Default to beta for widest account compatibility out-of-box.
+    api_version: str = Field(default="beta")
     model: str = Field(default="gpt-4o-realtime-preview-2024-12-17")
     voice: str = Field(default="alloy")
     base_url: str = Field(default="wss://api.openai.com/v1/realtime")

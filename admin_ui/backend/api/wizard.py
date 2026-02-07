@@ -2057,6 +2057,7 @@ async def start_local_ai_server():
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+            logf.close()
 
             return {
                 "success": True,
@@ -2649,6 +2650,7 @@ async def save_setup_config(config: SetupConfig):
                 # Only set full config if provider doesn't exist yet
                 if not provider_exists("openai_realtime"):
                     providers["openai_realtime"].update({
+                        "api_version": "beta",
                         "model": "gpt-4o-realtime-preview-2024-12-17",
                         "voice": "alloy",
                         "input_encoding": "ulaw",
@@ -2686,7 +2688,7 @@ async def save_setup_config(config: SetupConfig):
                 if not provider_exists("google_live"):
                     providers["google_live"].update({
                         "api_key": "${GOOGLE_API_KEY}",
-                        "llm_model": "gemini-2.0-flash-exp",
+                        "llm_model": "gemini-2.5-flash-native-audio-preview-12-2025",
                         "input_encoding": "ulaw",
                         "input_sample_rate_hz": 8000,
                         "provider_input_encoding": "linear16",

@@ -61,6 +61,7 @@ def test_output_rate_drift_adjusts_active_rate(openai_config):
 @pytest.mark.asyncio
 async def test_session_requests_pcm_when_ga_mode(openai_config):
     """GA mode uses nested audio.output.format with MIME types, not flat output_audio_format."""
+    openai_config.api_version = "ga"
     provider = OpenAIRealtimeProvider(openai_config, on_event=None)
     captured = {}
 

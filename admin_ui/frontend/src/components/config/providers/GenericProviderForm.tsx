@@ -60,14 +60,14 @@ const PROVIDER_OPTIONS: Record<string, Record<string, string[]>> = {
         model: [
             'gemini-2.5-flash-native-audio-preview-12-2025',
             'gemini-2.5-flash-native-audio-preview-09-2025',
-            'gemini-2.5-flash-preview-native-audio-dialog',
-            'gemini-2.5-flash-exp-native-audio-thinking-dialog',
+            'gemini-live-2.5-flash-native-audio',
+            'gemini-live-2.5-flash-preview-native-audio-09-2025',
         ],
         llm_model: [
             'gemini-2.5-flash-native-audio-preview-12-2025',
             'gemini-2.5-flash-native-audio-preview-09-2025',
-            'gemini-2.5-flash-preview-native-audio-dialog',
-            'gemini-2.5-flash-exp-native-audio-thinking-dialog',
+            'gemini-live-2.5-flash-native-audio',
+            'gemini-live-2.5-flash-preview-native-audio-09-2025',
         ],
         tts_voice_name: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
     },

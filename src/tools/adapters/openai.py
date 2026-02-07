@@ -275,6 +275,13 @@ class OpenAIToolAdapter:
             # Extract any message from the tool result to use as speech instruction
             tool_message = safe_result.get('message', '')
             ai_should_speak = safe_result.get('ai_should_speak', True)
+            if not ai_should_speak:
+                logger.info(
+                    "Skipping response.create because ai_should_speak is false",
+                    call_id=context.get("call_id"),
+                    function_call_id=call_id,
+                )
+                return
             
             # Check if using GA API (modalities not supported in response.create for GA)
             is_ga = context.get('is_ga', True)  # Default to GA for safety
@@ -293,11 +300,13 @@ class OpenAIToolAdapter:
             
             # If tool has a message and AI should speak, add direct instruction to speak it
             # Instructions work in both GA and Beta modes
-            if tool_message and ai_should_speak:
+            if tool_message:
                 # Use direct instruction format like greeting: "Please say: {text}"
                 response_config["instructions"] = f"Please say the following to the user: {tool_message}"
-                logger.info(f"✅ Added speech instructions for tool response", 
-                           message_preview=tool_message[:50] if tool_message else "")
+                logger.info(
+                    "✅ Added speech instructions for tool response",
+                    message_preview=tool_message[:50] if tool_message else "",
+                )
             else:
                 # Keep response.create explicit in GA mode to avoid sending an empty response object.
                 response_config["instructions"] = (
@@ -310,7 +319,7 @@ class OpenAIToolAdapter:
                 "response": response_config
             }
             await websocket.send(json.dumps(response_event))
-            logger.info(f"✅ Triggered OpenAI response generation (audio+text)")
+            logger.info("✅ Triggered OpenAI response generation (audio+text)")
             
         except Exception as e:
             logger.error(f"Failed to send tool result to OpenAI: {e}", exc_info=True)

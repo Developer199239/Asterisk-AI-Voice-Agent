@@ -530,8 +530,8 @@ After outputting a tool call, provide a brief spoken response.
             kind = tool_config.get('kind')
             if not kind:
                 logger.warning(
-                    "in_call_tools entry missing kind; defaulting to in_call_http_lookup",
-                    tool=tool_name,
+                    "in_call_tools entry '%s' missing kind; defaulting to in_call_http_lookup",
+                    tool_name,
                 )
                 kind = 'in_call_http_lookup'
 

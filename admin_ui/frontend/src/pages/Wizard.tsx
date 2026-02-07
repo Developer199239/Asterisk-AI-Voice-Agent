@@ -783,7 +783,6 @@ exten => s,1,NoOp(AI Agent Call)
                             api_key: config.google_key
                         });
                         if (!res.data.valid) throw new Error(`Google Key Invalid: ${res.data.error}`);
-                        if (!res.data.valid) throw new Error(`Google Key Invalid: ${res.data.error}`);
                     } else {
                         throw new Error('Google API Key is required for Google Live provider');
                     }
@@ -2722,7 +2721,9 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                         </pre>
                                         <button
                                             onClick={() => {
-                                                navigator.clipboard.writeText(nonLocalDialplanSnippet);
+                                                navigator.clipboard.writeText(nonLocalDialplanSnippet)
+                                                    .then(() => showToast('Copied to clipboard!', 'success'))
+                                                    .catch(() => showToast('Failed to copy to clipboard', 'error'));
                                             }}
                                             className="absolute top-2 right-2 p-1 bg-white/10 rounded hover:bg-white/20 text-white opacity-0 group-hover:opacity-100 transition-opacity"
                                             title="Copy to clipboard"

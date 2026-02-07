@@ -172,7 +172,7 @@ const ProvidersPage: React.FC = () => {
         const templates: Record<string, any> = {
             openai_realtime: {
                 enabled: false,
-                api_version: 'ga',
+                api_version: 'beta',
                 model: 'gpt-4o-realtime-preview-2024-12-17',
                 voice: 'alloy',
                 input_encoding: 'ulaw',

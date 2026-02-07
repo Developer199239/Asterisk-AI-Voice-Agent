@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle } from 'lucide-react';
+import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle, type LucideIcon } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { SystemTopology } from '../components/SystemTopology';
@@ -56,6 +56,25 @@ interface PlatformResponse {
     platform: PlatformInfo;
     summary: { ready: boolean; passed: number };
 }
+
+interface CompactMetricProps {
+    title: string;
+    value: string;
+    subValue?: string;
+    icon: LucideIcon;
+    color: string;
+}
+
+const CompactMetric = ({ title, value, subValue, icon: Icon, color }: CompactMetricProps) => (
+    <div className="flex items-center gap-3 px-4 py-3">
+        <Icon className={`w-5 h-5 ${color} flex-shrink-0`} />
+        <div className="min-w-0">
+            <div className="text-xs text-muted-foreground">{title}</div>
+            <div className="text-lg font-bold">{value}</div>
+            {subValue && <div className="text-[10px] text-muted-foreground truncate">{subValue}</div>}
+        </div>
+    </div>
+);
 
 const Dashboard = () => {
     const [, setContainers] = useState<Container[]>([]);
@@ -150,18 +169,6 @@ const Dashboard = () => {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    // Compact metric display for the resource strip
-    const CompactMetric = ({ title, value, subValue, icon: Icon, color }: any) => (
-        <div className="flex items-center gap-3 px-4 py-3">
-            <Icon className={`w-5 h-5 ${color} flex-shrink-0`} />
-            <div className="min-w-0">
-                <div className="text-xs text-muted-foreground">{title}</div>
-                <div className="text-lg font-bold">{value}</div>
-                {subValue && <div className="text-[10px] text-muted-foreground truncate">{subValue}</div>}
-            </div>
-        </div>
-    );
-
     if (loading) {
         return (
             <div className="flex items-center justify-center h-full">
@@ -251,13 +258,21 @@ const Dashboard = () => {
                     <div className="flex flex-wrap items-center gap-6">
                         {/* System Ready Status */}
                         <div className="flex items-center gap-2">
-                            {platformData?.summary?.ready ? (
+                            {platformData == null ? (
+                                <Activity className="w-4 h-4 text-muted-foreground" />
+                            ) : platformData.summary?.ready ? (
                                 <CheckCircle2 className="w-4 h-4 text-green-500" />
                             ) : (
                                 <XCircle className="w-4 h-4 text-red-500" />
                             )}
-                            <span className={`text-sm font-medium ${platformData?.summary?.ready ? 'text-green-500' : 'text-red-500'}`}>
-                                {platformData?.summary?.ready ? 'System Ready' : 'Action Required'}
+                            <span className={`text-sm font-medium ${
+                                platformData == null
+                                    ? 'text-muted-foreground'
+                                    : platformData.summary?.ready
+                                        ? 'text-green-500'
+                                        : 'text-red-500'
+                            }`}>
+                                {platformData == null ? 'Loading...' : platformData.summary?.ready ? 'System Ready' : 'Action Required'}
                             </span>
                             {platformData?.summary?.passed != null && (
                                 <span className="text-xs text-muted-foreground">

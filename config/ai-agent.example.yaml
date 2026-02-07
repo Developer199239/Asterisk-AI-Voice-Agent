@@ -135,8 +135,8 @@ providers:
   openai_realtime:
     enabled: true
     api_key: "${OPENAI_API_KEY}"
-    api_version: "ga"  # "ga" (recommended) or "beta" (legacy, uses OpenAI-Beta header)
-    model: "gpt-realtime"  # GA: gpt-realtime / gpt-realtime-mini | Beta: gpt-4o-realtime-preview-*
+    api_version: "beta"  # "beta" (default, broader compatibility) or "ga" (no OpenAI-Beta header)
+    model: "gpt-4o-realtime-preview-2024-12-17"  # GA: gpt-realtime / gpt-realtime-mini | Beta: gpt-4o-realtime-preview-*
     voice: "alloy"
     base_url: "wss://api.openai.com/v1/realtime"
   deepgram:

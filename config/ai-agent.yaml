@@ -1156,7 +1156,7 @@ providers:
     input_sample_rate_hz: 8000
     instructions: You are a voice assistant. Always speak your responses out loud.
     max_response_output_tokens: 4096
-    api_version: ga
+    api_version: beta
     model: gpt-4o-realtime-preview-2024-12-17
     organization: ''
     output_encoding: mulaw

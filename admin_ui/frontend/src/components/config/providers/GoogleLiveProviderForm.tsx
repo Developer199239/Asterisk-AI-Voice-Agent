@@ -11,12 +11,14 @@ const LEGACY_LIVE_MODEL_MAP: Record<string, string> = {
     'gemini-live-2.5-flash-preview': DEFAULT_LIVE_MODEL,
     'gemini-2.0-flash-live-001': DEFAULT_LIVE_MODEL,
     'gemini-2.0-flash-live-001-preview-09-2025': DEFAULT_LIVE_MODEL,
+    'gemini-2.5-flash-preview-native-audio-dialog': DEFAULT_LIVE_MODEL,
+    'gemini-2.5-flash-exp-native-audio-thinking-dialog': DEFAULT_LIVE_MODEL,
 };
 const SUPPORTED_LIVE_MODELS = [
     'gemini-2.5-flash-native-audio-preview-12-2025',
     'gemini-2.5-flash-native-audio-preview-09-2025',
-    'gemini-2.5-flash-preview-native-audio-dialog',
-    'gemini-2.5-flash-exp-native-audio-thinking-dialog',
+    'gemini-live-2.5-flash-native-audio',
+    'gemini-live-2.5-flash-preview-native-audio-09-2025',
 ];
 
 const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config, onChange }) => {
@@ -72,13 +74,13 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             value={selectedModel}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
-                            <optgroup label="Preview Models (Currently Supported)">
+                            <optgroup label="Gemini Developer API">
                                 <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
                                 <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
                             </optgroup>
-                            <optgroup label="Preview Models (Experimental)">
-                                <option value="gemini-2.5-flash-preview-native-audio-dialog">Gemini 2.5 Flash Native Audio Dialog (Preview)</option>
-                                <option value="gemini-2.5-flash-exp-native-audio-thinking-dialog">Gemini 2.5 Flash Native Audio Thinking Dialog (Experimental)</option>
+                            <optgroup label="Vertex AI Live API">
+                                <option value="gemini-live-2.5-flash-native-audio">Gemini Live 2.5 Flash Native Audio (GA)</option>
+                                <option value="gemini-live-2.5-flash-preview-native-audio-09-2025">Gemini Live 2.5 Flash Native Audio (Preview 09-2025)</option>
                             </optgroup>
                             {!SUPPORTED_LIVE_MODELS.includes(selectedModel) && (
                                 <optgroup label="Custom">
@@ -87,7 +89,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             )}
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            Google Live models are preview-labeled at this time (no separate GA Live model family yet).
+                            Includes official Gemini Developer API and Vertex AI Live model names.
                             <a href="https://ai.google.dev/gemini-api/docs/live-guide" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
                         </p>
                     </div>

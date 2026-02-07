@@ -292,15 +292,6 @@ const ContextsPage = () => {
             }
         }
 
-        // P1 Validation: Check pipeline exists
-        if (contextForm.pipeline) {
-            const pipeline = config.pipelines?.[contextForm.pipeline];
-            if (!pipeline) {
-                alert(`Pipeline '${contextForm.pipeline}' does not exist.\n\nPlease select a valid pipeline or leave blank to use the active pipeline.`);
-                return;
-            }
-        }
-
         const newConfig = { ...config };
         if (!newConfig.contexts) newConfig.contexts = {};
 

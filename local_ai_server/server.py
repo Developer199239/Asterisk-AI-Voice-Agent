@@ -1115,14 +1115,22 @@ class LocalAIServer:
 
             if torch.cuda.is_available():
                 gpu_name = torch.cuda.get_device_name(0)
-                gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                if gpu_mem_gb >= 18:
+                    layers = 50
+                elif gpu_mem_gb >= 11:
+                    layers = 35
+                elif gpu_mem_gb >= 7:
+                    layers = 20
+                else:
+                    layers = min(12, auto_default_layers)
                 logging.info(
                     "🎮 GPU detected via torch: %s (%.1f GB), using %s layers",
                     gpu_name,
-                    gpu_mem,
-                    auto_default_layers,
+                    gpu_mem_gb,
+                    layers,
                 )
-                return auto_default_layers
+                return layers
         except ImportError:
             logging.debug("PyTorch not available for GPU detection fallback")
         except Exception as exc:
