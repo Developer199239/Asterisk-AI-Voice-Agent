@@ -82,7 +82,6 @@ providers:
       threshold: 0.5
       silence_duration_ms: 1000
       prefix_padding_ms: 300
-      create_response: true
 ```
 
 **Key Settings**:
@@ -91,6 +90,7 @@ providers:
 - `provider_input_sample_rate_hz`: must be `24000` for GA (minimum enforced by API)
 - `output_sample_rate_hz`: `24000` — OpenAI outputs PCM16 @ 24kHz; engine transcodes to mulaw @ 8kHz downstream
 - `turn_detection.type`: use `server_vad` for turn-taking (nested under `audio.input` in GA)
+- GA mode internally manages `turn_detection.create_response`; do not add `create_response` in YAML.
 
 ### 4. Critical Turn Detection Configuration ⚠️
 
@@ -106,7 +106,6 @@ providers:
       threshold: 0.5              # Standard sensitivity
       silence_duration_ms: 1000   # 1 second before responding
       prefix_padding_ms: 300      # Capture speech before VAD trigger
-      create_response: true       # Auto-create response after speech
 ```
 
 **Why This Matters**:

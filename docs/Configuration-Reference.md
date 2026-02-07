@@ -257,10 +257,11 @@ Common pitfalls:
 ### OpenAI Realtime (monolithic agent)
 
 - providers.openai_realtime.api_key: injected from `OPENAI_API_KEY` (env-only; do not commit secrets to YAML).
+- providers.openai_realtime.api_version: `ga` (default) or `beta` (legacy payload/header behavior).
 - providers.openai_realtime.model, voice, base_url: Model and voice.
 - providers.openai_realtime.instructions: Persona override. Leave empty to inherit `llm.prompt`.
 - providers.openai_realtime.greeting: Explicit greeting. Leave empty to inherit `llm.initial_greeting`.
-- providers.openai_realtime.response_modalities: `audio`, `text`.
+- providers.openai_realtime.response_modalities: list of modalities, typically `[\"audio\"]` or `[\"audio\", \"text\"]`.
 - providers.openai_realtime.provider_input_encoding/provider_input_sample_rate_hz: Format sent to OpenAI (typically PCM16); prefer matching this to the engine’s internal PCM rate to avoid extra resampling.
 - providers.openai_realtime.input_encoding/input_sample_rate_hz: Inbound format; use `ulaw` at 8 kHz when AudioSocket() is invoked with `,ulaw` (engine converts to PCM before sending to OpenAI).
 - providers.openai_realtime.output_encoding/output_sample_rate_hz: Provider output; for telephony, prefer `mulaw` at 8 kHz (for example: `output_encoding: mulaw`, `output_sample_rate_hz: 8000`) to avoid mid-stream PCM → μ-law conversion artifacts.
@@ -323,6 +324,11 @@ Config notes:
 - `providers.google_live.api_key`: injected from `GOOGLE_API_KEY` (env-only; do not commit secrets to YAML).
 - `providers.google_live.llm_model`: Live LLM model name (see `config/ai-agent.yaml` for shipped defaults).
 - `providers.google_live.tts_voice_name`: Live voice name (provider-specific).
+- `providers.google_live.response_modalities`: `audio`, `text`, or `audio_text` (provider behavior varies by model generation).
+- `providers.google_live.hangup_fallback_audio_idle_sec`: idle-audio timeout after hangup is armed.
+- `providers.google_live.hangup_fallback_min_armed_sec`: minimum armed duration before fallback can fire.
+- `providers.google_live.hangup_fallback_no_audio_timeout_sec`: timeout when provider emits no farewell audio.
+- `providers.google_live.hangup_fallback_turn_complete_timeout_sec`: grace period waiting for `turnComplete` before fallback hangup.
 
 ### Deepgram Voice Agent (monolithic agent)
 

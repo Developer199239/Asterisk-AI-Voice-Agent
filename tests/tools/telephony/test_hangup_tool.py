@@ -333,26 +333,25 @@ class TestHangupCallTool:
         # Should handle None gracefully (use default or empty)
         assert "message" in result
 
-    # ==================== Transcript Guardrail Tests ====================
+    # ==================== Transcript Interaction Tests ====================
+    # v5.0 simplified design: hangup always succeeds; AI manages transcript
+    # offers via system prompt, not tool-level guardrails.
 
     @pytest.mark.asyncio
-    async def test_hangup_blocked_when_transcript_enabled_and_not_offered(
+    async def test_hangup_succeeds_even_when_transcript_enabled(
         self, hangup_tool, tool_context
     ):
-        """If request_transcript is enabled, hangup_call should first require a transcript offer."""
+        """v5.0: hangup_call always succeeds regardless of transcript config."""
         result = await hangup_tool.execute(parameters={}, context=tool_context)
-        assert result["status"] == "blocked"
-        assert result.get("will_hangup") is False
-        assert result.get("ai_should_speak") is True
-        assert "transcript" in (result.get("message") or "").lower()
+        assert result["status"] == "success"
+        assert result["will_hangup"] is True
 
     @pytest.mark.asyncio
-    async def test_hangup_allows_after_transcript_declined_in_history(
+    async def test_hangup_succeeds_with_transcript_in_history(
         self, hangup_tool, tool_context, sample_call_session
     ):
         """
-        When the transcript offer exists and the latest user message declines it,
-        hangup_call should proceed successfully.
+        Hangup proceeds normally even when transcript offer exists in history.
         """
         sample_call_session.conversation_history.append(
             {"role": "assistant", "content": "Before we hang up, would you like me to email you a transcript of our conversation?"}

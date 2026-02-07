@@ -23,7 +23,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Active Configuration - DO NOT CHANGE UNLESS YOU KNOW WHAT YOU'RE DOING
-config_version: 4
+config_version: 6
 active_pipeline: local_hybrid  # Don't change - uses provider override via contexts
 default_provider: deepgram
 

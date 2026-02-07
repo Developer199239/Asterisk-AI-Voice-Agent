@@ -41,7 +41,7 @@ const GeneralConfig: React.FC<GeneralConfigProps> = ({ config, onChange }) => {
                     <input
                         type="number"
                         className="w-full p-2 rounded border border-input bg-background"
-                        value={config.config_version || 4}
+                        value={config.config_version || 6}
                         onChange={(e) => handleChange('config_version', parseInt(e.target.value))}
                     />
                 </div>
@@ -54,7 +54,7 @@ const GeneralConfig: React.FC<GeneralConfigProps> = ({ config, onChange }) => {
                         onChange={(e) => handleChange('downstream_mode', e.target.value)}
                     >
                         <option value="stream">Stream</option>
-                        <option value="burst">Burst</option>
+                        <option value="file">File</option>
                     </select>
                 </div>
             </div>

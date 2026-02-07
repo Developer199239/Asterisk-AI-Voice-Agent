@@ -571,6 +571,8 @@ def _normalize_pipelines(config_data: Dict[str, Any]) -> None:
 
 
 class AppConfig(BaseModel):
+    # Config schema marker used by migration tooling and release docs.
+    config_version: int = Field(default=6, ge=1)
     default_provider: str
     providers: Dict[str, Any]
     asterisk: AsteriskConfig
@@ -665,6 +667,8 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     # Phase 1: Load YAML file with environment variable expansion
     path = resolve_config_path(path)
     config_data = load_yaml_with_env_expansion(path)
+    if isinstance(config_data, dict):
+        config_data.setdefault("config_version", 6)
 
     # Backward compatibility: older docs/configs used `in_call_http_tools` at the top-level.
     # Canonical key is now `in_call_tools` (dict of tool_name -> config).
@@ -789,6 +793,14 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
     
     # Critical checks (errors)
     try:
+        # Config version guidance (non-blocking): allows older configs but makes drift explicit.
+        config_version = getattr(config, "config_version", 6)
+        if config_version < 6:
+            warnings.append(
+                f"config_version={config_version} is older than the v6 baseline (6); "
+                "review release migration notes before production rollout"
+            )
+
         # VAD configuration consistency
         if hasattr(config, 'vad') and config.vad:
             if getattr(config.vad, 'enhanced_enabled', False):

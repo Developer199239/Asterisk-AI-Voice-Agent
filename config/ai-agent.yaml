@@ -8,11 +8,25 @@ audiosocket:
   port: 8090
 barge_in:
   enabled: true
-  energy_threshold: 700
-  initial_protection_ms: 100
-  min_ms: 150
-  post_tts_end_protection_ms: 800
-config_version: 4
+  initial_protection_ms: 200
+  min_ms: 250
+  energy_threshold: 1000
+  cooldown_ms: 500
+  pipeline_min_ms: 120
+  pipeline_energy_threshold: 300
+  pipeline_talk_detect_enabled: true
+  pipeline_talk_detect_silence_ms: 1200
+  pipeline_talk_detect_talking_threshold: 128
+  post_tts_end_protection_ms: 250
+  greeting_protection_ms: 0
+  provider_fallback_enabled: true
+  provider_fallback_providers:
+    - google_live
+    - deepgram
+  provider_output_suppress_ms: 1200
+  provider_output_suppress_extend_ms: 600
+  provider_output_suppress_chunk_extend_ms: 250
+config_version: 6
 farewell_hangup_delay_sec: 5
 contexts:
   default:

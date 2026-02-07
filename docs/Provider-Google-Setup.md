@@ -330,10 +330,26 @@ providers:
     greeting: "Hi! I'm powered by Google Gemini Live API."
     instructions: "You are a helpful voice assistant. Be concise."
     response_modalities: audio
+
+    # Hangup fallback watchdog (recommended defaults)
+    hangup_fallback_audio_idle_sec: 1.25
+    hangup_fallback_min_armed_sec: 0.8
+    hangup_fallback_no_audio_timeout_sec: 4.0
+    hangup_fallback_turn_complete_timeout_sec: 2.5
 ```
 
 > Model lifecycle note: Google Live currently publishes native-audio models with `preview` version labels.  
 > Keep `llm_model` pinned to a known working preview version unless Google announces a GA Live model family.
+
+### Hangup Fallback Tuning
+
+Google Live may occasionally miss or delay `turnComplete` near the end of a farewell.  
+The fallback watchdog protects against stuck calls:
+
+- `hangup_fallback_audio_idle_sec`: hang up after this much trailing silence once audio has started.
+- `hangup_fallback_min_armed_sec`: minimum time the fallback must stay armed before it can fire.
+- `hangup_fallback_no_audio_timeout_sec`: fail-safe when no farewell audio arrives at all.
+- `hangup_fallback_turn_complete_timeout_sec`: grace window to wait for `turnComplete` before fallback.
 
 ## Features
 

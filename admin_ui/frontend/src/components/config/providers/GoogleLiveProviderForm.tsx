@@ -335,16 +335,6 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                         <div className="flex items-center space-x-2">
                             <input
                                 type="checkbox"
-                                id="continuous_input"
-                                className="rounded border-input"
-                                checked={config.continuous_input ?? true}
-                                onChange={(e) => handleChange('continuous_input', e.target.checked)}
-                            />
-                            <label htmlFor="continuous_input" className="text-sm font-medium">Continuous Input</label>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                            <input
-                                type="checkbox"
                                 id="enabled"
                                 className="rounded border-input"
                                 checked={config.enabled ?? true}
@@ -385,6 +375,55 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             <p className="text-xs text-muted-foreground">
                                 Seconds to wait after farewell audio before hanging up. Leave empty to use global default.
                             </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <h4 className="font-semibold text-sm border-b pb-2">Hangup Fallback Tuning</h4>
+                    <p className="text-xs text-muted-foreground">
+                        Used when Google Live does not emit a reliable turn-complete event after a hangup farewell.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Audio Idle Timeout (sec)</label>
+                            <input
+                                type="number"
+                                step="0.05"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_audio_idle_sec ?? 1.25}
+                                onChange={(e) => handleChange('hangup_fallback_audio_idle_sec', parseFloat(e.target.value))}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Minimum Armed Time (sec)</label>
+                            <input
+                                type="number"
+                                step="0.05"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_min_armed_sec ?? 0.8}
+                                onChange={(e) => handleChange('hangup_fallback_min_armed_sec', parseFloat(e.target.value))}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">No Audio Timeout (sec)</label>
+                            <input
+                                type="number"
+                                step="0.1"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_no_audio_timeout_sec ?? 4.0}
+                                onChange={(e) => handleChange('hangup_fallback_no_audio_timeout_sec', parseFloat(e.target.value))}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Turn Complete Timeout (sec)</label>
+                            <input
+                                type="number"
+                                step="0.1"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_turn_complete_timeout_sec ?? 2.5}
+                                onChange={(e) => handleChange('hangup_fallback_turn_complete_timeout_sec', parseFloat(e.target.value))}
+                            />
                         </div>
                     </div>
                 </div>

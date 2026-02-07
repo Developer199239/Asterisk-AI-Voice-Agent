@@ -29,7 +29,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Active Configuration
-config_version: 4
+config_version: 6
 active_pipeline: local_hybrid
 default_provider: local_hybrid
 
