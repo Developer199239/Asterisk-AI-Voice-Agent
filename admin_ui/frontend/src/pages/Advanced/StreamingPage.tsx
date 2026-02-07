@@ -62,7 +62,16 @@ const StreamingPage = () => {
             const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
 
             if (response.data.status === 'warning') {
-                toast.warning(response.data.message, { description: 'Use force restart if needed.' });
+                if (!force) {
+                    const confirmForce = window.confirm(
+                        `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
+                    );
+                    if (confirmForce) {
+                        await handleReloadAIEngine(true);
+                    }
+                    return;
+                }
+                toast.warning(response.data.message, { description: 'Force restart is still blocked.' });
                 return;
             }
 

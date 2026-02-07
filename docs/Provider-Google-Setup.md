@@ -210,7 +210,8 @@ If using service account authentication, grant these roles:
 - **Cloud Speech-to-Text User** (`roles/speech.user`)
 - **Cloud Text-to-Speech User** (`roles/texttospeech.user`)
 - **Generative AI User** (`roles/aiplatform.user`)
-- **Gemini Live API User** (`roles/generativelanguage.liveapi.user`) - for Google Live
+
+Google Live / Generative Language access is authenticated with API key or OAuth credentials. There is no separate `roles/generativelanguage.liveapi.user` IAM role.
 
 ---
 

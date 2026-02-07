@@ -96,30 +96,6 @@ class DocContent(BaseModel):
     next_doc: Optional[DocInfo] = None
 
 
-def _allowed_doc_files() -> set[str]:
-    files: set[str] = set()
-    for cat_data in DOC_CATEGORIES.values():
-        for doc in cat_data.get("docs", []):
-            file_name = doc.get("file")
-            if isinstance(file_name, str) and file_name:
-                files.add(file_name)
-    return files
-
-
-def _resolve_allowed_doc_path(docs_path: Path, file_path: str) -> Path:
-    requested = (file_path or "").strip()
-    if requested not in _allowed_doc_files():
-        raise HTTPException(status_code=404, detail=f"Documentation file not found: {file_path}")
-
-    docs_root = docs_path.resolve()
-    resolved = (docs_root / requested).resolve()
-    if not resolved.is_relative_to(docs_root):
-        raise HTTPException(status_code=403, detail="Access denied")
-    if not resolved.is_file():
-        raise HTTPException(status_code=404, detail=f"Documentation file not found: {file_path}")
-    return resolved
-
-
 def get_docs_path() -> Path:
     """Get the path to the docs folder."""
     # Try different locations based on deployment context
@@ -155,41 +131,36 @@ async def get_categories():
 @router.get("/content/{file_path:path}", response_model=DocContent)
 async def get_doc_content(file_path: str):
     """Get the content of a specific documentation file."""
+    requested = (file_path or "").strip()
     docs_path = get_docs_path()
-    full_path = _resolve_allowed_doc_path(docs_path, file_path)
-    
-    try:
-        content = full_path.read_text(encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
-    
-    # Find category and navigation info
-    category = ""
-    title = file_path
-    prev_doc = None
-    next_doc = None
-    
     for cat_id, cat_data in DOC_CATEGORIES.items():
-        for i, doc in enumerate(cat_data["docs"]):
-            if doc["file"] == file_path:
-                category = cat_id
-                title = doc["title"]
-                if i > 0:
-                    prev_doc = DocInfo(**cat_data["docs"][i - 1])
-                if i < len(cat_data["docs"]) - 1:
-                    next_doc = DocInfo(**cat_data["docs"][i + 1])
-                break
-        if category:
-            break
-    
-    return DocContent(
-        file=file_path,
-        title=title,
-        content=content,
-        category=category,
-        prev_doc=prev_doc,
-        next_doc=next_doc
-    )
+        docs = cat_data.get("docs", [])
+        for index, doc in enumerate(docs):
+            canonical_file = str(doc.get("file", ""))
+            if canonical_file != requested:
+                continue
+
+            full_path = docs_path / canonical_file
+            if not full_path.is_file():
+                raise HTTPException(status_code=404, detail=f"Documentation file not found: {file_path}")
+
+            try:
+                content = full_path.read_text(encoding="utf-8")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+
+            prev_doc = DocInfo(**docs[index - 1]) if index > 0 else None
+            next_doc = DocInfo(**docs[index + 1]) if index < len(docs) - 1 else None
+            return DocContent(
+                file=canonical_file,
+                title=str(doc.get("title", requested)),
+                content=content,
+                category=cat_id,
+                prev_doc=prev_doc,
+                next_doc=next_doc
+            )
+
+    raise HTTPException(status_code=404, detail=f"Documentation file not found: {file_path}")
 
 
 @router.get("/search")

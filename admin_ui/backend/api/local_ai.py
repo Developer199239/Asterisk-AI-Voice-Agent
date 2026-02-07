@@ -461,8 +461,7 @@ async def get_backend_capabilities():
             "sherpa": {"available": False, "reason": ""},
             "kroko_embedded": {"available": False, "reason": ""},
             "kroko_cloud": {"available": True, "reason": "Cloud API (requires KROKO_API_KEY)"},
-            "faster_whisper": {"available": False, "reason": ""},
-            "whisper_cpp": {"available": False, "reason": ""}
+            "faster_whisper": {"available": False, "reason": ""}
         },
         "tts": {
             "piper": {"available": False, "reason": ""},
@@ -508,11 +507,6 @@ async def get_backend_capabilities():
                 else:
                     capabilities["stt"]["faster_whisper"]["reason"] = "Rebuild with INCLUDE_FASTER_WHISPER=true"
 
-                if server_caps.get("whisper_cpp"):
-                    capabilities["stt"]["whisper_cpp"] = {"available": True, "reason": "Whisper.cpp (pywhispercpp) installed"}
-                else:
-                    capabilities["stt"]["whisper_cpp"]["reason"] = "Rebuild with INCLUDE_WHISPER_CPP=true"
-                
                 # TTS backends
                 if server_caps.get("piper"):
                     capabilities["tts"]["piper"] = {"available": True, "reason": "Piper TTS installed"}

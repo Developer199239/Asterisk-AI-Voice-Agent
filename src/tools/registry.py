@@ -529,7 +529,11 @@ After outputting a tool call, provide a brief spoken response.
             
             kind = tool_config.get('kind')
             if not kind:
-                continue
+                logger.warning(
+                    "in_call_tools entry missing kind; defaulting to in_call_http_lookup",
+                    tool=tool_name,
+                )
+                kind = 'in_call_http_lookup'
 
             if kind == 'in_call_http_lookup':
                 try:
@@ -562,6 +566,7 @@ After outputting a tool call, provide a brief spoken response.
         """
         self._tools.clear()
         self._initialized = False
+        self._in_call_http_init_cache.clear()
         logger.info("Cleared all registered tools")
 
 

@@ -53,7 +53,7 @@ providers:
     # API Version: "ga" (recommended) or "beta" (legacy, uses OpenAI-Beta header)
     api_version: ga
     # Model Configuration
-    model: gpt-4o-realtime-preview-2024-12-17  # Works with GA API; gpt-realtime may not be available to all accounts
+    model: gpt-realtime
     temperature: 0.6                          # Creativity (0.0-1.0)
     max_response_output_tokens: 4096          # Max output length
     
@@ -68,7 +68,7 @@ providers:
     provider_input_encoding: linear16
     provider_input_sample_rate_hz: 24000      # GA requires >= 24000 Hz
     # Provider output (PCM16 @ 24kHz from OpenAI, engine transcodes downstream)
-    output_encoding: mulaw
+    output_encoding: linear16
     output_sample_rate_hz: 24000              # GA outputs at 24kHz; engine transcodes to 8kHz mulaw
     target_encoding: mulaw
     target_sample_rate_hz: 8000
@@ -86,7 +86,7 @@ providers:
 
 **Key Settings**:
 - `api_version`: `ga` (default, recommended) or `beta` (legacy). GA removes the `OpenAI-Beta` header and uses nested audio schema
-- `model`: `gpt-4o-realtime-preview-2024-12-17` works with GA API; `gpt-realtime` may not be available to all accounts
+- `model`: `gpt-realtime` (GA recommended). If your account has temporary model access constraints, use a supported fallback model for your tenant.
 - `provider_input_sample_rate_hz`: must be `24000` for GA (minimum enforced by API)
 - `output_sample_rate_hz`: `24000` — OpenAI outputs PCM16 @ 24kHz; engine transcodes to mulaw @ 8kHz downstream
 - `turn_detection.type`: use `server_vad` for turn-taking (nested under `audio.input` in GA)

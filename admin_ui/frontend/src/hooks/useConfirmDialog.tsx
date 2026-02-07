@@ -1,4 +1,4 @@
-import React, { useState, useCallback, createContext, useContext, ReactNode } from 'react';
+import React, { useState, useCallback, createContext, useContext, ReactNode, useRef } from 'react';
 import {
     AlertDialog,
     AlertDialogContent,
@@ -42,27 +42,34 @@ export const ConfirmDialogProvider: React.FC<ConfirmDialogProviderProps> = ({ ch
         title: '',
         description: '',
     });
-    const [resolveRef, setResolveRef] = useState<((value: boolean) => void) | null>(null);
+    const resolveRef = useRef<((value: boolean) => void) | null>(null);
+
+    const finalize = useCallback((value: boolean) => {
+        const resolver = resolveRef.current;
+        if (!resolver) return;
+        resolveRef.current = null;
+        setIsOpen(false);
+        resolver(value);
+    }, []);
 
     const confirm = useCallback((opts: ConfirmDialogOptions): Promise<boolean> => {
+        if (resolveRef.current) {
+            return Promise.resolve(false);
+        }
         setOptions(opts);
         setIsOpen(true);
         return new Promise<boolean>((resolve) => {
-            setResolveRef(() => resolve);
+            resolveRef.current = resolve;
         });
     }, []);
 
     const handleConfirm = useCallback(() => {
-        setIsOpen(false);
-        resolveRef?.(true);
-        setResolveRef(null);
-    }, [resolveRef]);
+        finalize(true);
+    }, [finalize]);
 
     const handleCancel = useCallback(() => {
-        setIsOpen(false);
-        resolveRef?.(false);
-        setResolveRef(null);
-    }, [resolveRef]);
+        finalize(false);
+    }, [finalize]);
 
     const actionClassName = options.variant === 'destructive' 
         ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
@@ -72,7 +79,10 @@ export const ConfirmDialogProvider: React.FC<ConfirmDialogProviderProps> = ({ ch
         <ConfirmDialogContext.Provider value={{ confirm }}>
             {children}
             <AlertDialog open={isOpen} onOpenChange={(open) => !open && handleCancel()}>
-                <AlertDialogContent>
+                <AlertDialogContent
+                    onEscapeKeyDown={(event) => event.preventDefault()}
+                    onPointerDownOutside={(event) => event.preventDefault()}
+                >
                     <AlertDialogHeader>
                         <AlertDialogTitle>{options.title}</AlertDialogTitle>
                         <AlertDialogDescription className="whitespace-pre-wrap">

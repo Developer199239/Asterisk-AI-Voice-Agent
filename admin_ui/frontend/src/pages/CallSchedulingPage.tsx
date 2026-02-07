@@ -1320,14 +1320,10 @@ const CallSchedulingPage = () => {
                                             <button
                                                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500 text-white hover:bg-red-500/90 text-sm"
                                                 onClick={async () => {
-                                                    const cancelPending = await confirm({
-                                                        title: 'Stop Campaign',
-                                                        description: 'Stop campaign. Cancel all remaining pending leads?\n\nConfirm = Stop + cancel pending (non-resumable)\nCancel = Stop only (resumable)',
-                                                        confirmText: 'Stop & Cancel Pending',
-                                                        cancelText: 'Stop Only',
-                                                        variant: 'destructive'
-                                                    });
-                                                    setStatus(selectedCampaign.id, 'stopped', cancelPending);
+                                                    const cancelPending = window.confirm(
+                                                        'Stop campaign and cancel all remaining pending leads?\n\nOK = Stop + cancel pending (non-resumable)\nCancel = Stop only (resumable)'
+                                                    );
+                                                    await setStatus(selectedCampaign.id, 'stopped', cancelPending);
                                                 }}
                                             >
                                                 <Square className="w-4 h-4" /> Stop

@@ -407,10 +407,10 @@ const EnvPage = () => {
         // System - Outbound Campaign
         'AAVA_OUTBOUND_EXTENSION_IDENTITY', 'AAVA_OUTBOUND_AMD_CONTEXT', 'AAVA_MEDIA_DIR', 'AAVA_VM_UPLOAD_MAX_BYTES',
         // System - Docker Build Settings (build-time ARGs, require rebuild)
-        'INCLUDE_VOSK', 'INCLUDE_SHERPA', 'INCLUDE_FASTER_WHISPER', 'INCLUDE_WHISPER_CPP',
+        'INCLUDE_VOSK', 'INCLUDE_SHERPA', 'INCLUDE_FASTER_WHISPER',
         'INCLUDE_PIPER', 'INCLUDE_KOKORO', 'INCLUDE_MELOTTS', 'INCLUDE_LLAMA', 'INCLUDE_KROKO_EMBEDDED',
         // Hidden/Internal (added to suppress from Other)
-        'COMPOSE_PROJECT_NAME', 'GREETING', 'AI_GREETING', 'AI_NAME', 'AI_ROLE', 'HOST_PROJECT_ROOT', 'PROJECT_ROOT', 'GPU_AVAILABLE',
+        'COMPOSE_PROJECT_NAME', 'GREETING', 'AI_GREETING', 'AI_NAME', 'AI_ROLE', 'HOST_PROJECT_ROOT', 'PROJECT_ROOT', 'GPU_AVAILABLE', 'INCLUDE_WHISPER_CPP',
         // Deprecated/Legacy
         'CARTESIA_API_KEY', 'LOCAL_FASTER_WHISPER_COMPUTE'
     ];
@@ -1660,13 +1660,6 @@ const EnvPage = () => {
                                         description="High-accuracy Whisper (larger, GPU recommended)"
                                         checked={isTrue(env['INCLUDE_FASTER_WHISPER'])}
                                         onChange={(e) => updateEnv('INCLUDE_FASTER_WHISPER', e.target.checked ? 'true' : 'false')}
-                                    />
-                                    <FormSwitch
-                                        id="include-whisper-cpp"
-                                        label="Whisper.cpp"
-                                        description="C++ Whisper port (experimental)"
-                                        checked={isTrue(env['INCLUDE_WHISPER_CPP'])}
-                                        onChange={(e) => updateEnv('INCLUDE_WHISPER_CPP', e.target.checked ? 'true' : 'false')}
                                     />
                                 </div>
                                 

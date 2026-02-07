@@ -202,23 +202,11 @@ const ModelsPage = () => {
 
     // Handle model switch
     const handleModelSwitch = async (modelType: 'stt' | 'tts' | 'llm', backend: string, modelPath: string) => {
-        setRestarting(true);
-        try {
-            await axios.post('/api/local-ai/switch', {
-                model_type: modelType,
-                backend: backend,
-                model_path: modelPath
-            });
-            showToast(`Switching ${modelType.toUpperCase()} model... Server will restart.`, 'success');
-            // Wait for restart then refresh
-            setTimeout(() => {
-                fetchActiveModels();
-                setRestarting(false);
-            }, 15000);
-        } catch (err: any) {
-            showToast(`Failed to switch model: ${err.response?.data?.detail || err.message}`, 'error');
-            setRestarting(false);
-        }
+        return axios.post('/api/local-ai/switch', {
+            model_type: modelType,
+            backend: backend,
+            model_path: modelPath
+        });
     };
 
     // Get model name from path
@@ -570,17 +558,27 @@ const ModelsPage = () => {
                 {Object.keys(pendingChanges).length > 0 && (
                     <div className="mt-4 flex gap-2">
                         <button
-                            onClick={() => {
-                                // Apply each pending change
-                                Object.entries(pendingChanges).forEach(([type, value]) => {
-                                    if (type === 'llm') {
-                                        handleModelSwitch('llm', '', value);
-                                    } else {
-                                        const [backend, ...pathParts] = value.split(':');
-                                        handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'));
+                            onClick={async () => {
+                                setRestarting(true);
+                                try {
+                                    for (const [type, value] of Object.entries(pendingChanges)) {
+                                        if (type === 'llm') {
+                                            await handleModelSwitch('llm', '', value);
+                                        } else {
+                                            const [backend, ...pathParts] = value.split(':');
+                                            await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'));
+                                        }
                                     }
-                                });
-                                setPendingChanges({});
+                                    showToast('Model switch requested. Server will restart.', 'success');
+                                    setPendingChanges({});
+                                    setTimeout(() => {
+                                        fetchActiveModels();
+                                        setRestarting(false);
+                                    }, 15000);
+                                } catch (err: any) {
+                                    showToast(`Failed to switch model: ${err.response?.data?.detail || err.message}`, 'error');
+                                    setRestarting(false);
+                                }
                             }}
                             disabled={restarting}
                             className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
