@@ -175,7 +175,7 @@ const ContextsPage = () => {
             if (status === 'warning') {
                 const confirmForce = await confirm({
                     title: 'Force Restart?',
-                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    description: `${response.data.message} Do you want to force restart anyway? This may disconnect active calls.`,
                     confirmText: 'Force Restart',
                     variant: 'destructive'
                 });

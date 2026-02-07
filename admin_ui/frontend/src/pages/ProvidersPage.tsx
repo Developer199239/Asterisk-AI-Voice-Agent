@@ -282,8 +282,8 @@ const ProvidersPage: React.FC = () => {
                     variant: 'destructive'
                 });
                 if (confirmForce) {
-                    setRestartingEngine(false);
-                    return handleReloadAIEngine(true);
+                    await handleReloadAIEngine(true);
+                    return;
                 }
                 return;
             }

@@ -87,6 +87,7 @@ const Dashboard = () => {
     const [containersError, setContainersError] = useState<ApiErrorInfo | null>(null);
     const [metricsError, setMetricsError] = useState<ApiErrorInfo | null>(null);
     const [platformData, setPlatformData] = useState<PlatformResponse | null>(null);
+    const [platformLoadFailed, setPlatformLoadFailed] = useState(false);
 
     const fetchData = async () => {
         setContainersError(null);
@@ -125,6 +126,11 @@ const Dashboard = () => {
 
         if (platformRes.status === 'fulfilled') {
             setPlatformData(platformRes.value.data);
+            setPlatformLoadFailed(false);
+        } else {
+            console.error('Failed to fetch platform info:', platformRes.reason);
+            setPlatformData(null);
+            setPlatformLoadFailed(true);
         }
 
         setLoading(false);
@@ -258,7 +264,9 @@ const Dashboard = () => {
                     <div className="flex flex-wrap items-center gap-6">
                         {/* System Ready Status */}
                         <div className="flex items-center gap-2">
-                            {platformData == null ? (
+                            {platformLoadFailed ? (
+                                <XCircle className="w-4 h-4 text-red-500" />
+                            ) : platformData == null ? (
                                 <Activity className="w-4 h-4 text-muted-foreground" />
                             ) : platformData.summary?.ready ? (
                                 <CheckCircle2 className="w-4 h-4 text-green-500" />
@@ -266,13 +274,21 @@ const Dashboard = () => {
                                 <XCircle className="w-4 h-4 text-red-500" />
                             )}
                             <span className={`text-sm font-medium ${
-                                platformData == null
-                                    ? 'text-muted-foreground'
+                                platformLoadFailed
+                                    ? 'text-red-500'
+                                    : platformData == null
+                                        ? 'text-muted-foreground'
                                     : platformData.summary?.ready
                                         ? 'text-green-500'
                                         : 'text-red-500'
                             }`}>
-                                {platformData == null ? 'Loading...' : platformData.summary?.ready ? 'System Ready' : 'Action Required'}
+                                {platformLoadFailed
+                                    ? 'Platform info unavailable'
+                                    : platformData == null
+                                        ? 'Loading...'
+                                        : platformData.summary?.ready
+                                            ? 'System Ready'
+                                            : 'Action Required'}
                             </span>
                             {platformData?.summary?.passed != null && (
                                 <span className="text-xs text-muted-foreground">
@@ -329,7 +345,7 @@ const Dashboard = () => {
                     <CompactMetric
                         title="Disk"
                         value={metrics?.disk?.percent != null ? `${metrics.disk.percent.toFixed(1)}%` : '--'}
-                        subValue={`${formatBytes(metrics?.disk?.free ?? 0)} Free`}
+                        subValue={metrics?.disk ? `${formatBytes(metrics.disk.free)} Free` : undefined}
                         icon={HardDrive}
                         color="text-orange-500"
                     />
