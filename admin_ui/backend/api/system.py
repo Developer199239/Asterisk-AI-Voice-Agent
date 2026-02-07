@@ -721,7 +721,7 @@ async def reload_ai_engine():
     
     NOTE: .env changes are NOT applied by hot-reload because the AI Engine reads
     credentials from os.environ at startup (via security.py inject_* functions).
-    For .env changes, use /containers/ai_engine/restart which force-recreates the container.
+    For .env changes, use /containers/ai_engine/restart with recreate=true (force-recreates the container).
     
     Returns restart_required=True if:
     - New providers need to be added (hot-reload can't add new providers)

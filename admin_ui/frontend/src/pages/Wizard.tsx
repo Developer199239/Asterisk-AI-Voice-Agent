@@ -2471,7 +2471,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                             });
                                                             if (shouldRestart) {
                                                                 showToast('Restarting AI Engine...', 'success');
-                                                                const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false');
+                                                                const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false&recreate=true');
                                                                 if (restartRes.data?.status === 'warning') {
                                                                     const confirmForce = await confirm({
                                                                         title: 'Force Restart?',
@@ -2480,7 +2480,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                                         variant: 'destructive'
                                                                     });
                                                                     if (confirmForce) {
-                                                                        await axios.post('/api/system/containers/ai_engine/restart?force=true');
+                                                                        await axios.post('/api/system/containers/ai_engine/restart?force=true&recreate=true');
                                                                         showToast('AI Engine restarted!', 'success');
                                                                     } else {
                                                                         showToast('Restart skipped due to active calls.', 'warning');
@@ -2661,7 +2661,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                                     });
                                                     if (shouldRestart) {
                                                         showToast('Restarting AI Engine...', 'success');
-                                                        const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false');
+                                                        const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false&recreate=true');
                                                         if (restartRes.data?.status === 'warning') {
                                                             const confirmForce = await confirm({
                                                                 title: 'Force Restart?',
@@ -2670,7 +2670,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                                                 variant: 'destructive'
                                                             });
                                                             if (confirmForce) {
-                                                                await axios.post('/api/system/containers/ai_engine/restart?force=true');
+                                                                await axios.post('/api/system/containers/ai_engine/restart?force=true&recreate=true');
                                                                 showToast('AI Engine restarted! New provider is now available.', 'success');
                                                             } else {
                                                                 showToast('Restart skipped due to active calls. Restart later to use new provider.', 'warning');
