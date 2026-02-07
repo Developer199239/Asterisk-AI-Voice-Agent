@@ -2,7 +2,6 @@
 Send Email Summary Tool
 
 Automatically sends call summary emails to admin after call completion.
-Uses Resend API for email delivery.
 """
 
 import os
@@ -11,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 import html
 import structlog
-from jinja2 import Template
 
 try:
     import resend  # type: ignore
@@ -20,108 +18,11 @@ except Exception:
 
 from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolParameter
 from src.tools.context import ToolExecutionContext
-from src.tools.business.resend_client import send_email
+from src.tools.business.email_dispatcher import send_email, resolve_context_value
+from src.tools.business.email_templates import DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE
+from src.tools.business.template_renderer import render_html_template_with_fallback
 
 logger = structlog.get_logger(__name__)
-
-# HTML email template
-EMAIL_TEMPLATE = """
-<html>
-<head>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      max-width: 800px;
-      margin: 0 auto;
-    }
-    .header {
-      background: #4F46E5;
-      color: white;
-      padding: 20px;
-      border-radius: 5px 5px 0 0;
-    }
-    .content {
-      padding: 20px;
-      background: #ffffff;
-      border: 1px solid #e5e7eb;
-      border-top: none;
-      border-radius: 0 0 5px 5px;
-    }
-    .greeting {
-      font-size: 16px;
-      margin-bottom: 20px;
-    }
-    .metadata {
-      background: #F3F4F6;
-      padding: 15px;
-      border-radius: 5px;
-      margin-bottom: 20px;
-    }
-    .metadata p {
-      margin: 5px 0;
-    }
-    .transcript {
-      background: #FAFAFA;
-      padding: 15px;
-      border-left: 3px solid #4F46E5;
-      margin-top: 20px;
-      font-family: monospace;
-      word-wrap: break-word;
-    }
-    .footer {
-      margin-top: 20px;
-      padding-top: 20px;
-      border-top: 1px solid #e5e7eb;
-      color: #6b7280;
-      font-size: 14px;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h2>📞 Call Summary</h2>
-  </div>
-  <div class="content">
-    <div class="greeting">
-      {% if caller_name %}
-      <p>Hello {{ caller_name }},</p>
-      {% else %}
-      <p>Hello,</p>
-      {% endif %}
-      <p>This is a summary of your recent call with our AI Voice Agent.</p>
-    </div>
-    
-    <div class="metadata">
-      <p><strong>Date:</strong> {{ call_date }}</p>
-      <p><strong>Duration:</strong> {{ duration }}</p>
-      {% if caller_number %}
-      <p><strong>Caller:</strong> {{ caller_number }}</p>
-      {% endif %}
-      {% if outcome %}
-      <p><strong>Outcome:</strong> {{ outcome }}</p>
-      {% endif %}
-    </div>
-    
-    {% if include_transcript and transcript %}
-    <h3>Conversation Transcript</h3>
-    <div class="transcript">{{ transcript_html }}</div>
-    {% if transcript_note %}
-    <p style="color: #6b7280; font-size: 12px; margin-top: 10px;">
-      <em>{{ transcript_note }}</em>
-    </p>
-    {% endif %}
-    {% endif %}
-    
-    <div class="footer">
-      <p><em>Powered by AI Voice Agent</em></p>
-    </div>
-  </div>
-</body>
-</html>
-"""
-
 
 class SendEmailSummaryTool(Tool):
     """
@@ -133,7 +34,6 @@ class SendEmailSummaryTool(Tool):
     
     def __init__(self):
         super().__init__()
-        self._template = Template(EMAIL_TEMPLATE)
     
     @property
     def definition(self) -> ToolDefinition:
@@ -187,7 +87,7 @@ class SendEmailSummaryTool(Tool):
             email_data = self._prepare_email_data(session, config, call_id)
             
             # Send email asynchronously (don't block call cleanup)
-            asyncio.create_task(self._send_email_async(email_data, call_id))
+            asyncio.create_task(self._send_email_async(email_data, call_id, config))
             
             logger.info(
                 "Email summary scheduled for sending",
@@ -220,6 +120,8 @@ class SendEmailSummaryTool(Tool):
         call_id: str
     ) -> Dict[str, Any]:
         """Prepare email data from session and config."""
+        context_name = getattr(session, "context_name", None)
+        called_number = getattr(session, "called_number", None)
         
         # Extract metadata
         caller_name = getattr(session, "caller_name", None)
@@ -246,6 +148,7 @@ class SendEmailSummaryTool(Tool):
             duration_str = self._format_duration(duration_seconds)
         else:
             duration_str = "Unknown"
+            duration_seconds = None
         
         # Get transcript from conversation_history
         transcript = ""
@@ -258,28 +161,76 @@ class SendEmailSummaryTool(Tool):
             # Note: With input_audio_transcription enabled, user transcripts are now captured
             # for all providers including OpenAI Realtime with server_vad
         
-        # Render email HTML
-        html_content = self._template.render(
-            call_date=start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            duration=duration_str,
-            caller_name=caller_name,
-            caller_number=caller_number,
-            outcome=outcome,
-            include_transcript=config.get("include_transcript", True),
-            transcript=transcript,
-            transcript_html=transcript_html,
-            transcript_note=transcript_note
+        include_transcript = bool(config.get("include_transcript", True))
+        call_outcome = outcome
+        hangup_initiator = ""
+        if isinstance(call_outcome, str):
+            if call_outcome == "caller_hangup":
+                hangup_initiator = "caller"
+            elif call_outcome == "agent_hangup":
+                hangup_initiator = "agent"
+            elif call_outcome == "transferred":
+                hangup_initiator = "system"
+
+        variables = {
+            "call_id": call_id,
+            "context_name": context_name,
+            "call_date": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "call_start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "call_end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration": duration_str,
+            "duration_seconds": duration_seconds,
+            "caller_name": caller_name,
+            "caller_number": caller_number,
+            "called_number": called_number,
+            "outcome": outcome,
+            "call_outcome": call_outcome,
+            "hangup_initiator": hangup_initiator,
+            "include_transcript": include_transcript,
+            "transcript": transcript,
+            "transcript_html": transcript_html,
+            "transcript_note": transcript_note,
+        }
+
+        html_content = render_html_template_with_fallback(
+            template_override=config.get("html_template"),
+            default_template=DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
+            variables=variables,
+            call_id=call_id,
+            tool_name="send_email_summary",
         )
         
         # Build email data
-        admin_email = config.get("admin_email", "admin@company.com")
-        from_email = config.get("from_email", "agent@company.com")
+        admin_email = resolve_context_value(
+            tool_config=config,
+            key="admin_email",
+            context_name=context_name,
+            default="admin@company.com",
+        )
+        from_email = resolve_context_value(
+            tool_config=config,
+            key="from_email",
+            context_name=context_name,
+            default=config.get("from_email", "agent@company.com"),
+        )
         from_name = config.get("from_name", "AI Voice Agent")
+
+        subject_prefix = resolve_context_value(
+            tool_config=config,
+            key="subject_prefix",
+            context_name=context_name,
+            default="",
+        )
+        subject_prefix = str(subject_prefix or "").strip()
+        if subject_prefix and not subject_prefix.endswith(" "):
+            subject_prefix = subject_prefix + " "
+        include_context_in_subject = bool(config.get("include_context_in_subject", True))
+        context_tag = f"[{context_name}] " if (include_context_in_subject and context_name) else ""
         
         return {
             "to": admin_email,
             "from": f"{from_name} <{from_email}>",
-            "subject": f"Call Summary - {caller_number if caller_number != 'Unknown' else 'Call'} - {start_time.strftime('%Y-%m-%d %H:%M')}",
+            "subject": f"{subject_prefix}{context_tag}Call Summary - {caller_number if caller_number != 'Unknown' else 'Call'} - {start_time.strftime('%Y-%m-%d %H:%M')}",
             "html": html_content
         }
 
@@ -294,17 +245,17 @@ class SendEmailSummaryTool(Tool):
         safe = safe.replace("\r\n", "\n").replace("\r", "\n")
         return safe.replace("\n", "<br/>\n")
     
-    async def _send_email_async(self, email_data: Dict[str, Any], call_id: str):
-        """Send email asynchronously via Resend API."""
+    async def _send_email_async(self, email_data: Dict[str, Any], call_id: str, tool_config: Dict[str, Any]):
+        """Send email asynchronously via configured provider."""
         try:
-            # Send email
             logger.info(
-                "Sending email summary via Resend",
+                "Sending email summary",
                 call_id=call_id,
                 recipient=email_data["to"]
             )
             await send_email(
                 email_data=email_data,
+                tool_config=tool_config,
                 call_id=call_id,
                 log_label="Email summary",
                 recipient=str(email_data.get("to") or ""),

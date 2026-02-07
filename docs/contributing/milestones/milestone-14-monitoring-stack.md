@@ -98,7 +98,7 @@ This milestone is ongoing as an “ops UX” workstream. The highest ROI follow-
 
 If an operator wants dashboards, the supported approach is:
 
-- Scrape `/metrics` from `ai-engine` and (optionally) `local-ai-server`
+- Scrape `/metrics` from `ai_engine` and (optionally) `local_ai_server`
 - Build dashboards externally (Grafana or equivalent)
 - Use Call History for per-call debugging (do not attempt per-call time-series labeling)
 

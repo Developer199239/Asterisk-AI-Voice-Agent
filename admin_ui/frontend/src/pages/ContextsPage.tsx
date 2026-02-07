@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, MessageSquare, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
@@ -10,6 +12,7 @@ import { Modal } from '../components/ui/Modal';
 import ContextForm from '../components/config/ContextForm';
 
 const ContextsPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -156,7 +159,7 @@ const ContextsPage = () => {
             setPendingApply(true);
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         }
     };
 
@@ -170,9 +173,12 @@ const ContextsPage = () => {
             const status = response.data?.status ?? (response.status === 200 ? 'success' : undefined);
 
             if (status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleApplyChanges(true);
@@ -182,7 +188,7 @@ const ContextsPage = () => {
 
             if (status === 'degraded') {
                 setPendingApply(false);
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 fetchConfig();
                 return;
             }
@@ -192,13 +198,13 @@ const ContextsPage = () => {
                 // MCP reload deferred due to active calls).
                 setApplyMethod('restart');
                 setPendingApply(true);
-                alert(response.data.message || 'Hot reload applied partially; restart AI Engine to fully apply changes.');
+                toast.warning(response.data.message || 'Hot reload applied partially; restart AI Engine to fully apply changes.');
                 return;
             }
 
             if (status === 'success') {
                 setPendingApply(false);
-                alert(applyMethod === 'hot_reload'
+                toast.success(applyMethod === 'hot_reload'
                     ? 'AI Engine hot reloaded! Changes apply to new calls.'
                     : 'AI Engine restarted! Changes are now active.');
                 // Refresh config/tool availability after apply (best-effort)
@@ -210,13 +216,13 @@ const ContextsPage = () => {
             // completed so the UI doesn't get stuck showing "Apply Changes" forever.
             if (response.status === 200) {
                 setPendingApply(false);
-                alert('AI Engine updated. Please verify with a test call and logs.');
+                toast.success('AI Engine updated. Please verify with a test call and logs.');
                 fetchConfig();
                 return;
             }
         } catch (error: any) {
             const action = applyMethod === 'hot_reload' ? 'hot reload' : 'restart';
-            alert(`Failed to ${action} AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error(`Failed to ${action} AI Engine`, { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
@@ -249,7 +255,13 @@ const ContextsPage = () => {
     };
 
     const handleDeleteContext = async (name: string) => {
-        if (!confirm(`Are you sure you want to delete context "${name}"?`)) return;
+        const confirmed = await confirm({
+            title: 'Delete Context?',
+            description: `Are you sure you want to delete context "${name}"?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newContexts = { ...config.contexts };
         delete newContexts[name];
         await saveConfig({ ...config, contexts: newContexts });
@@ -262,11 +274,20 @@ const ContextsPage = () => {
         if (contextForm.provider) {
             const provider = config.providers?.[contextForm.provider];
             if (!provider) {
-                alert(`Provider '${contextForm.provider}' does not exist.`);
+                toast.error(`Provider '${contextForm.provider}' does not exist.`);
                 return;
             }
             if (provider.enabled === false) {
-                alert(`Provider '${contextForm.provider}' is disabled. Please enable it or select another provider.`);
+                toast.error(`Provider '${contextForm.provider}' is disabled. Please enable it or select another provider.`);
+                return;
+            }
+        }
+
+        // P1 Validation: Check pipeline exists
+        if (contextForm.pipeline) {
+            const pipeline = config.pipelines?.[contextForm.pipeline];
+            if (!pipeline) {
+                toast.error(`Pipeline '${contextForm.pipeline}' does not exist. Please select a valid pipeline or leave blank to use the active pipeline.`);
                 return;
             }
         }
@@ -284,7 +305,7 @@ const ContextsPage = () => {
         });
 
         if (isNewContext && newConfig.contexts[name]) {
-            alert('Context already exists');
+            toast.error('Context already exists');
             return;
         }
 
@@ -294,6 +315,25 @@ const ContextsPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (yamlError) {
+        return (
+            <div className="space-y-4 p-6">
+                <YamlErrorBanner error={yamlError} />
+                <div className="flex items-center justify-between rounded-md border border-red-500/30 bg-red-500/10 p-4 text-red-700 dark:text-red-400">
+                    <div className="flex items-center">
+                        <AlertCircle className="mr-2 h-5 w-5" />
+                        Context editing is disabled while `config/ai-agent.yaml` has YAML errors. Fix the YAML and reload.
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                    >
+                        Reload
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     const profilesBlock = config.profiles || {};
     const defaultProfileName = (typeof profilesBlock.default === 'string' && profilesBlock.default) ? profilesBlock.default : '';
@@ -316,11 +356,17 @@ const ContextsPage = () => {
                         {applyMethod === 'hot_reload' ? 'Changes saved. Apply to make them active.' : 'Changes saved. Restart required to make them active.'}
                     </div>
                     <button
-                        onClick={() => {
+                        onClick={async () => {
                             const msg = applyMethod === 'hot_reload'
                                 ? 'Apply changes via hot reload now? Active calls should continue, new calls use updated config.'
                                 : 'Restart AI Engine now? This may disconnect active calls.';
-                            if (window.confirm(msg)) {
+                            const confirmed = await confirm({
+                                title: applyMethod === 'hot_reload' ? 'Apply Changes?' : 'Restart AI Engine?',
+                                description: msg,
+                                confirmText: applyMethod === 'hot_reload' ? 'Apply' : 'Restart',
+                                variant: 'default'
+                            });
+                            if (confirmed) {
                                 handleApplyChanges(false);
                             }
                         }}
@@ -351,8 +397,6 @@ const ContextsPage = () => {
                     </button>
                 </div>
             )}
-
-            {yamlError && <YamlErrorBanner error={yamlError} />}
 
             <div className="flex justify-between items-center">
                 <div>
@@ -420,18 +464,30 @@ const ContextsPage = () => {
                                     <p className="text-foreground/90 italic">"{contextData.greeting}"</p>
                                 </div>
 
-                                {contextData.tools && contextData.tools.length > 0 && (
-                                    <div>
-                                        <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-2">Enabled Tools</span>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {contextData.tools.map((tool: string) => (
-                                                <span key={tool} className="px-2 py-1 rounded-md text-xs bg-accent text-accent-foreground font-medium border border-accent-foreground/10">
-                                                    {displayToolName(tool)}
-                                                </span>
-                                            ))}
+                                {/* Show all tool types with colored phase badges */}
+                                {(() => {
+                                    const allTools = [
+                                        ...(contextData.pre_call_tools || []).map((t: string) => ({ name: t, phase: 'pre', color: 'bg-blue-500/20 text-blue-600 dark:text-blue-400' })),
+                                        ...(contextData.tools || []).map((t: string) => ({ name: t, phase: 'in', color: 'bg-green-500/20 text-green-600 dark:text-green-400' })),
+                                        ...(contextData.in_call_http_tools || []).map((t: string) => ({ name: t, phase: 'in', color: 'bg-green-500/20 text-green-600 dark:text-green-400' })),
+                                        ...(contextData.post_call_tools || []).map((t: string) => ({ name: t, phase: 'post', color: 'bg-orange-500/20 text-orange-600 dark:text-orange-400' })),
+                                    ];
+                                    return allTools.length > 0 ? (
+                                        <div>
+                                            <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-2">Enabled Tools</span>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {allTools.map((tool, idx) => (
+                                                    <span key={`${tool.phase}-${tool.name}-${idx}`} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-accent text-accent-foreground font-medium border border-accent-foreground/10">
+                                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${tool.color}`}>
+                                                            {tool.phase}
+                                                        </span>
+                                                        {displayToolName(tool.name)}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
-                                    </div>
-                                )}
+                                    ) : null;
+                                })()}
                             </div>
                         </ConfigCard>
                     ))}

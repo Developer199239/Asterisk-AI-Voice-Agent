@@ -193,6 +193,12 @@ async def _probe_endpoint(
             resource=f"endpoints/{tech}/{quote(extension, safe='')}",
         )
     except Exception:
+        logger.debug(
+            "ARI endpoint probe failed",
+            tech=tech,
+            extension=extension,
+            exc_info=True,
+        )
         return None
     if not isinstance(resp, dict):
         return None
@@ -383,6 +389,12 @@ class CheckExtensionStatusTool(Tool):
                             resource=f"deviceStates/{encoded_candidate}",
                         )
                     except Exception:
+                        logger.debug(
+                            "ARI fallback probe failed",
+                            tech=candidate,
+                            extension=extension,
+                            exc_info=True,
+                        )
                         continue
                     if isinstance(candidate_resp, dict):
                         cstate = str(candidate_resp.get("state", "") or "").strip().upper()

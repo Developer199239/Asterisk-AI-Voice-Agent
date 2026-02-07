@@ -6,7 +6,7 @@ ElevenLabs Conversational AI is a full-agent provider that combines speech-to-te
 
 **Performance**: 1-2 second response latency | Full duplex | Client-side tool execution
 
-> **Note**: ElevenLabs is a **full agent only** provider. TTS-only mode for hybrid pipelines is not currently supported.
+> **Note**: This guide covers the **full-agent** provider (`elevenlabs_agent`). A separate **TTS-only pipeline adapter** (`elevenlabs_tts`) is also available for modular pipelines.
 
 If you used the Admin UI Setup Wizard, you may not need to follow this guide end-to-end. For first-call onboarding and transport selection, see:
 - `INSTALLATION.md`
@@ -69,18 +69,32 @@ The ElevenLabs provider is configured in `config/ai-agent.yaml`:
 providers:
   elevenlabs_agent:
     enabled: true
-    # API credentials loaded from environment variables
-    # api_key: ${ELEVENLABS_API_KEY}  # Read from env
-    # agent_id: ${ELEVENLABS_AGENT_ID}  # Read from env
+    type: full
+    capabilities: ["stt", "llm", "tts"]
+
+    # Credentials are loaded from environment variables (env-only):
+    # - ELEVENLABS_API_KEY
+    # - ELEVENLABS_AGENT_ID
     
-    # Audio Configuration (fixed for ElevenLabs)
-    input_sample_rate: 16000
-    output_sample_rate: 16000
+    # Transport/provider audio formats
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    provider_input_encoding: pcm16
+    provider_input_sample_rate_hz: 16000
+    output_encoding: pcm16
+    output_sample_rate_hz: 16000
+    target_encoding: ulaw
+    target_sample_rate_hz: 8000
+
+    # Voice/model (examples; use values from your ElevenLabs account)
+    voice_id: uDsPstFWFBUXjIBimV7s
+    model_id: eleven_flash_v2_5
 ```
 
 **Key Settings**:
-- Audio format is fixed at PCM16 @ 16kHz (engine handles resampling from telephony)
-- Voice and LLM model are configured in the ElevenLabs dashboard
+- Telephony ingress is typically μ-law @ 8 kHz; the engine handles resampling to ElevenLabs’ native PCM16
+- `ELEVENLABS_AGENT_ID` is required (used to fetch a signed URL)
+- Voice/model can be configured in YAML (voice/model IDs) and in the ElevenLabs dashboard (agent behavior)
 - Greeting and prompt can be overridden from context YAML (see Dynamic Variables section)
 
 ### 6. Configure Asterisk Dialplan

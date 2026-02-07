@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Plus, Trash2, Edit2 } from 'lucide-react';
 
 interface ContextsConfigProps {
@@ -7,6 +9,7 @@ interface ContextsConfigProps {
 }
 
 const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => {
+    const { confirm } = useConfirmDialog();
     const [editingContext, setEditingContext] = useState<string | null>(null);
     const [contextForm, setContextForm] = useState<any>({});
     const [isNewContext, setIsNewContext] = useState(false);
@@ -56,7 +59,7 @@ const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => 
         const { name, ...contextData } = contextForm;
 
         if (isNewContext && newContexts[name]) {
-            alert('Context already exists');
+            toast.error('Context already exists');
             return;
         }
 
@@ -65,8 +68,14 @@ const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => 
         setEditingContext(null);
     };
 
-    const handleDeleteContext = (name: string) => {
-        if (!confirm(`Are you sure you want to delete context "${name}"?`)) return;
+    const handleDeleteContext = async (name: string) => {
+        const confirmed = await confirm({
+            title: 'Delete Context?',
+            description: `Are you sure you want to delete context "${name}"?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newContexts = { ...config };
         delete newContexts[name];
         onChange(newContexts);

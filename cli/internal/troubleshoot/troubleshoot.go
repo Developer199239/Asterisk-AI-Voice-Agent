@@ -455,7 +455,11 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 func (r *Runner) collectCallData() (string, error) {
 	// Log-driven RCA: collect from all available ai_engine logs (not time-windowed),
 	// then filter down to the requested call_id + any related helper channel ids.
-	cmd := exec.Command("docker", "logs", "ai_engine")
+	since := os.Getenv("RCA_LOG_SINCE")
+	if since == "" {
+		since = "72h"
+	}
+	cmd := exec.Command("docker", "logs", "--since", since, "ai_engine")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err

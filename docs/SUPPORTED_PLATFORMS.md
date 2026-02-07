@@ -36,11 +36,11 @@ We do **not** target macOS/Windows as production hosts for Asterisk. Those are d
 
 Tier 3 environments are welcome, but we optimize for failures that are **explainable** and **diagnosable** (not “it works everywhere”).
 
-- **Docker management from Admin UI requires a working Docker API socket** inside `admin-ui`.
+- **Docker management from Admin UI requires a working Docker API socket** inside `admin_ui`.
   - Default is `/var/run/docker.sock`.
   - Rootless commonly uses `$XDG_RUNTIME_DIR/docker.sock` (often `/run/user/<uid>/docker.sock`).
-  - Persist this by setting `DOCKER_SOCK=...` in `.env` and recreating `admin-ui`.
-- **Health checks are performed from inside the `admin-ui` container**.
+  - Persist this by setting `DOCKER_SOCK=...` in `.env` and recreating `admin_ui`.
+- **Health checks are performed from inside the `admin_ui` container**.
   - On Tier 3 hosts, you may need to set `HEALTH_CHECK_AI_ENGINE_URL` and `HEALTH_CHECK_LOCAL_AI_URL` in `.env` so probes use reachable addresses.
 - **Podman is best-effort**. If Admin UI Docker operations fail under Podman, use Docker Engine for a supported path.
 - **Unsupported distros**: `./preflight.sh` will warn and provide manual installation guidance. Provide artifacts (below) so we can improve detection and docs.

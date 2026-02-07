@@ -5,13 +5,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import httpx
+import json
 import re
 import os
 import logging
 import time
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from settings import get_setting
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -68,10 +70,176 @@ def _substitute_variables(template: str, values: Dict[str, str]) -> str:
     env_pattern = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
     def env_replacer(match):
         env_name = match.group(1)
-        return os.environ.get(env_name, f"${{{env_name}}}")
+        resolved = get_setting(env_name, default=f"${{{env_name}}}")
+        return resolved
     
     result = env_pattern.sub(env_replacer, result)
     return result
+
+
+def _normalize_template(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    return s or None
+
+
+def _format_pretty_html(text: str) -> str:
+    # Keep in sync with AI Engine email tools.
+    safe = (text or "")
+    safe = safe.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    safe = safe.replace('"', "&quot;").replace("'", "&#39;")
+    safe = safe.replace("\r\n", "\n").replace("\r", "\n")
+    return safe.replace("\n", "<br/>\n")
+
+
+def _load_email_template_defaults() -> Dict[str, Any]:
+    """
+    Load default templates/variable reference from the main project tree.
+
+    The Admin UI container mounts the repo at /app/project (PROJECT_ROOT), but for local
+    dev we also fall back to resolving the repo root relative to this file.
+    """
+    import sys
+    import importlib
+
+    global _EMAIL_TEMPLATE_DEFAULTS_CACHE
+    if _EMAIL_TEMPLATE_DEFAULTS_CACHE is not None:
+        return _EMAIL_TEMPLATE_DEFAULTS_CACHE
+
+    project_root = os.environ.get("PROJECT_ROOT")
+    if not project_root:
+        here = os.path.abspath(os.path.dirname(__file__))
+        project_root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
+
+    if not os.path.isdir(project_root) or not os.path.isdir(os.path.join(project_root, "src")):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Project source not mounted yet at PROJECT_ROOT={project_root}",
+        )
+
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            importlib.invalidate_caches()
+            from src.tools.business.email_templates import (  # type: ignore
+                DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
+                DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
+                EMAIL_TEMPLATE_VARIABLES,
+            )
+            _EMAIL_TEMPLATE_DEFAULTS_CACHE = {
+                "send_email_summary": DEFAULT_SEND_EMAIL_SUMMARY_HTML_TEMPLATE,
+                "request_transcript": DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
+                "variables": EMAIL_TEMPLATE_VARIABLES,
+            }
+            return _EMAIL_TEMPLATE_DEFAULTS_CACHE
+        except Exception as e:  # pragma: no cover - environment-specific
+            last_exc = e
+            time.sleep(0.15 * (attempt + 1))
+            continue
+
+    logger.exception("Failed to load email template defaults", exc_info=last_exc)
+    raise HTTPException(
+        status_code=503,
+        detail=f"Failed to load email templates from project: {last_exc}",
+    ) from last_exc
+
+    # Unreachable; kept for type checkers.
+    return {}
+
+
+_EMAIL_TEMPLATE_DEFAULTS_CACHE: Optional[Dict[str, Any]] = None
+
+
+class EmailTemplateDefaultsResponse(BaseModel):
+    send_email_summary: str
+    request_transcript: str
+    variables: List[Dict[str, str]]
+
+
+@router.get("/email-templates/defaults", response_model=EmailTemplateDefaultsResponse)
+async def get_email_template_defaults():
+    """Return default HTML templates and variable reference for email tools."""
+    return _load_email_template_defaults()
+
+
+class EmailTemplatePreviewRequest(BaseModel):
+    tool: str
+    html_template: Optional[str] = None
+    include_transcript: Optional[bool] = True
+    test_values: Dict[str, str] = {}
+
+
+class EmailTemplatePreviewResponse(BaseModel):
+    success: bool
+    html: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/email-templates/preview", response_model=EmailTemplatePreviewResponse)
+async def preview_email_template(request: EmailTemplatePreviewRequest):
+    """
+    Render a Jinja2 email template using safe test values for preview.
+
+    Templates are sandboxed. If no `html_template` is provided, the default template
+    for the requested tool is used.
+    """
+    from jinja2.sandbox import SandboxedEnvironment
+
+    defaults = _load_email_template_defaults()
+    tool = (request.tool or "").strip()
+    if tool not in ("send_email_summary", "request_transcript"):
+        raise HTTPException(status_code=400, detail="Unsupported tool; use send_email_summary or request_transcript")
+
+    default_template = defaults[tool]
+    override = _normalize_template(request.html_template)
+    template_str = override or default_template
+
+    # Merge default test values with caller-provided overrides.
+    test_values = {**DEFAULT_TEST_VALUES, **(request.test_values or {})}
+
+    # Email-specific placeholders
+    transcript_text = (
+        "[00:00:03] Caller: Hi, I need help with my account.\n"
+        "[00:00:06] Agent: Sure — what seems to be the issue?\n"
+        "[00:00:12] Caller: I can’t log in.\n"
+    )
+
+    variables: Dict[str, Any] = {
+        "call_id": test_values.get("call_id", "1234567890.123"),
+        "context_name": test_values.get("context_name", "test-context"),
+        "recipient_email": "caller@example.com",
+        "call_date": "2026-02-05 12:34:56",
+        "call_start_time": "2026-02-05 12:34:56",
+        "call_end_time": "2026-02-05 12:37:11",
+        "duration": "2m 15s",
+        "duration_seconds": 135,
+        "caller_name": test_values.get("caller_name", "Test Caller"),
+        "caller_number": test_values.get("caller_number", "+15551234567"),
+        "called_number": test_values.get("called_number", "+18005551234"),
+        "outcome": "caller_hangup",
+        "call_outcome": "caller_hangup",
+        "hangup_initiator": "caller",
+        "include_transcript": bool(request.include_transcript) if request.include_transcript is not None else True,
+        "transcript": transcript_text,
+        "transcript_html": _format_pretty_html(transcript_text),
+        "transcript_note": None,
+    }
+
+    env = SandboxedEnvironment(autoescape=False)
+    try:
+        rendered = env.from_string(template_str).render(**variables)
+        # Prevent accidental huge responses (and keep UI responsive)
+        if len(rendered) > 500_000:
+            raise ValueError("Rendered HTML too large for preview")
+        return EmailTemplatePreviewResponse(success=True, html=rendered)
+    except Exception as e:
+        return EmailTemplatePreviewResponse(success=False, error=str(e))
 
 
 def _extract_json_paths(obj: Any, prefix: str = "") -> List[Dict[str, str]]:
@@ -122,7 +290,7 @@ def _env_csv_set(name: str) -> set[str]:
     return set(items)
 
 
-def _is_private_or_sensitive_ip(ip: ipaddress._BaseAddress) -> bool:
+def _is_private_or_sensitive_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return bool(
         ip.is_private
         or ip.is_loopback
@@ -191,7 +359,7 @@ def _validate_http_tool_test_target(resolved_url: str) -> None:
     try:
         infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to resolve hostname: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to resolve hostname: {e}") from e
 
     ips: set[str] = set()
     for _, _, _, _, sockaddr in infos:
@@ -272,7 +440,7 @@ async def test_http_tool(request: TestHTTPRequest):
     
     try:
         follow_redirects = _env_bool("AAVA_HTTP_TOOL_TEST_FOLLOW_REDIRECTS", default=False)
-        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=follow_redirects) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False) as client:
             # Prepare request kwargs
             kwargs: Dict[str, Any] = {
                 "method": method,
@@ -288,7 +456,6 @@ async def test_http_tool(request: TestHTTPRequest):
                 if "application/json" in content_type.lower():
                     # Parse and send as JSON to ensure proper encoding
                     try:
-                        import json
                         json_data = json.loads(resolved_body)
                         kwargs["json"] = json_data
                     except json.JSONDecodeError:
@@ -297,8 +464,29 @@ async def test_http_tool(request: TestHTTPRequest):
                 else:
                     kwargs["content"] = resolved_body
             
-            # Make the request
-            resp = await client.request(**kwargs)
+            # Make the request (manual redirects to prevent SSRF bypass via redirect-to-private targets).
+            max_hops = 10
+            resp = None
+            for _ in range(max_hops + 1):
+                resp = await client.request(**kwargs)
+
+                is_redirect = resp.status_code in (301, 302, 303, 307, 308) and bool(resp.headers.get("location"))
+                if not (follow_redirects and is_redirect):
+                    break
+
+                next_url = urljoin(str(resp.url), str(resp.headers.get("location") or ""))
+                _validate_http_tool_test_target(next_url)
+
+                # RFC-ish behavior: 303 always becomes GET.
+                if resp.status_code == 303:
+                    kwargs["method"] = "GET"
+                    kwargs.pop("json", None)
+                    kwargs.pop("content", None)
+                kwargs["url"] = next_url
+
+            if resp is None:
+                raise HTTPException(status_code=400, detail="Request failed: no response received")
+            response_data.resolved_url = str(resp.url)
             
             response_data.response_time_ms = (time.time() - start_time) * 1000
             response_data.status_code = resp.status_code
@@ -310,7 +498,7 @@ async def test_http_tool(request: TestHTTPRequest):
                 json_body = resp.json()
                 response_data.body = json_body
                 response_data.suggested_mappings = _extract_json_paths(json_body)
-            except Exception:
+            except (ValueError, httpx.DecodingError):
                 # Not JSON, just use raw text
                 response_data.body = resp.text[:10000]
             
@@ -324,10 +512,10 @@ async def test_http_tool(request: TestHTTPRequest):
         response_data.error = f"Request timed out after {request.timeout_ms}ms"
     except httpx.ConnectError as e:
         response_data.response_time_ms = (time.time() - start_time) * 1000
-        response_data.error = f"Connection failed: {str(e)}"
+        response_data.error = f"Connection failed: {e!s}"
     except Exception as e:
         response_data.response_time_ms = (time.time() - start_time) * 1000
-        response_data.error = f"Request failed: {str(e)}"
+        response_data.error = f"Request failed: {e!s}"
         logger.exception("HTTP tool test failed")
     
     return response_data

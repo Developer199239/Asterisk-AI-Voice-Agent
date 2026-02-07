@@ -44,33 +44,31 @@ The Deepgram provider is configured in `config/ai-agent.yaml`:
 ```yaml
 providers:
   deepgram:
-    api_key: ${DEEPGRAM_API_KEY}
+    # API key is injected from `DEEPGRAM_API_KEY` in `.env` (env-only; do not commit keys to YAML)
     enabled: true
+    type: full
+    capabilities: ["stt", "llm", "tts"]
     greeting: "Hi {caller_name}, I'm Ava. How can I help you today?"
     
-    # LLM Configuration
-    llm_model: nova-2-conversationalai  # Recommended for telephony
-    llm_temperature: 1.0                # Natural conversation (0.0-1.0)
+    # Models
+    model: nova-2
+    tts_model: aura-2-thalia-en
     
-    # Voice Configuration
-    tts_voice: aura-asteria-en          # Natural female voice
-    # Options: aura-asteria-en, aura-luna-en, aura-stella-en, aura-athena-en
+    # Audio (telephony defaults)
+    input_encoding: mulaw
+    input_sample_rate_hz: 8000
+    output_encoding: mulaw
+    output_sample_rate_hz: 8000
     
-    # Audio Configuration
-    encoding: mulaw                     # Telephony standard
-    sample_rate: 8000                   # 8kHz for telephony
-    enable_endpoint: true               # Enable turn detection
-    
-    # Conversation Settings
-    context_handling: extended          # Maintain full conversation context
-    interim_results: true               # Show real-time transcription
+    # Optional behavior overrides (otherwise inherits from context / llm prompt)
+    instructions: "Voice assistant. Be concise."
+    continuous_input: true
 ```
 
 **Key Settings**:
-- `llm_model`: `nova-2-conversationalai` (best for telephony) or `nova-2` (general purpose)
-- `tts_voice`: Choose from Aura voices (asteria, luna, stella, athena)
-- `encoding`: `mulaw` for telephony, `linear16` for higher quality
-- `sample_rate`: `8000` for telephony, `16000` for higher quality
+- `model`: Deepgram Voice Agent model (example: `nova-2`)
+- `tts_model`: Aura TTS model (example: `aura-2-thalia-en`)
+- `input_encoding`/`input_sample_rate_hz`: what the engine receives from Asterisk (telephony defaults are μ-law @ 8 kHz)
 
 ### 4. Configure Asterisk Dialplan
 
@@ -178,8 +176,8 @@ providers:
 ```yaml
 providers:
   deepgram:
-    encoding: mulaw        # Must match Asterisk
-    sample_rate: 8000      # Must match Asterisk
+    input_encoding: mulaw        # Must match Asterisk/transport
+    input_sample_rate_hz: 8000   # Must match Asterisk/transport
 ```
 
 ### Issue: "High Latency" (>3 seconds)
@@ -188,7 +186,7 @@ providers:
 
 **Fix**:
 1. Check network: `ping api.deepgram.com`
-2. Use faster model: `llm_model: nova-2-conversationalai`
+2. Use a faster model (example): `model: nova-2`
 3. Verify API key not rate-limited
 
 ### Issue: "Tools Not Working"
@@ -201,14 +199,15 @@ providers:
 
 ### Issue: "AI Cuts Off Mid-Sentence"
 
-**Cause**: Endpoint detection too aggressive
+**Cause**: Barge-in / gating too aggressive (telephony noise can trigger interruptions)
 
 **Fix**:
 ```yaml
-providers:
-  deepgram:
-    enable_endpoint: true    # Keep enabled
-    interim_results: true    # Helps with turn detection
+barge_in:
+  enabled: true
+  # Raise thresholds if the agent gets interrupted by line noise
+  energy_threshold: 800
+  min_ms: 200
 ```
 
 ## Production Considerations

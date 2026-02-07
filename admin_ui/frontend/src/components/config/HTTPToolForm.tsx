@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Plus, Trash2, Settings, Webhook, Search, Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, Lock } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
@@ -9,6 +11,7 @@ interface HTTPToolFormProps {
     config: any;
     onChange: (newConfig: any) => void;
     phase: 'pre_call' | 'in_call' | 'post_call';
+    contexts?: Record<string, any>;  // P1: For in-use check on delete
 }
 
 interface ToolParameter {
@@ -80,7 +83,8 @@ const DEFAULT_TEST_VALUES: Record<string, string> = {
     lead_id: 'test-lead-123',
 };
 
-const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
+const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) => {
+    const { confirm } = useConfirmDialog();
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
     const [toolForm, setToolForm] = useState<any>({});
@@ -98,6 +102,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     const [showTestPanel, setShowTestPanel] = useState(false);
     const [showTestValues, setShowTestValues] = useState(false);
     const [showAllMappings, setShowAllMappings] = useState(false);
+    const variableTokenClass = "font-mono text-emerald-700";
 
     const getHTTPTools = () => {
         const tools: Record<string, HTTPToolConfig> = {};
@@ -147,11 +152,11 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
 
     const handleSaveTool = () => {
         if (!toolForm.key) {
-            alert('Please enter a Tool Name');
+            toast.error('Please enter a Tool Name');
             return;
         }
         if (!toolForm.url) {
-            alert('Please enter a URL');
+            toast.error('Please enter a URL');
             return;
         }
 
@@ -167,8 +172,62 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
         setEditingTool(null);
     };
 
-    const handleDeleteTool = (key: string) => {
-        if (!confirm(`Delete ${key}?`)) return;
+    const handleDeleteTool = async (key: string) => {
+        const toolData = config[key] as HTTPToolConfig;
+        let confirmed = false;
+        
+        // P2 Fix: Check if tool is global - affects ALL contexts
+        if (toolData?.is_global) {
+            const contextCountText = contexts ? `${Object.keys(contexts).length} context(s)` : 'all contexts';
+            confirmed = await confirm({
+                title: '⚠️ Global Tool Warning',
+                description: `HTTP tool "${key}" is marked as GLOBAL and automatically applies to ${contextCountText}.\n\nDeleting this tool will affect every context.`,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
+        } else if (contexts) {
+            // P1: Check if tool is used by any context (for all phases)
+            // Map phase to the context config key
+            const phaseToContextKey: Record<string, string> = {
+                'pre_call': 'pre_call_tools',
+                'in_call': 'in_call_http_tools',
+                'post_call': 'post_call_tools'
+            };
+            const contextKey = phaseToContextKey[phase];
+            
+            const usingContexts = Object.entries(contexts)
+                .filter(([_, ctx]) => {
+                    const tools = (ctx as any)[contextKey] || [];
+                    return tools.includes(key);
+                })
+                .map(([ctxName]) => ctxName);
+            
+            if (usingContexts.length > 0) {
+                confirmed = await confirm({
+                    title: 'Delete HTTP Tool?',
+                    description: `HTTP tool "${key}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nDeleting will remove it from those contexts.`,
+                    confirmText: 'Delete',
+                    variant: 'destructive'
+                });
+            } else {
+                confirmed = await confirm({
+                    title: 'Delete HTTP Tool?',
+                    description: `Delete "${key}"?`,
+                    confirmText: 'Delete',
+                    variant: 'destructive'
+                });
+            }
+        } else {
+            confirmed = await confirm({
+                title: 'Delete HTTP Tool?',
+                description: `Delete "${key}"?`,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
+        }
+        
+        if (!confirmed) return;
+
         const updated = { ...config };
         delete updated[key];
         onChange(updated);
@@ -224,7 +283,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
 
     const handleTestTool = async () => {
         if (!toolForm.url) {
-            alert('Please enter a URL first');
+            toast.error('Please enter a URL first');
             return;
         }
         
@@ -524,23 +583,27 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                 <div className="space-y-1">
                                     {Object.entries(toolForm.output_variables || {}).map(([k, v]) => (
                                         <div key={k} className="flex items-center gap-2 text-xs bg-accent/50 px-2 py-1 rounded">
-                                            <span className="font-mono">{k} ← {String(v)}</span>
+                                            <span className="font-mono">
+                                                <span className={variableTokenClass}>{k}</span>{" "}
+                                                <span className="text-muted-foreground">←</span>{" "}
+                                                <span>{String(v)}</span>
+                                            </span>
                                             <button onClick={() => removeOutputVariable(k)} className="ml-auto text-destructive hover:text-destructive/80">
                                                 <Trash2 className="w-3 h-3" />
                                             </button>
                                         </div>
                                     ))}
                                 </div>
-                                <div className="flex gap-2">
-                                    <input
-                                        className="flex-1 px-2 py-1 text-sm border rounded"
-                                        placeholder="Variable name (e.g., customer_name)"
-                                        value={outputVarKey}
-                                        onChange={(e) => setOutputVarKey(e.target.value)}
-                                    />
-                                    <input
-                                        className="flex-1 px-2 py-1 text-sm border rounded"
-                                        placeholder="JSON path (e.g., contact.name)"
+                                    <div className="flex gap-2">
+                                        <input
+                                            className={`flex-1 px-2 py-1 text-sm border rounded ${variableTokenClass}`}
+                                            placeholder="Variable name (e.g., customer_name)"
+                                            value={outputVarKey}
+                                            onChange={(e) => setOutputVarKey(e.target.value)}
+                                        />
+                                        <input
+                                            className="flex-1 px-2 py-1 text-sm border rounded"
+                                            placeholder="JSON path (e.g., contact.name)"
                                         value={outputVarPath}
                                         onChange={(e) => setOutputVarPath(e.target.value)}
                                     />
@@ -719,7 +782,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                         <div key={idx} className="flex items-start gap-2 p-2 bg-accent/30 rounded border">
                                             <div className="flex-1 grid grid-cols-4 gap-2">
                                                 <input
-                                                    className="px-2 py-1 text-xs border rounded"
+                                                    className={`px-2 py-1 text-xs border rounded ${variableTokenClass}`}
                                                     placeholder="Name"
                                                     value={param.name}
                                                     onChange={(e) => {
@@ -856,7 +919,11 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     <div className="space-y-1">
                                         {Object.entries(toolForm.output_variables || {}).map(([k, v]) => (
                                             <div key={k} className="flex items-center gap-2 text-xs bg-accent/50 px-2 py-1 rounded">
-                                                <span className="font-mono">{k} ← {String(v)}</span>
+                                                <span className="font-mono">
+                                                    <span className={variableTokenClass}>{k}</span>{" "}
+                                                    <span className="text-muted-foreground">←</span>{" "}
+                                                    <span>{String(v)}</span>
+                                                </span>
                                                 <button onClick={() => removeOutputVariable(k)} className="ml-auto text-destructive hover:text-destructive/80">
                                                     <Trash2 className="w-3 h-3" />
                                                 </button>
@@ -865,7 +932,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     </div>
                                     <div className="flex gap-2">
                                         <input
-                                            className="flex-1 px-2 py-1 text-sm border rounded"
+                                            className={`flex-1 px-2 py-1 text-sm border rounded ${variableTokenClass}`}
                                             placeholder="Variable name (e.g., available)"
                                             value={outputVarKey}
                                             onChange={(e) => setOutputVarKey(e.target.value)}
@@ -924,7 +991,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     <div className="mt-3 grid grid-cols-2 gap-3">
                                         {Object.entries(testValues).map(([key, value]) => (
                                             <div key={key} className="flex flex-col gap-1">
-                                                <label className="text-xs text-muted-foreground font-mono">{`{${key}}`}</label>
+                                                <label className={`text-xs ${variableTokenClass}`}>{`{${key}}`}</label>
                                                 <input
                                                     className="w-full px-2 py-1 text-xs border rounded bg-background"
                                                     value={value}
@@ -935,7 +1002,10 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                         {/* Add AI parameter test values */}
                                         {(toolForm.parameters || []).map((param: ToolParameter) => (
                                             <div key={`param_${param.name}`} className="flex flex-col gap-1">
-                                                <label className="text-xs text-muted-foreground font-mono">{`{${param.name}}`} <span className="text-blue-500">(AI param)</span></label>
+                                                <label className="text-xs">
+                                                    <span className={variableTokenClass}>{`{${param.name}}`}</span>{" "}
+                                                    <span className="text-blue-500">(AI param)</span>
+                                                </label>
                                                 <input
                                                     className="w-full px-2 py-1 text-xs border rounded bg-background"
                                                     value={testValues[param.name] || ''}

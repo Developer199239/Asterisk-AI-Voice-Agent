@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { Save, Download, AlertCircle, Settings, Server, Trash2, RefreshCw, Loader2 } from 'lucide-react';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
@@ -23,6 +25,7 @@ import ElevenLabsProviderForm from '../components/config/providers/ElevenLabsPro
 
 
 const ConfigEditor = () => {
+    const { confirm } = useConfirmDialog();
     const [activeTab, setActiveTab] = useState<'general' | 'asterisk' | 'contexts' | 'providers' | 'pipelines' | 'vad' | 'streaming' | 'llm' | 'tools' | 'audiosocket' | 'yaml'>('general');
     const [yamlContent, setYamlContent] = useState('');
     const [parsedConfig, setParsedConfig] = useState<any>({});
@@ -146,9 +149,12 @@ const ConfigEditor = () => {
         const response = await axios.post(`${endpoint}?force=${force}`);
 
         if (response.data?.status === 'warning') {
-            const confirmForce = window.confirm(
-                `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-            );
+            const confirmForce = await confirm({
+                title: 'Force Restart?',
+                description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                confirmText: 'Force Restart',
+                variant: 'destructive'
+            });
             if (confirmForce) {
                 return restartAiEngine(true);
             }
@@ -216,7 +222,7 @@ const ConfigEditor = () => {
                 const parsed = yaml.load(yamlContent) as any;
                 setParsedConfig(parsed);
             } catch (e) {
-                alert("Invalid YAML, cannot switch to form view. Please fix errors first.");
+                toast.error('Invalid YAML, cannot switch to form view. Please fix errors first.');
                 return;
             }
         }
@@ -230,8 +236,14 @@ const ConfigEditor = () => {
         setIsNewProvider(false);
     };
 
-    const handleProviderDelete = (name: string) => {
-        if (!confirm(`Are you sure you want to delete provider "${name}"?`)) return;
+    const handleProviderDelete = async (name: string) => {
+        const confirmed = await confirm({
+            title: 'Delete Provider?',
+            description: `Are you sure you want to delete provider "${name}"?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newProviders = { ...parsedConfig.providers };
         delete newProviders[name];
         setParsedConfig({ ...parsedConfig, providers: newProviders });

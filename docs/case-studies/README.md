@@ -8,7 +8,7 @@ Comprehensive documentation of production-validated configurations with complete
 
 - **[Google Live Golden Baseline](Google-Live-Golden-Baseline.md)** ⚡ **FASTEST**
   - Response Latency: <1 second
-  - Status: Production Ready (v4.2.0)
+  - Status: Production Ready
   - Best For: Interactive voice applications requiring natural conversation
 
 - **[Deepgram Agent Golden Baseline](Deepgram-Agent-Golden-Baseline.md)**

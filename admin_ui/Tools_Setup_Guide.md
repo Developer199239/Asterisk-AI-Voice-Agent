@@ -90,6 +90,11 @@ Output variables map API response fields to prompt variables:
 | `customer_email` | `contacts[0].email` | Customer's email |
 | `customer_company` | `contacts[0].companyName` | Company name |
 
+**Important**:
+- The **Variable Name** is what you reference later as a template variable (e.g., `{customer_name}`) in prompts, other tools, and context fields.
+- The **Response Path** is only used to extract data from the HTTP response (e.g., `contacts[0].email`). It is **not** a template variable.
+- In the Admin UI, variable names that are safe to reference elsewhere are highlighted to reduce confusion.
+
 **Path Syntax**:
 - Simple field: `firstName`
 - Nested field: `contact.email`

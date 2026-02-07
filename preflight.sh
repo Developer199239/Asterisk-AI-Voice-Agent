@@ -1871,7 +1871,6 @@ check_asterisk_uid_gid() {
 check_gpu() {
     GPU_AVAILABLE=false
     GPU_NAME=""
-    GPU_PASSTHROUGH_OK=false
     
     # Step 1: Check if nvidia-smi exists on host
     if ! command -v nvidia-smi &>/dev/null; then
@@ -1930,9 +1929,25 @@ check_gpu() {
     
     # Step 4: Test Docker GPU passthrough
     log_info "Testing Docker GPU passthrough..."
-    if docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &>/dev/null 2>&1; then
-        GPU_PASSTHROUGH_OK=true
+    local cuda_test_images=(
+        "nvidia/cuda:12.0.0-base-ubi8"
+        "nvidia/cuda:12.0-base"
+        "nvidia/cuda:12.4.1-base-ubuntu22.04"
+    )
+    local passthrough_test_ok=false
+    local working_cuda_test_image=""
+    local cuda_test_image
+    for cuda_test_image in "${cuda_test_images[@]}"; do
+        if docker run --rm --gpus all "$cuda_test_image" nvidia-smi &>/dev/null 2>&1; then
+            passthrough_test_ok=true
+            working_cuda_test_image="$cuda_test_image"
+            break
+        fi
+    done
+
+    if [ "$passthrough_test_ok" = true ]; then
         log_ok "Docker GPU passthrough working"
+        log_info "  Verified with image: $working_cuda_test_image"
         update_env_gpu "true"
         
         # Inform user - GPU detection works via .env, no workflow change needed
@@ -1942,7 +1957,7 @@ check_gpu() {
         log_info "  To use GPU for LLM inference (optional, faster responses):"
         log_info "    1. Set LOCAL_LLM_GPU_LAYERS=-1 in .env"
         log_info "    2. Start local_ai_server with GPU override:"
-        log_info "       ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent -f docker-compose.yml -f docker-compose.gpu.yml up -d local_ai_server"
+        log_info "       ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent -f docker-compose.yml -f docker-compose.gpu.yml up -d --build local_ai_server"
     else
         log_warn "Docker GPU passthrough test failed"
         log_info "  GPU detected and toolkit installed, but Docker cannot access GPU"

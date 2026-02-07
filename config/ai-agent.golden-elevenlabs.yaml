@@ -21,7 +21,7 @@
 # For the provider guide, see: docs/Provider-ElevenLabs-Setup.md
 # ═══════════════════════════════════════════════════════════════════════════
 
-config_version: 4
+config_version: 6
 active_pipeline: local_hybrid  # Don't change - uses provider override via contexts
 default_provider: elevenlabs_agent
 

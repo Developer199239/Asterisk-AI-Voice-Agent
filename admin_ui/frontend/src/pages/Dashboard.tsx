@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, AlertTriangle, CheckCircle, XCircle, Wrench } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle } from 'lucide-react';
 import axios from 'axios';
-import { HealthWidget } from '../components/HealthWidget';
-import { SystemStatus } from '../components/SystemStatus';
+import { toast } from 'sonner';
+import { SystemTopology } from '../components/SystemTopology';
 import { ApiErrorInfo, buildDockerAccessHints, describeApiError } from '../utils/apiErrors';
 
 interface Container {
@@ -45,8 +45,20 @@ interface DirectoryHealth {
     };
 }
 
+interface PlatformInfo {
+    project?: { version: string };
+    os: { id: string; version: string };
+    docker: { version: string | null };
+    compose: { version: string | null };
+}
+
+interface PlatformResponse {
+    platform: PlatformInfo;
+    summary: { ready: boolean; passed: number };
+}
+
 const Dashboard = () => {
-    const [containers, setContainers] = useState<Container[]>([]);
+    const [, setContainers] = useState<Container[]>([]);
     const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
     const [directoryHealth, setDirectoryHealth] = useState<DirectoryHealth | null>(null);
     const [loading, setLoading] = useState(true);
@@ -55,6 +67,7 @@ const Dashboard = () => {
 
     const [containersError, setContainersError] = useState<ApiErrorInfo | null>(null);
     const [metricsError, setMetricsError] = useState<ApiErrorInfo | null>(null);
+    const [platformData, setPlatformData] = useState<PlatformResponse | null>(null);
 
     const fetchData = async () => {
         setContainersError(null);
@@ -64,9 +77,10 @@ const Dashboard = () => {
             axios.get('/api/system/containers'),
             axios.get('/api/system/metrics'),
             axios.get('/api/system/directories'),
+            axios.get('/api/system/platform'),
         ]);
 
-        const [containersRes, metricsRes, dirHealthRes] = results;
+        const [containersRes, metricsRes, dirHealthRes, platformRes] = results;
 
         if (containersRes.status === 'fulfilled') {
             setContainers(containersRes.value.data);
@@ -90,6 +104,10 @@ const Dashboard = () => {
             setDirectoryHealth(null);
         }
 
+        if (platformRes.status === 'fulfilled') {
+            setPlatformData(platformRes.value.data);
+        }
+
         setLoading(false);
         setRefreshing(false);
     };
@@ -103,15 +121,16 @@ const Dashboard = () => {
                 const dirHealthRes = await axios.get('/api/system/directories');
                 setDirectoryHealth(dirHealthRes.data);
                 if (res.data.restart_required) {
-                    alert('Fixes applied! Container restart may be required for changes to take effect.');
+                    toast.success('Fixes applied!', { description: 'Container restart may be required for changes to take effect.' });
+                } else {
+                    toast.success('Fixes applied!');
                 }
             } else {
-                const errors = Array.isArray(res.data.errors) ? res.data.errors.join('\n') : 'Unknown error';
-                const manualSteps = Array.isArray(res.data.manual_steps) ? res.data.manual_steps.join('\n') : '';
-                alert(`Some fixes failed:\n${errors}${manualSteps ? `\n\nManual steps:\n${manualSteps}` : ''}`);
+                const errors = Array.isArray(res.data.errors) ? res.data.errors.join(', ') : 'Unknown error';
+                toast.error('Some fixes failed', { description: errors });
             }
         } catch (err: any) {
-            alert(`Failed to fix directories: ${err?.message || 'Unknown error'}`);
+            toast.error('Failed to fix directories', { description: err?.message || 'Unknown error' });
         } finally {
             setFixingDirectories(false);
         }
@@ -131,101 +150,17 @@ const Dashboard = () => {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    const MetricCard = ({ title, value, subValue, icon: Icon, color }: any) => (
-        <div className="p-6 rounded-lg border border-border bg-card text-card-foreground shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
-                <Icon className={`w-4 h-4 ${color}`} />
+    // Compact metric display for the resource strip
+    const CompactMetric = ({ title, value, subValue, icon: Icon, color }: any) => (
+        <div className="flex items-center gap-3 px-4 py-3">
+            <Icon className={`w-5 h-5 ${color} flex-shrink-0`} />
+            <div className="min-w-0">
+                <div className="text-xs text-muted-foreground">{title}</div>
+                <div className="text-lg font-bold">{value}</div>
+                {subValue && <div className="text-[10px] text-muted-foreground truncate">{subValue}</div>}
             </div>
-            <div className="text-2xl font-bold">{value}</div>
-            {subValue && <p className="text-xs text-muted-foreground mt-1">{subValue}</p>}
         </div>
     );
-
-    const StatusIcon = ({ status }: { status: string }) => {
-        if (status === 'ok') return <CheckCircle className="w-4 h-4 text-green-500" />;
-        if (status === 'warning') return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
-        return <XCircle className="w-4 h-4 text-red-500" />;
-    };
-
-    const DirectoryHealthCard = () => {
-        if (!directoryHealth) {
-            return (
-                <div className="p-6 rounded-lg border border-border bg-card text-card-foreground shadow-sm">
-                    <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-sm font-medium text-muted-foreground">Audio Directories</h3>
-                        <FolderCheck className="w-4 h-4 text-muted-foreground" />
-                    </div>
-                    <div className="text-sm text-muted-foreground">Loading...</div>
-                </div>
-            );
-        }
-
-        const overallColor = directoryHealth.overall === 'healthy' 
-            ? 'text-green-500' 
-            : directoryHealth.overall === 'warning' 
-                ? 'text-yellow-500' 
-                : 'text-red-500';
-
-        const checks = directoryHealth.checks;
-        const hasIssues = directoryHealth.overall !== 'healthy';
-
-        return (
-            <div className="p-6 rounded-lg border border-border bg-card text-card-foreground shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium text-muted-foreground">Audio Directories</h3>
-                    <FolderCheck className={`w-4 h-4 ${overallColor}`} />
-                </div>
-                <div className={`text-2xl font-bold ${overallColor} capitalize`}>
-                    {directoryHealth.overall}
-                </div>
-                
-                <div className="mt-3 space-y-3">
-                    <div className="text-xs">
-                        <div className="flex items-center gap-2">
-                            <StatusIcon status={checks.media_dir_configured.status} />
-                            <span className="text-muted-foreground font-medium">Media Dir Config</span>
-                        </div>
-                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.media_dir_configured.configured_path || checks.media_dir_configured.expected_path}>
-                            {checks.media_dir_configured.configured_path || checks.media_dir_configured.expected_path || 'Not set'}
-                        </div>
-                    </div>
-                    <div className="text-xs">
-                        <div className="flex items-center gap-2">
-                            <StatusIcon status={checks.host_directory.status} />
-                            <span className="text-muted-foreground font-medium">Host Directory</span>
-                        </div>
-                        <div
-                            className="ml-6 text-[10px] text-muted-foreground/70 truncate"
-                            title={checks.host_directory.message || checks.host_directory.path}
-                        >
-                            {checks.host_directory.path || 'Unknown'}
-                        </div>
-                    </div>
-                    <div className="text-xs">
-                        <div className="flex items-center gap-2">
-                            <StatusIcon status={checks.asterisk_symlink.status} />
-                            <span className="text-muted-foreground font-medium">Asterisk Symlink</span>
-                        </div>
-                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.asterisk_symlink.message}>
-                            {checks.asterisk_symlink.target || checks.asterisk_symlink.path || checks.asterisk_symlink.message}
-                        </div>
-                    </div>
-                </div>
-
-                {hasIssues && (
-                    <button
-                        onClick={handleFixDirectories}
-                        disabled={fixingDirectories}
-                        className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                    >
-                        <Wrench className="w-3 h-3" />
-                        {fixingDirectories ? 'Fixing...' : 'Auto-Fix Issues'}
-                    </button>
-                )}
-            </div>
-        );
-    };
 
     if (loading) {
         return (
@@ -309,37 +244,111 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Health Widget */}
-            <HealthWidget />
-
-            {/* System Status - Platform & Cross-Platform Checks (AAVA-126) */}
-            <SystemStatus />
-
-            {/* System Metrics */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <MetricCard
-                    title="CPU Usage"
-                    value={metrics?.cpu?.percent != null ? `${metrics.cpu.percent.toFixed(1)}%` : '--'}
-                    subValue={metrics?.cpu?.count != null ? `${metrics.cpu.count} Cores` : '--'}
-                    icon={Cpu}
-                    color="text-blue-500"
-                />
-                <MetricCard
-                    title="Memory Usage"
-                    value={metrics?.memory?.percent != null ? `${metrics.memory.percent.toFixed(1)}%` : '--'}
-                    subValue={`${formatBytes(metrics?.memory?.used ?? 0)} / ${formatBytes(metrics?.memory?.total ?? 0)}`}
-                    icon={Activity}
-                    color="text-green-500"
-                />
-                <MetricCard
-                    title="Disk Usage"
-                    value={metrics?.disk?.percent != null ? `${metrics.disk.percent.toFixed(1)}%` : '--'}
-                    subValue={`${formatBytes(metrics?.disk?.free ?? 0)} Free`}
-                    icon={HardDrive}
-                    color="text-orange-500"
-                />
-                <DirectoryHealthCard />
+            {/* Compact Status Bar - Platform info + Resources */}
+            <div className="rounded-lg border border-border bg-card shadow-sm">
+                {/* Row 1: Platform Info + System Ready */}
+                <div className="flex flex-wrap items-center justify-between px-4 py-2 border-b border-border bg-muted/30">
+                    <div className="flex flex-wrap items-center gap-6">
+                        {/* System Ready Status */}
+                        <div className="flex items-center gap-2">
+                            {platformData?.summary?.ready ? (
+                                <CheckCircle2 className="w-4 h-4 text-green-500" />
+                            ) : (
+                                <XCircle className="w-4 h-4 text-red-500" />
+                            )}
+                            <span className={`text-sm font-medium ${platformData?.summary?.ready ? 'text-green-500' : 'text-red-500'}`}>
+                                {platformData?.summary?.ready ? 'System Ready' : 'Action Required'}
+                            </span>
+                            {platformData?.summary?.passed != null && (
+                                <span className="text-xs text-muted-foreground">
+                                    {platformData.summary.passed} passed
+                                </span>
+                            )}
+                        </div>
+                        
+                        {/* Divider */}
+                        <div className="h-4 w-px bg-border hidden sm:block" />
+                        
+                        {/* Platform Info */}
+                        <div className="flex flex-wrap items-center gap-4 text-xs">
+                            <div className="flex items-center gap-1.5">
+                                <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">OS:</span>
+                                <span className="font-medium">{platformData?.platform?.os?.id} {platformData?.platform?.os?.version}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <Tag className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">AAVA:</span>
+                                <span className="font-medium">{platformData?.platform?.project?.version || '--'}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <Box className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">Docker:</span>
+                                <span className="font-medium">{platformData?.platform?.docker?.version || '--'}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <HardDrive className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">Compose:</span>
+                                <span className="font-medium">{platformData?.platform?.compose?.version || '--'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {/* Row 2: Resource Metrics */}
+                <div className="grid grid-cols-4 divide-x divide-border">
+                    <CompactMetric
+                        title="CPU"
+                        value={metrics?.cpu?.percent != null ? `${metrics.cpu.percent.toFixed(1)}%` : '--'}
+                        subValue={metrics?.cpu?.count != null ? `${metrics.cpu.count} Cores` : undefined}
+                        icon={Cpu}
+                        color="text-blue-500"
+                    />
+                    <CompactMetric
+                        title="Memory"
+                        value={metrics?.memory?.percent != null ? `${metrics.memory.percent.toFixed(1)}%` : '--'}
+                        subValue={`${formatBytes(metrics?.memory?.used ?? 0)} / ${formatBytes(metrics?.memory?.total ?? 0)}`}
+                        icon={Activity}
+                        color="text-green-500"
+                    />
+                    <CompactMetric
+                        title="Disk"
+                        value={metrics?.disk?.percent != null ? `${metrics.disk.percent.toFixed(1)}%` : '--'}
+                        subValue={`${formatBytes(metrics?.disk?.free ?? 0)} Free`}
+                        icon={HardDrive}
+                        color="text-orange-500"
+                    />
+                    {/* Compact Directory Health */}
+                    <div className="flex items-center gap-3 px-4 py-3">
+                        <FolderCheck className={`w-4 h-4 flex-shrink-0 ${
+                            directoryHealth?.overall === 'healthy' ? 'text-green-500' : 
+                            directoryHealth?.overall === 'warning' ? 'text-yellow-500' : 'text-red-500'
+                        }`} />
+                        <div className="min-w-0">
+                            <div className="text-xs text-muted-foreground">Audio Dirs</div>
+                            <div className={`text-sm font-semibold capitalize ${
+                                directoryHealth?.overall === 'healthy' ? 'text-green-500' : 
+                                directoryHealth?.overall === 'warning' ? 'text-yellow-500' : 'text-red-500'
+                            }`}>
+                                {directoryHealth?.overall || 'Loading...'}
+                            </div>
+                        </div>
+                        {directoryHealth?.overall !== 'healthy' && directoryHealth && (
+                            <button
+                                onClick={handleFixDirectories}
+                                disabled={fixingDirectories}
+                                className="ml-2 p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                                title="Auto-Fix Issues"
+                            >
+                                <Wrench className={`w-3.5 h-3.5 ${fixingDirectories ? 'animate-spin' : ''}`} />
+                            </button>
+                        )}
+                    </div>
+                </div>
             </div>
+
+            {/* Live System Topology */}
+            <SystemTopology />
         </div>
     );
 };

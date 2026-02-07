@@ -50,6 +50,20 @@ const OpenAIProviderForm: React.FC<OpenAIProviderFormProps> = ({ config, onChang
                             placeholder="proj_123..."
                         />
                     </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Realtime API Version</label>
+                        <select
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.api_version || 'ga'}
+                            onChange={(e) => handleChange('api_version', e.target.value)}
+                        >
+                            <option value="ga">GA (recommended)</option>
+                            <option value="beta">Beta (legacy)</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">
+                            <strong>GA</strong> uses nested audio schema (no beta header). <strong>Beta</strong> uses flat schema with the <code>OpenAI-Beta</code> header. Both support <code>gpt-4o-realtime-preview</code> models.
+                        </p>
+                    </div>
                 </div>
             </div>
 

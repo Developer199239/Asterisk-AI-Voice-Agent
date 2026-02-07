@@ -219,7 +219,6 @@ func extractProviderBytesFields(fields map[string]string, metrics *CallMetrics) 
 
 	segment.ProviderBytes = atoiSafe(fields["provider_bytes"])
 	segment.EnqueuedBytes = atoiSafe(fields["enqueued_bytes"])
-	segment.Ratio = atofSafe(fields["enqueued_ratio"])
 
 	if segment.ProviderBytes > 0 {
 		metrics.ProviderBytesTotal += segment.ProviderBytes
@@ -227,7 +226,8 @@ func extractProviderBytesFields(fields map[string]string, metrics *CallMetrics) 
 	if segment.EnqueuedBytes > 0 {
 		metrics.EnqueuedBytesTotal += segment.EnqueuedBytes
 	}
-	if segment.Ratio != 0 {
+	if v := fields["enqueued_ratio"]; v != "" {
+		segment.Ratio = atofSafe(v)
 		deviation := abs(1.0 - segment.Ratio)
 		worstDeviation := abs(1.0 - metrics.WorstEnqueuedRatio)
 		if deviation > worstDeviation {

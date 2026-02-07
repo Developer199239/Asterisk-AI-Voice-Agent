@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { RefreshCw, Pause, Play, Terminal } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { parseAnsi } from '../../utils/ansi';
@@ -443,7 +444,7 @@ const LogsPage = () => {
                                 link.remove();
                             } catch (err) {
                                 console.error('Failed to export logs', err);
-                                alert('Failed to export logs');
+                                toast.error('Failed to export logs');
                             }
                         }}
                         className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3"
@@ -921,7 +922,25 @@ const LogsPage = () => {
                     </div>
                 ) : (
                     <pre className="whitespace-pre-wrap break-all">
-                        {logs ? parseAnsi(logs) : "No logs available..."}
+                        {logs ? parseAnsi(logs) : (
+                            rawLevels.length === 1 && rawLevels[0] === 'debug' ? (
+                                <span className="text-gray-400">
+                                    No debug logs found.{'\n\n'}
+                                    <span className="text-gray-500">
+                                        Debug logging may be disabled. To enable:{'\n'}
+                                        1. Set <span className="text-blue-400">LOG_LEVEL=DEBUG</span> in your .env file{'\n'}
+                                        2. Restart the container: <span className="text-blue-400">docker compose up -d --force-recreate {container}</span>
+                                    </span>
+                                </span>
+                            ) : rawLevels.length > 0 && !rawLevels.includes('info') && !rawLevels.includes('warning') && !rawLevels.includes('error') ? (
+                                <span className="text-gray-400">
+                                    No logs found for selected level(s): {rawLevels.join(', ')}{'\n\n'}
+                                    <span className="text-gray-500">
+                                        Try selecting additional levels like 'info' or 'warning'.
+                                    </span>
+                                </span>
+                            ) : "No logs available..."
+                        )}
                     </pre>
                 )}
                 <div ref={logsEndRef} />

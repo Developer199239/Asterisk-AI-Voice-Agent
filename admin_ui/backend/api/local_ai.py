@@ -506,7 +506,7 @@ async def get_backend_capabilities():
                     capabilities["stt"]["faster_whisper"] = {"available": True, "reason": "Faster-Whisper installed"}
                 else:
                     capabilities["stt"]["faster_whisper"]["reason"] = "Rebuild with INCLUDE_FASTER_WHISPER=true"
-                
+
                 # TTS backends
                 if server_caps.get("piper"):
                     capabilities["tts"]["piper"] = {"available": True, "reason": "Piper TTS installed"}

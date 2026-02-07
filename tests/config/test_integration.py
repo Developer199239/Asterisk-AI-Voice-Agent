@@ -140,10 +140,9 @@ class TestConfigLoading:
     def test_config_version_preserved(self):
         """Should preserve config_version if present."""
         config = load_config("config/ai-agent.example.yaml")
-        
-        # Config version should be set (default is 4)
-        # Note: We don't store it in AppConfig anymore, but normalization should work
         assert config is not None
+        assert hasattr(config, "config_version")
+        assert isinstance(config.config_version, int)
 
 
 class TestConfigIntegrity:

@@ -1,6 +1,6 @@
 # MCP Tool Integration
 **Status**: Shipped (v4.5.2+)  
-**Scope**: `ai-engine` (`src/`) tool calling + provider adapters + config + Admin UI
+**Scope**: `ai_engine` (`src/`) tool calling + provider adapters + config + Admin UI
 
 This document describes how AVA integrates Model Context Protocol (MCP) tools into the existing unified tool calling system. It is written to match the repo’s current architecture (ToolRegistry, per-context tool lists, provider adapters, SessionStore) and to support safe testing on a development server without impacting production baselines.
 
@@ -113,7 +113,7 @@ mcp:
   servers:
     aviation_atis:
       transport: stdio
-      # Built-in deterministic server (ai-engine container): src/mcp_servers/aviation_atis_server.py
+      # Built-in deterministic server (`ai_engine` container): src/mcp_servers/aviation_atis_server.py
       # Configure per-aerodrome extras (name/runway/frequency/advisory) via a separate YAML passed as an arg.
       command:
         - "python3"
@@ -300,8 +300,8 @@ Also add structured logs that include:
 ### Admin UI support
 
 - Admin UI exposes an MCP page for editing YAML `mcp:` config and testing servers.
-- Server “Test” and discovery run in the **ai-engine container context** via:
-  - `GET /mcp/status` (ai-engine health server)
+- Server “Test” and discovery run in the **ai_engine container context** via:
+  - `GET /mcp/status` (ai_engine health server)
   - `POST /mcp/test/{server_id}`
 
 ### Minimal smoke config

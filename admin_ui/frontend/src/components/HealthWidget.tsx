@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box, Play, Star } from 'lucide-react';
-import yaml from 'js-yaml';
+import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, AlertCircle, Box, Play } from 'lucide-react';
+import { toast } from 'sonner';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
 
@@ -62,9 +62,6 @@ export const HealthWidget = () => {
     const [pendingChanges, setPendingChanges] = useState<PendingChanges>({});
     const [applyingChanges, setApplyingChanges] = useState(false);
     const [startingLocalAI, setStartingLocalAI] = useState(false);
-    const [startingAIEngine, setStartingAIEngine] = useState(false);
-    const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
-    const [activePipeline, setActivePipeline] = useState<string | null>(null);
     const [rebuilding, setRebuilding] = useState(false);
     const [rebuildProgress, setRebuildProgress] = useState<string>('');
 
@@ -78,7 +75,7 @@ export const HealthWidget = () => {
             }, 5000);
         } catch (err: any) {
             console.error('Failed to start container', err);
-            alert(`Failed to start ${containerName}: ${err.response?.data?.detail || err.message}`);
+            toast.error(`Failed to start ${containerName}`, { description: err.response?.data?.detail || err.message });
             setStarting(false);
         }
     };
@@ -124,23 +121,6 @@ export const HealthWidget = () => {
         fetchCapabilities();
     }, []);
 
-    // Fetch default provider and active pipeline from config
-    useEffect(() => {
-        const fetchConfig = async () => {
-            try {
-                const res = await axios.get('/api/config/yaml');
-                const parsed = yaml.load(res.data.content) as any;
-                setDefaultProvider(parsed?.default_provider || null);
-                setActivePipeline(parsed?.active_pipeline || null);
-            } catch (err) {
-                console.error('Failed to fetch config', err);
-            }
-        };
-        fetchConfig();
-        // Refresh every 10 seconds
-        const interval = setInterval(fetchConfig, 10000);
-        return () => clearInterval(interval);
-    }, []);
 
     // Queue a model change (doesn't apply until user confirms)
     const queueChange = (modelType: 'stt' | 'tts' | 'llm', change: any) => {
@@ -273,7 +253,7 @@ export const HealthWidget = () => {
             }, 30000);  // 30 seconds UI timeout (API handles the actual wait)
         } catch (err: any) {
             console.error('Failed to apply changes', err);
-            alert(err.message || 'Failed to apply changes');
+            toast.error(err.message || 'Failed to apply changes');
             setApplyingChanges(false);
             setRestarting(false);
         }
@@ -942,160 +922,6 @@ export const HealthWidget = () => {
                 )}
             </ConfigCard>
 
-            {/* AI Engine Card */}
-            <ConfigCard className="p-6">
-                <div className="flex justify-between items-start mb-6">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 bg-purple-500/10 rounded-xl">
-                            <HardDrive className="w-6 h-6 text-purple-500" />
-                        </div>
-                        <div>
-                            <h3 className="font-semibold text-lg">AI Engine</h3>
-                            <div className="mt-1">{renderStatus(health.ai_engine.status)}</div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Start button when not connected */}
-                {health.ai_engine.status === 'error' && (
-                    <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                        <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
-                            AI Engine is not reachable from Admin UI. The container may still be running.
-                        </p>
-                        {health?.ai_engine?.details?.error && (
-                            <div className="mb-3 text-xs text-muted-foreground break-words">
-                                <span className="font-mono">{String(health.ai_engine.details.error)}</span>
-                            </div>
-                        )}
-                        <p className="text-xs text-muted-foreground mb-3">
-                            Tier 3/best-effort hosts may require custom health URLs. Set <span className="font-mono">HEALTH_CHECK_AI_ENGINE_URL</span> in <span className="font-mono">.env</span> (see Env page).
-                        </p>
-                        <button
-                            onClick={() => handleStartContainer('ai_engine', setStartingAIEngine)}
-                            disabled={startingAIEngine}
-                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
-                        >
-                            {startingAIEngine ? (
-                                <>
-                                    <RefreshCw className="w-4 h-4 animate-spin" />
-                                    Starting...
-                                </>
-                            ) : (
-                                <>
-                                    <Play className="w-4 h-4" />
-                                    Start AI Engine
-                                </>
-                            )}
-                        </button>
-                    </div>
-                )}
-
-                {(health.ai_engine.status === 'connected' || health.ai_engine.status === 'degraded') && (
-                    <div className="space-y-6">
-                        {health?.ai_engine?.warning && (
-                            <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-xs text-yellow-700 dark:text-yellow-300">
-                                {String(health.ai_engine.warning)}
-                            </div>
-                        )}
-                        {/* ARI Status */}
-                        <div className="flex justify-between items-center p-3 bg-muted/30 rounded-lg border border-border/50">
-                            <span className="text-sm font-medium text-muted-foreground">ARI Connection</span>
-                            <span className={`flex items-center gap-1.5 text-sm font-medium ${health.ai_engine.details.ari_connected ? "text-green-500" : "text-red-500"}`}>
-                                <span className={`w-2 h-2 rounded-full ${health.ai_engine.details.ari_connected ? "bg-green-500" : "bg-red-500"}`}></span>
-                                {health.ai_engine.details.ari_connected ? "Connected" : "Disconnected"}
-                            </span>
-                        </div>
-
-                        {/* Default Configuration */}
-                        <div>
-                            <div className="flex items-center gap-2 mb-3">
-                                <Star className="w-4 h-4 text-muted-foreground" />
-                                <h4 className="text-sm font-medium text-muted-foreground">Default Configuration</h4>
-                            </div>
-                            {activePipeline ? (
-                                <div className="flex justify-between items-center text-sm p-2 rounded hover:bg-muted/50 transition-colors">
-                                    <span>Active Pipeline</span>
-                                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-500">
-                                        {activePipeline}
-                                    </span>
-                                </div>
-                            ) : defaultProvider ? (
-                                <div className="flex justify-between items-center text-sm p-2 rounded hover:bg-muted/50 transition-colors">
-                                    <span className="capitalize">Default Provider</span>
-                                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-500 capitalize">
-                                        {defaultProvider.replace('_', ' ')}
-                                    </span>
-                                </div>
-                            ) : (
-                                <div className="text-xs text-muted-foreground italic p-2">No default configured</div>
-                            )}
-                        </div>
-
-                        {/* Pipelines */}
-                        <div>
-                            <div className="flex items-center gap-2 mb-3">
-                                <Layers className="w-4 h-4 text-muted-foreground" />
-                                <h4 className="text-sm font-medium text-muted-foreground">Active Pipelines</h4>
-                            </div>
-                            <div className="space-y-3">
-                                {health.ai_engine.details.pipelines && Object.keys(health.ai_engine.details.pipelines).length > 0 ? (
-                                    Object.entries(health.ai_engine.details.pipelines).map(([pipelineName, pipelineInfo]: [string, any]) => (
-                                        <div key={pipelineName} className="bg-muted/30 rounded-lg border border-border/50 overflow-hidden">
-                                            <div className="px-3 py-2 bg-muted/50 border-b border-border/50">
-                                                <span className="text-sm font-medium font-mono">{pipelineName}</span>
-                                            </div>
-                                            <div className="p-2 space-y-1">
-                                                {pipelineInfo?.stt && (
-                                                    <div className="flex justify-between items-center text-xs px-2 py-1">
-                                                        <span className="text-muted-foreground">STT</span>
-                                                        <span className="font-mono bg-blue-500/10 text-blue-500 px-2 py-0.5 rounded">{pipelineInfo.stt}</span>
-                                                    </div>
-                                                )}
-                                                {pipelineInfo?.llm && (
-                                                    <div className="flex justify-between items-center text-xs px-2 py-1">
-                                                        <span className="text-muted-foreground">LLM</span>
-                                                        <span className="font-mono bg-purple-500/10 text-purple-500 px-2 py-0.5 rounded">{pipelineInfo.llm}</span>
-                                                    </div>
-                                                )}
-                                                {pipelineInfo?.tts && (
-                                                    <div className="flex justify-between items-center text-xs px-2 py-1">
-                                                        <span className="text-muted-foreground">TTS</span>
-                                                        <span className="font-mono bg-green-500/10 text-green-500 px-2 py-0.5 rounded">{pipelineInfo.tts}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <div className="text-xs text-muted-foreground italic">No pipelines configured</div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Providers */}
-                        <div>
-                            <div className="flex items-center gap-2 mb-3">
-                                <Box className="w-4 h-4 text-muted-foreground" />
-                                <h4 className="text-sm font-medium text-muted-foreground">Providers</h4>
-                            </div>
-                            <div className="space-y-2">
-                                {health.ai_engine.details.providers ? (
-                                    Object.entries(health.ai_engine.details.providers).map(([name, info]: [string, any]) => (
-                                        <div key={name} className="flex justify-between items-center text-sm p-2 rounded hover:bg-muted/50 transition-colors">
-                                            <span className="capitalize">{name.replace('_', ' ')}</span>
-                                            <span className={`text-xs px-2 py-0.5 rounded-full ${info.ready ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500"}`}>
-                                                {info.ready ? "Ready" : "Not Ready"}
-                                            </span>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <div className="text-xs text-muted-foreground italic">No providers loaded</div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                )}
-            </ConfigCard>
         </div>
     );
 };

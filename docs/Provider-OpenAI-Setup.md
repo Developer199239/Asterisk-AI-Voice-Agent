@@ -46,37 +46,51 @@ The OpenAI Realtime provider is configured in `config/ai-agent.yaml`:
 ```yaml
 providers:
   openai_realtime:
-    api_key: ${OPENAI_API_KEY}
+    # API key is injected from `OPENAI_API_KEY` in `.env` (env-only; do not commit keys to YAML)
     enabled: true
     greeting: "Hi {caller_name}, I'm your AI assistant. How can I help you today?"
     
+    # API Version: "ga" (recommended) or "beta" (legacy, uses OpenAI-Beta header)
+    api_version: ga
     # Model Configuration
-    model: gpt-4o-realtime-preview-2024-12-17  # Latest Realtime model
-    temperature: 0.8                            # Creativity (0.0-1.0)
-    max_response_output_tokens: 4096            # Max output length
+    model: gpt-realtime
+    temperature: 0.6                          # Creativity (0.0-1.0)
+    max_response_output_tokens: 4096          # Max output length
     
     # Voice Configuration
-    voice: shimmer                              # Options: alloy, echo, shimmer, coral, sage, ash, verse
+    voice: alloy                              # Example voice (see OpenAI docs for availability)
     
     # Audio Configuration
-    input_audio_format: pcm16                   # Raw PCM for telephony
-    output_audio_format: pcm16
-    input_audio_sample_rate: 24000              # 24kHz for best quality
-    output_audio_sample_rate: 24000
+    # Inbound from Asterisk/transport (telephony defaults)
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    # Format sent to OpenAI (PCM16 @ 24kHz — GA minimum)
+    provider_input_encoding: linear16
+    provider_input_sample_rate_hz: 24000      # GA requires >= 24000 Hz
+    # Provider output (PCM16 @ 24kHz from OpenAI, engine transcodes downstream)
+    output_encoding: linear16
+    output_sample_rate_hz: 24000              # GA outputs at 24kHz; engine transcodes to 8kHz mulaw
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
     
     # Modalities
-    modalities: ["text", "audio"]               # REQUIRED: Both text and audio
+    response_modalities: ["audio", "text"]
     
     # Turn Detection (VAD)
-    turn_detection_enabled: true
-    turn_detection_type: server_vad             # Use OpenAI's server-side VAD
+    turn_detection:
+      type: server_vad
+      threshold: 0.5
+      silence_duration_ms: 1000
+      prefix_padding_ms: 300
 ```
 
 **Key Settings**:
-- `model`: Use latest `gpt-4o-realtime-preview` model
-- `voice`: Choose from 7 available voices (shimmer recommended for female, alloy for male)
-- `modalities`: **MUST include both "text" and "audio"** for Realtime to work
-- `turn_detection_type`: Use `server_vad` for best results
+- `api_version`: `ga` (default, recommended) or `beta` (legacy). GA removes the `OpenAI-Beta` header and uses nested audio schema
+- `model`: `gpt-realtime` (GA recommended). If your account has temporary model access constraints, use a supported fallback model for your tenant.
+- `provider_input_sample_rate_hz`: must be `24000` for GA (minimum enforced by API)
+- `output_sample_rate_hz`: `24000` — OpenAI outputs PCM16 @ 24kHz; engine transcodes to mulaw @ 8kHz downstream
+- `turn_detection.type`: use `server_vad` for turn-taking (nested under `audio.input` in GA)
+- GA mode internally manages `turn_detection.create_response`; do not add `create_response` in YAML.
 
 ### 4. Critical Turn Detection Configuration ⚠️
 
@@ -92,7 +106,6 @@ providers:
       threshold: 0.5              # Standard sensitivity
       silence_duration_ms: 1000   # 1 second before responding
       prefix_padding_ms: 300      # Capture speech before VAD trigger
-      create_response: true       # Auto-create response after speech
 ```
 
 **Why This Matters**:
@@ -165,7 +178,8 @@ Define your AI's behavior in `config/ai-agent.yaml`:
 contexts:
   demo_openai:
     greeting: "Hi {caller_name}, I'm your AI assistant. How can I help you today?"
-    profile: telephony_pcm16_24k
+    # Use a profile that exists in `config/ai-agent.yaml` (example: wideband internal processing for OpenAI Realtime).
+    profile: openai_realtime_24k
     prompt: |
       You are a helpful AI assistant for {company_name}.
       
@@ -245,7 +259,7 @@ vad:
 ```yaml
 providers:
   openai_realtime:
-    modalities: ["text", "audio"]  # BOTH required
+    response_modalities: ["audio", "text"]
 ```
 
 ### Issue: "High Latency" (>2 seconds)
@@ -265,8 +279,10 @@ providers:
 ```yaml
 providers:
   openai_realtime:
-    turn_detection_enabled: true
-    turn_detection_type: server_vad  # Use server-side detection
+    turn_detection:
+      type: server_vad
+      threshold: 0.5
+      silence_duration_ms: 1000
 ```
 
 ## Production Considerations

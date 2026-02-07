@@ -12,12 +12,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [6.0.0] - 2026-02-07
+
+### ⚠️ Breaking Changes
+
+- **OpenAI Realtime API version default changed to GA**: The default `api_version` is now `ga` (was `beta`). GA uses a nested audio schema (`audio.input.format` / `audio.output.format` with MIME types) instead of flat fields. Set `api_version: beta` explicitly to keep the old behavior.
+- **Email template autoescaping enabled**: `template_renderer.py` now uses `autoescape=True` by default. Custom HTML templates that rely on unescaped variable output may need to use Jinja2's `| safe` filter for intentionally raw HTML variables.
+
+### Added
+
+- **OpenAI Realtime GA API Support**: Full Beta-to-GA migration with `api_version` toggle (`ga` / `beta`). GA mode uses nested `audio.input.format` / `audio.output.format` with MIME types (`audio/pcm`, `audio/pcmu`, `audio/pcma`), `turn_detection` under `audio.input`, and `output_modalities` instead of `modalities`. Production-validated with `gpt-4o-realtime-preview-2024-12-17`.
+- **OpenAI Realtime `project_id`**: New config field and UI input for OpenAI project tracking via the `OpenAI-Project` header.
+- **OpenAI Realtime Voice Expansion**: 10 voices with gender labels (alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse). Removed unsupported voices (nova, fable, onyx).
+- **Email System Overhaul**: New SMTP client (`smtp_client.py`) with rate limiting and deduplication, email dispatcher with provider abstraction (Resend / SMTP / auto-detect), HTML template engine with Jinja2 sandboxed rendering, per-context `from_email` / `admin_email` overrides, subject prefix, `call_outcome` and `hangup_initiator` template variables.
+- **Email Template Editor**: Admin UI modal for editing HTML email templates with defaults, preview, and per-tool configuration.
+- **SMTP Test Email**: Admin UI button to send a test email using current SMTP settings before saving.
+- **Google Live Hangup Fallback Watchdog**: Tunable timeout-based fallback for calls where Google Live does not emit `turnComplete`. Four new config fields: `hangup_fallback_audio_idle_sec`, `hangup_fallback_min_armed_sec`, `hangup_fallback_no_audio_timeout_sec`, `hangup_fallback_turn_complete_timeout_sec`.
+- **Google Live `toolConfig`**: Explicit tool configuration in setup message; fixed empty `required` arrays that caused 1008 disconnects.
+- **NAT / Advertise Host (Milestone 23)**: `AUDIOSOCKET_ADVERTISE_HOST` and `EXTERNAL_MEDIA_ADVERTISE_HOST` environment variables for split-horizon / NAT deployments where the advertised address differs from the bind address.
+- **GPU Acceleration Path**: `docker-compose.gpu.yml` overlay, `Dockerfile.gpu` with CUDA wheel build for llama-cpp-python, preflight GPU detection (`GPU_AVAILABLE` env var), and gated GPU layer configuration.
+- **Dashboard Live System Topology**: Clickable topology nodes navigate to settings pages (Providers → `/providers`, Pipelines → `/pipelines`, Models → `/models`, Asterisk/AI Engine → `/env`). Active model cards, pipeline path highlighting, platform info bar, compact resource strip.
+- **Admin UI Modernization**: Modern confirm dialogs (replaced all `alert()` / `confirm()`), toast notifications, `AlertDialog` component, SVG T-junction arrows, hover transitions, loading spinners.
+- **EnvPage Refactor**: Tab-based UI (AI Engine / Local AI / System) with comprehensive variable coverage, Docker Build Settings section for `INCLUDE_*` build-time flags.
+- **Help Section**: In-app documentation viewer with terminal-style rendering.
+- **Models Page Redesign**: Stacked full-width layout with active model cards showing real-time usage during calls.
+- **Env Drift Detection**: "Apply Changes" now detects `.env` drift vs running containers and recomputes the apply plan. SMTP/Resend env changes correctly trigger `ai_engine` restart.
+
+### Changed
+
+- **Hangup Tool Simplified (v5.0 design)**: Removed transcript-offer guardrails from `hangup_call` tool. The AI now manages transcript offers via system prompt instead of tool-level blocking. Simpler, fewer race conditions.
+- **UI `downstream_mode` options**: Replaced invalid `burst` option with valid `file` option to match backend schema.
+- **UI `response_modalities` serialization**: Now serializes as `List[str]` (e.g., `["audio"]`) instead of a comma-separated string.
+
+### Fixed
+
+- **Google Live Hangup Before `turnComplete`**: Fixed race where hangup could fire before the provider emitted `turnComplete`, causing stuck calls.
+- **Google Live Model Normalization**: Hardened model name normalization and provider options to prevent 1008 errors from malformed setup messages.
+- **OpenAI Realtime GA Schema Stabilization**: 15+ iterative fixes for GA session.update format — MIME types, nested format objects, rate fields, turn_detection placement, delta type handling, output format enforcement.
+- **OpenAI Realtime GA `response.create`**: Removed `output_modalities` and `input` array from GA response.create (rejected by API).
+- **OpenAI Realtime GA `delta` Handling**: Fixed crash where `response.output_audio.delta` sends `delta` as a base64 string, not a dict.
+- **Email Template Save**: Fixed template persistence and `call_outcome` variable availability.
+- **Request Transcript Email**: Fixed issue where `request_transcript` used the last email address instead of the one from the current request.
+- **UI No-Op Knobs Removed**: Removed `create_response` checkbox from OpenAI Realtime form (GA hardcodes `true`), removed `continuous_input` checkbox from Google Live form (no backend field).
+- **Test Alignment**: OpenAI Realtime provider test updated for GA payload shape; hangup tool tests aligned with v5.0 simplified design.
+
+### Security
+
+- **Email Template Autoescaping**: `SandboxedEnvironment(autoescape=True)` prevents HTML injection from user-controlled template variables (e.g., caller speech transcripts). Pre-escaped keys (`transcript_html`, `transcript`) use `Markup()` to avoid double-escaping.
+
+### Migration from v5.3.1
+
+1. **OpenAI Realtime users**: If you were using the default `api_version` (previously `beta`), the new default is `ga`. To keep beta behavior, explicitly set `providers.openai_realtime.api_version: beta` in your YAML config.
+2. **Email users**: SMTP support is new. Existing Resend-only setups continue to work unchanged. To use SMTP, add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` to your `.env`.
+3. **Docker rebuild required**: Run `docker compose up -d --build --force-recreate` for all containers.
+4. **Run preflight**: Execute `./preflight.sh` to detect GPU availability and validate system state.
+
 ## [5.3.1] - 2026-02-01
 
 ### Added
 
 - **Deepgram Language Configuration**: Voice Agent language is now configurable via Admin UI and YAML (`agent_language` field). Supports 30+ languages including English variants, Spanish, French, German, Japanese, Chinese, and more.
 - **Phase Tools (Milestone 24)**: Pre-call HTTP lookups (enrichment), in-call HTTP tools (AI-invoked during conversation), and post-call webhooks (fire-and-forget automation).
+- **HTTP Tool Debug Trace Logs**: When `LOG_LEVEL=debug`, pre/in/post-call HTTP tools emit `[HTTP_TOOL_TRACE]` logs showing the resolved request (URL/headers/body), referenced variables, and a bounded response preview to speed up troubleshooting.
 - **Extension Availability Tool (AAVA-53)**: New `check_extension_status` tool to query Asterisk device state (e.g., `PJSIP/2765`) so the AI can decide whether to transfer or continue.
 - **Hangup Policy Controls**: `hangup_call` now supports a configurable policy (markers and guardrails) via `tools.hangup_call.policy`.
 - **Admin UI YAML Error Recovery**: YAML parse errors now show a banner with line/column and the Raw YAML page can still load content for quick fixes.
@@ -30,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Admin UI Log Export (AAVA-162)**: Exported debug logs now redact email addresses (`[EMAIL_REDACTED]`) to protect user privacy.
 - **Admin UI Environment Changes (AAVA-161)**: "Apply Changes" after modifying `.env` variables now uses `docker compose --force-recreate` instead of container restart, ensuring environment variable changes are actually applied (e.g., `LOG_TO_FILE`, `LOG_FILE_PATH`).
 - **In-Call HTTP Tools Config Wiring**: Align tool schema across engine/Admin UI/docs and support context allowlisting of in-call HTTP tools.
+- **Admin UI Variable Usability Hint**: HTTP tool editors now highlight variable names that can be referenced elsewhere (e.g., `{patient_id}`), reducing confusion with JSON extraction paths (e.g., `patient.id`).
 - **Google Live Transcription Stability**: Reduce duplicate transcript fragments and improve output PCM rate detection from provider mimeType.
 
 ### Security
@@ -1237,7 +1294,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v5.3.1...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v6.0.0
 [5.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.3.1
 [5.2.5]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.5
 [5.2.4]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.4

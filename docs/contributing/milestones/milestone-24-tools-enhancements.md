@@ -816,8 +816,8 @@ contexts:
 ### Production Validation ✅ COMPLETE (Jan 26, 2026)
 
 **Test Environment**:
-- Server: voiprnd.nemtclouddispatch.com
-- Webhook URL: `https://hub.cybridllc.com/webhook/whatsapp-hook`
+- Server: your-server.example.com
+- Webhook URL: `https://your-webhook.example.com/call-events`
 - Provider: google_live
 
 **Test Results**:
@@ -982,7 +982,7 @@ demo_post_call_webhook:
 
 ```log
 Generated summary for webhook: demo_post_call_webhook length=327
-Sending webhook: demo_post_call_webhook POST https://hub.cybridllc.com/webhook/whatsapp-hook
+Sending webhook: demo_post_call_webhook POST https://your-webhook.example.com/call-events
 Webhook sent successfully: demo_post_call_webhook status=200
 Post-call tool completed duration_ms=6074.03 tool=demo_post_call_webhook
 ```

@@ -22,7 +22,7 @@ Each milestone includes scope, implementation details, and verification criteria
   - Added `scripts/switch_provider.py` and Makefile targets `provider-switch`, `provider-switch-remote`, and `provider-reload` for local + server workflows.
   - Health endpoint now reports the active provider readiness so the change can be validated at a glance.
 - **Verification**:
-  - `make provider=<name> provider-reload` updates `config/ai-agent.yaml`, restarts `ai-engine`, and the next call uses the requested provider. Logged on 2025-09-22 during regression.
+- `make provider=<name> provider-reload` updates `config/ai-agent.yaml`, restarts `ai_engine`, and the next call uses the requested provider. Logged on 2025-09-22 during regression.
 
 ## Milestone 3 — Model Auto-Fetch (✅ Completed)
 
@@ -482,7 +482,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 **DevOps & CI** (AAVA-112, 113):
 
 - Optional build args to exclude unused backends (smaller images)
-- CI image size checks with budgets (ai-engine: 1.5GB, local-ai-server: 4GB)
+- CI image size checks with budgets (`ai_engine`: 1.5GB, `local_ai_server`: 4GB)
 - Enhanced Trivy vulnerability scanning for both images
 - Outdated dependency reporting
 
@@ -508,7 +508,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 - **Setup Wizard**: Visual provider configuration with API key validation
 - **Real-time Dashboard**: System metrics, container status, CPU/memory/disk
 - **Configuration Management**: Full CRUD for providers, pipelines, contexts, audio profiles
-- **Live Log Streaming**: WebSocket-based log viewer from ai-engine
+- **Live Log Streaming**: WebSocket-based log viewer from `ai_engine`
 - **Raw YAML Editor**: Monaco-based editor with syntax validation
 - **Environment Manager**: Visual editor for `.env` variables
 - **Container Control**: Start/stop/restart containers from UI
@@ -538,7 +538,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 - **Primary operator workflow**: Admin UI → Call History + Troubleshoot; CLI parity via `agent check` + `agent rca` (legacy aliases: `agent doctor`, `agent troubleshoot`; `agent demo` hidden).
 - **Observability stance**: Call History–first; `/metrics` is supported but must remain low-cardinality (BYO dashboards; no repo-shipped Prometheus/Grafana stack).
-- **Core runtime**: Asterisk 18+ ARI + Stasis app (`asterisk-ai-voice-agent`), ExternalMedia RTP default; AudioSocket supported; per-call overrides via `AI_PROVIDER` / `AI_AUDIO_PROFILE` / `AI_CONTEXT`.
+- **Core runtime**: Asterisk 18+ ARI + Stasis app (`asterisk-ai-voice-agent`), shipped config defaults to AudioSocket; ExternalMedia RTP is supported (often preferred for pipelines); per-call overrides via `AI_PROVIDER` / `AI_AUDIO_PROFILE` / `AI_CONTEXT`.
 - **Providers/pipelines in GA**: full-agent providers (`deepgram`, `openai_realtime`, `google_live`, `elevenlabs_agent`) + modular pipelines (including `local_hybrid`; adapters include Google STT/TTS and ElevenLabs TTS for pipelines).
 - **Change-safety today**: GitHub Actions CI is intentionally scoped to `staging`/`main`; CI validates Python tests + coverage baseline, plus regression hardening checks (CLI/Admin UI build + Docker build sanity). Live Asterisk/PSTN calls are not part of CI by default.
 
@@ -589,7 +589,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 **Performance**:
 
-- GPU acceleration for local-ai-server
+- GPU acceleration for `local_ai_server`
 - Streaming latency optimizations (<500ms target)
 - Memory usage profiling and optimization
 - Parallel tool execution

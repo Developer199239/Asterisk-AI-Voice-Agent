@@ -9,6 +9,7 @@ import os
 from unittest.mock import AsyncMock, patch, MagicMock
 from dataclasses import dataclass
 import aiohttp
+import json
 
 from src.tools.http.in_call_lookup import (
     InCallHTTPTool, InCallHTTPConfig, create_in_call_http_tool
@@ -75,6 +76,17 @@ class TestInCallHTTPConfig:
 
 class TestInCallHTTPTool:
     """Tests for InCallHTTPTool."""
+
+    def _make_content(self, chunks):
+        class _Content:
+            def __init__(self, parts):
+                self._parts = list(parts)
+
+            async def iter_chunked(self, _size):
+                for part in self._parts:
+                    yield part
+
+        return _Content(chunks)
     
     @pytest.fixture
     def tool_config(self):
@@ -168,16 +180,18 @@ class TestInCallHTTPTool:
     async def test_successful_lookup(self, tool_config, execution_context):
         """Test successful HTTP lookup with response parsing."""
         tool = InCallHTTPTool(tool_config)
-        
+
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.headers = {"Content-Length": "100"}
-        mock_response.json = AsyncMock(return_value={
+        payload = {
             "data": {
                 "available": True,
                 "next_slot": "2026-01-30 10:00",
             }
-        })
+        }
+        mock_response.charset = "utf-8"
+        mock_response.content = self._make_content([json.dumps(payload).encode("utf-8")])
         
         # Create proper async context manager for request
         mock_request_cm = AsyncMock()
@@ -215,7 +229,8 @@ class TestInCallHTTPTool:
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.headers = {"Content-Length": "100"}
-        mock_response.json = AsyncMock(return_value=response_data)
+        mock_response.charset = "utf-8"
+        mock_response.content = self._make_content([json.dumps(response_data).encode("utf-8")])
         
         mock_request_cm = AsyncMock()
         mock_request_cm.__aenter__ = AsyncMock(return_value=mock_response)

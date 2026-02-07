@@ -130,10 +130,23 @@ class OpenAIToolAdapter:
             logger.error(f"Failed to parse function arguments: {e}", arguments=arguments_str)
             parameters = {}
         
+        parameter_keys: List[str] = []
+        if isinstance(parameters, dict):
+            parameter_keys = sorted([str(k) for k in parameters.keys()])
+
         logger.info(
-            f"🔧 OpenAI tool call: {function_name}({parameters})",
+            "OpenAI tool call received",
             call_id=context.get("call_id"),
             function_call_id=function_call_id,
+            tool=function_name,
+            parameter_keys=parameter_keys,
+        )
+        logger.debug(
+            "OpenAI tool call parameters",
+            call_id=context.get("call_id"),
+            function_call_id=function_call_id,
+            tool=function_name,
+            parameters=parameters,
         )
         
         # Get tool from registry
@@ -164,11 +177,20 @@ class OpenAIToolAdapter:
         # Execute tool
         try:
             result = await tool.execute(parameters, exec_context)
+            sanitized = sanitize_tool_result_for_json_string(result)
             logger.info(
-                f"✅ Tool {function_name} executed: {result.get('status')}",
+                "Tool executed",
                 call_id=context.get("call_id"),
                 function_call_id=function_call_id,
-                message=result.get("message"),
+                tool=function_name,
+                status=sanitized.get("status"),
+            )
+            logger.debug(
+                "Tool execution result",
+                call_id=context.get("call_id"),
+                function_call_id=function_call_id,
+                tool=function_name,
+                result=sanitized,
             )
             result['call_id'] = function_call_id
             result['function_name'] = function_name
@@ -254,18 +276,34 @@ class OpenAIToolAdapter:
             tool_message = safe_result.get('message', '')
             ai_should_speak = safe_result.get('ai_should_speak', True)
             
-            # Use EXACT same format as greeting which reliably produces audio
-            response_config = {
-                "modalities": ["text", "audio"],
-                "input": [],  # Empty input to avoid context confusion (matches greeting)
-            }
+            # Check if using GA API (modalities not supported in response.create for GA)
+            is_ga = context.get('is_ga', True)  # Default to GA for safety
+            
+            # Build response config based on API version
+            response_config = {}
+            
+            # Only add modalities and input for Beta API
+            # GA API only accepts instructions in response.create
+            if not is_ga:
+                response_config["modalities"] = ["text", "audio"]
+                response_config["input"] = []  # Empty input to avoid context confusion
+                logger.debug("Using Beta API format for response.create (with modalities)")
+            else:
+                logger.debug("Using GA API format for response.create (no modalities)")
             
             # If tool has a message and AI should speak, add direct instruction to speak it
+            # Instructions work in both GA and Beta modes
             if tool_message and ai_should_speak:
                 # Use direct instruction format like greeting: "Please say: {text}"
                 response_config["instructions"] = f"Please say the following to the user: {tool_message}"
                 logger.info(f"✅ Added speech instructions for tool response", 
                            message_preview=tool_message[:50] if tool_message else "")
+            else:
+                # Keep response.create explicit in GA mode to avoid sending an empty response object.
+                response_config["instructions"] = (
+                    "Please respond briefly to the user based on the latest tool result."
+                )
+                logger.debug("Using fallback instructions for tool response")
             
             response_event = {
                 "type": "response.create",

@@ -480,6 +480,8 @@ class Engine:
         # Cache for called_number variables (DIALED_NUMBER, __FROM_DID) from ChannelVarSet events
         # These are set early in dialplan but may not be available via GET when StasisStart fires
         self._called_number_cache: Dict[str, str] = {}  # channel_id -> called_number
+        # Track channels that have entered Asterisk but not yet Stasis (for UI pre-stasis indicator)
+        self._pre_stasis_channels: Set[str] = set()
         # Health server runner
         self._health_runner: Optional[web.AppRunner] = None
         # MCP client manager (experimental)
@@ -538,7 +540,7 @@ class Engine:
             # Initialize in-call HTTP tools from config
             in_call_tools_config = getattr(self.config, 'in_call_tools', None)
             if in_call_tools_config:
-                tool_registry.initialize_in_call_http_tools_from_config(in_call_tools_config)
+                tool_registry.initialize_in_call_http_tools_from_config(in_call_tools_config, cache_key="global")
             logger.info("✅ Tool calling system initialized", tool_count=len(tool_registry.list_tools()))
         except Exception as e:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
@@ -2121,6 +2123,9 @@ class Engine:
         channel_id = channel.get('id')
         channel_name = channel.get('name', '')
         args = event.get('args', [])
+        
+        # Remove from pre-stasis tracking (channel is now in Stasis)
+        self._pre_stasis_channels.discard(channel_id)
         
         logger.info("🎯 HYBRID ARI - Channel analysis", 
                    channel_id=channel_id,
@@ -4006,6 +4011,8 @@ class Engine:
             channel_id = channel.get("id")
             if not channel_id:
                 return
+            # Remove from pre-stasis tracking if present
+            self._pre_stasis_channels.discard(channel_id)
             await self._handle_outbound_channel_destroyed(event)
             logger.info("Channel destroyed", channel_id=channel_id)
             await self._cleanup_call(channel_id)
@@ -4063,12 +4070,29 @@ class Engine:
             variable = event.get("variable")
             value = event.get("value")
             channel_id = channel.get("id")
+            channel_name = channel.get("name", "")
             logger.debug(
                 "Channel variable set",
                 channel_id=channel_id,
                 variable=variable,
                 value=value,
             )
+            
+            # Track pre-stasis channels for UI indicator (Asterisk PBX blinking)
+            # Only track SIP/PJSIP channels (not Local, AudioSocket, or ExternalMedia)
+            if channel_id and channel_name:
+                is_caller_channel = (
+                    channel_name.startswith("SIP/") or 
+                    channel_name.startswith("PJSIP/")
+                )
+                if is_caller_channel and channel_id not in self._pre_stasis_channels:
+                    self._pre_stasis_channels.add(channel_id)
+                    logger.debug(
+                        "Pre-stasis channel tracked",
+                        channel_id=channel_id,
+                        channel_name=channel_name,
+                        pre_stasis_count=len(self._pre_stasis_channels),
+                    )
             
             # Cache called_number variables - these are set early in dialplan
             # but may not be available via GET when StasisStart fires (timing race)
@@ -4328,6 +4352,14 @@ class Engine:
             except Exception:
                 pass
 
+            # Persist call_outcome onto the session BEFORE running any end-of-call tools,
+            # so email_summary/request_transcript templates can reliably reference it.
+            try:
+                session.call_outcome = call_outcome
+                await self.session_store.upsert_call(session)
+            except Exception:
+                logger.debug("Failed to persist call_outcome onto session", call_id=call_id, exc_info=True)
+
             # Stop any active streaming playback.
             try:
                 await self.streaming_playback_manager.stop_streaming_playback(call_id)
@@ -4541,7 +4573,9 @@ class Engine:
                                             call_id
                                         )
                                         # Send asynchronously (don't block cleanup)
-                                        asyncio.create_task(transcript_tool._send_transcript_async(email_data, call_id))
+                                        asyncio.create_task(
+                                            transcript_tool._send_transcript_async(email_data, call_id, transcript_tool_config)
+                                        )
                                         logger.info(
                                             "📧 Sent end-of-call transcript",
                                             call_id=call_id,
@@ -11225,7 +11259,10 @@ class Engine:
                         if isinstance(in_call_http_tools_cfg, dict) and in_call_http_tools_cfg:
                             try:
                                 from src.tools.registry import tool_registry
-                                tool_registry.initialize_in_call_http_tools_from_config(in_call_http_tools_cfg)
+                                tool_registry.initialize_in_call_http_tools_from_config(
+                                    in_call_http_tools_cfg,
+                                    cache_key=f"context:{session.context_name}",
+                                )
                                 logger.debug(
                                     "Registered per-context in-call HTTP tools",
                                     call_id=call_id,
@@ -12051,6 +12088,7 @@ class Engine:
                 "audio_transport": self.config.audio_transport,
                 "active_calls": len(active_sessions),
                 "active_sessions": len(active_sessions),
+                "asterisk_channels": len(self._pre_stasis_channels) + len(active_sessions),  # Pre-stasis + in-stasis
                 "pending_timers": pending_timers,
                 "uptime_seconds": uptime_seconds,
                 "active_playbacks": 0,

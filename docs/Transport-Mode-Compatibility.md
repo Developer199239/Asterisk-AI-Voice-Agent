@@ -17,7 +17,7 @@ Note: AudioSocket is currently validated with `audiosocket.format: slin`.
 
 ### `downstream_mode` (v5.1.4+)
 
-`downstream_mode` controls how the **ai-engine** delivers TTS back to the caller:
+`downstream_mode` controls how the **ai_engine** service delivers TTS back to the caller:
 
 - `downstream_mode: file`  
   Always uses file playback (Asterisk Playback via Announcer). This is the **most validated** option for modular pipelines.
@@ -44,7 +44,7 @@ downstream_mode: file  # recommended + most validated for pipelines
 - **Provider Mode**: Pipeline (modular adapters)
 - **Playback Method**: File-based (PlaybackManager)
 - **Audio Flow**:
-  - Caller audio → RTP Server → ai-engine → Pipeline STT
+  - Caller audio → RTP Server → ai_engine → Pipeline STT
   - TTS bytes → File → Asterisk Announcer channel → Caller
   - **No bridge conflict**: RTP ingestion separate from file playback
 
@@ -69,7 +69,7 @@ downstream_mode: file  # recommended + most validated for pipelines
 **Configuration**:
 ```yaml
 audio_transport: audiosocket
-active_pipeline: ""  # Disable pipelines
+active_pipeline: null  # Optional: no default pipeline selection
 default_provider: deepgram  # or openai_realtime
 downstream_mode: stream
 ```
@@ -79,7 +79,7 @@ downstream_mode: stream
 - **Provider Mode**: Full Agent (monolithic)
 - **Playback Method**: Streaming (StreamingPlaybackManager)
 - **Audio Flow**:
-  - Caller audio → AudioSocket channel → ai-engine → Provider
+  - Caller audio → AudioSocket channel → ai_engine → Provider
   - Provider TTS stream → StreamingPlaybackManager → AudioSocket → Caller
   - **No Announcer**: Streaming playback doesn't create extra channels
 
@@ -113,7 +113,7 @@ downstream_mode: file  # recommended + most validated for pipelines
 - **Provider Mode**: Pipeline (modular adapters)
 - **Playback Method**: File-based (PlaybackManager)
 - **Audio Flow**:
-  - Caller audio → AudioSocket channel → ai-engine → Pipeline STT
+  - Caller audio → AudioSocket channel → ai_engine → Pipeline STT
   - TTS bytes → File → Asterisk Announcer channel → Caller
   - **Bridge coexistence**: Both AudioSocket and Announcer channels work together
 
@@ -201,7 +201,7 @@ pipelines:
 ```yaml
 # config/ai-agent.yaml
 audio_transport: audiosocket
-active_pipeline: ""  # Disable pipelines
+active_pipeline: null  # Optional: no default pipeline selection
 default_provider: deepgram
 downstream_mode: stream
 

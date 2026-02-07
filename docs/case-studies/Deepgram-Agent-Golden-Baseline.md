@@ -122,7 +122,7 @@ exten => s,n,Hangup()
 ## Test Call Transcript (v4.3.0)
 
 ```text
-AI: Hi HAIDER JARRAL, I'm Ava with the Deepgram voice demo. 
+AI: Hi CALLER NAME, I'm Ava with the Deepgram voice demo. 
     Ask me anything about the Asterisk AI Voice Agent project.
 
 Caller: Tell me about the latency of this project.
@@ -137,17 +137,17 @@ Caller: Okay. Can you email me the transcript of this conversation?
 
 AI: Please provide your email address, and I will send you the transcript.
 
-Caller: My email is heather khalil at hot mail dot com.
+Caller: My email is caller at example dot com.
 
 AI: I have h-e-a-t-h-e-r-k-h-a-l-i-l at hotmail dot com. Is that correct?
 
-Caller: No. It's h a i d e r k h a l i l at hot mail dot com.
+Caller: No. It's c a l l e r at hot mail dot com.
 
-AI: I have h-a-i-d-e-r-k-h-a-l-i-l at hotmail dot com. Is that correct?
+AI: I have c-a-l-l-e-r at hotmail dot com. Is that correct?
 
 Caller: That is correct. Yes.
 
-AI: Perfect! I'll send the complete transcript to haiderkhalil at hotmail dot com 
+AI: Perfect! I'll send the complete transcript to caller at example dot com 
     when our call ends.
 
 [Tool calls executed:]
@@ -223,7 +223,7 @@ Asterisk
 ### ✅ Email Delivery
 
 - **Summary Email**: Sent successfully with call metadata
-- **Transcript Email**: Sent to user-provided email (haiderkhalil@hotmail.com)
+- **Transcript Email**: Sent to user-provided email (caller@example.com)
 - **End-of-Call Timing**: Both emails sent during call cleanup
 - **Complete History**: Full conversation included in both emails
 

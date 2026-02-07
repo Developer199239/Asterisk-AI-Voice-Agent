@@ -71,9 +71,10 @@ def _chunk_audio(audio_bytes: bytes, encoding: str, sample_rate: int, chunk_ms: 
 def _make_ws_headers(options: Dict[str, Any]) -> Iterable[tuple[str, str]]:
     headers = [
         ("Authorization", f"Bearer {options['api_key']}"),
-        ("OpenAI-Beta", "realtime=v1"),
         ("User-Agent", "Asterisk-AI-Voice-Agent/1.0"),
     ]
+    if options.get("api_version", "ga").lower() == "beta":
+        headers.append(("OpenAI-Beta", "realtime=v1"))
     if options.get("organization"):
         headers.append(("OpenAI-Organization", options["organization"]))
     if options.get("project"):
@@ -587,13 +588,16 @@ class OpenAILLMAdapter(LLMComponent):
             max_size=8 * 1024 * 1024,
         )
 
+        session_dict: Dict[str, Any] = {
+            "model": merged["realtime_model"],
+            "modalities": merged.get("modalities"),
+            "instructions": merged.get("system_prompt") or context.get("system_prompt"),
+        }
+        if merged.get("api_version", "ga").lower() != "beta":
+            session_dict["type"] = "realtime"
         session_payload = {
             "type": "session.create",
-            "session": {
-                "model": merged["realtime_model"],
-                "modalities": merged.get("modalities"),
-                "instructions": merged.get("system_prompt") or context.get("system_prompt"),
-            },
+            "session": session_dict,
         }
         await websocket.send(json.dumps(session_payload))
 
@@ -679,6 +683,10 @@ class OpenAILLMAdapter(LLMComponent):
             "timeout_sec": float(runtime_options.get("timeout_sec", self._pipeline_defaults.get("timeout_sec", self._default_timeout))),
             "use_realtime": runtime_options.get("use_realtime", self._pipeline_defaults.get("use_realtime", False)),
             "tools": runtime_options.get("tools", self._pipeline_defaults.get("tools", [])),
+            "api_version": runtime_options.get(
+                "api_version",
+                self._pipeline_defaults.get("api_version", getattr(self._provider_defaults, "api_version", "ga")),
+            ),
         }
 
         # If a pipeline swap left provider-specific LLM settings behind (e.g., Groq base_url + llama model),

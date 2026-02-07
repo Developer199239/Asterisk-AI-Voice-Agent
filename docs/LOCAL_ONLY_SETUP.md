@@ -145,7 +145,7 @@ pipelines:
 # Start only local services (no cloud dependencies)
 docker compose up -d local_ai_server ai_engine admin_ui
 
-# Verify local-ai-server is healthy
+# Verify `local_ai_server` is healthy
 docker logs local_ai_server | grep -E "STT|LLM|TTS"
 ```
 

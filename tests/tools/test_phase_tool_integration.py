@@ -197,7 +197,7 @@ class TestPostCallToolExecution:
         mock_request_cm.__aenter__ = AsyncMock(return_value=mock_response)
         mock_request_cm.__aexit__ = AsyncMock(return_value=None)
         
-        def capture_request(*args, **kwargs):
+        def capture_request(*_args, **kwargs):
             nonlocal captured_data
             captured_data = kwargs.get("data")
             return mock_request_cm
@@ -261,7 +261,7 @@ class TestPostCallToolExecution:
             assert field in payload, f"Missing required field: {field}"
     
     @pytest.mark.asyncio
-    async def test_global_postcall_tool_definition(self, postcall_context):
+    async def test_global_postcall_tool_definition(self):
         """Test that global post-call tools are properly configured."""
         tool = create_webhook_tool("global_webhook", {
             "enabled": True,

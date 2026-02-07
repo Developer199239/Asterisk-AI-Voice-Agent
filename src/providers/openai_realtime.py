@@ -361,14 +361,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._reset_output_meter()
 
         url = self._build_ws_url()
+        use_beta = getattr(self.config, 'api_version', 'ga').lower() == 'beta'
         headers = [
             ("Authorization", f"Bearer {self.config.api_key}"),
-            ("OpenAI-Beta", "realtime=v1"),
         ]
+        if use_beta:
+            headers.append(("OpenAI-Beta", "realtime=v1"))
         if self.config.organization:
             headers.append(("OpenAI-Organization", self.config.organization))
+        if self.config.project_id:
+            headers.append(("OpenAI-Project", self.config.project_id))
 
-        logger.info("Connecting to OpenAI Realtime", url=url, call_id=call_id)
+        logger.info("Connecting to OpenAI Realtime", url=url, call_id=call_id, api_version="beta" if use_beta else "ga")
         try:
             self.websocket = await websockets.connect(url, additional_headers=headers)
         except Exception:
@@ -588,7 +592,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 'ari_client': getattr(self, '_ari_client', None),
                 'config': getattr(self, '_full_config', None),
                 'allowed_tools': self._allowed_tools,
-                'websocket': self.websocket
+                'websocket': self.websocket,
+                'is_ga': self._is_ga,  # Pass API version to adapter for correct response.create format
             }
             
             # Execute tool via adapter
@@ -623,7 +628,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             {
                                 "type": "session.update",
                                 "event_id": f"sess-tools-none-{uuid.uuid4()}",
-                                "session": {"tool_choice": "none"},
+                                "session": self._ga_session_type({"tool_choice": "none"}),
                             }
                         )
                     except Exception:
@@ -633,23 +638,21 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             exc_info=True,
                         )
 
-                    output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
-                    if "audio" not in output_modalities:
-                        output_modalities = ["audio"] + output_modalities
-
                     try:
+                        farewell_response: Dict[str, Any] = {
+                            "instructions": (
+                                "Say the following sentence to the user exactly, then stop. "
+                                f"Do not call any tools: {farewell_text}"
+                            ),
+                        }
+                        if not self._is_ga:
+                            farewell_response["modalities"] = self._response_modalities
+                            farewell_response["input"] = []
                         await self._send_json(
                             {
                                 "type": "response.create",
                                 "event_id": f"resp-farewell-{uuid.uuid4()}",
-                                "response": {
-                                    "modalities": output_modalities,
-                                    "instructions": (
-                                        "Say the following sentence to the user exactly, then stop. "
-                                        f"Do not call any tools: {farewell_text}"
-                                    ),
-                                    "input": [],
-                                },
+                                "response": farewell_response,
                             }
                         )
                         self._pending_response = True
@@ -657,7 +660,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             "🎤 Farewell response.create sent (tools disabled)",
                             call_id=self._call_id,
                             farewell_preview=farewell_text[:80],
-                            modalities=output_modalities,
+                            modalities=farewell_response.get("modalities"),
                         )
                     except Exception:
                         logger.debug("Failed to send farewell response.create", call_id=self._call_id, exc_info=True)
@@ -776,6 +779,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     # Internal helpers
     # ------------------------------------------------------------------ #
 
+    @property
+    def _is_ga(self) -> bool:
+        """True when using the GA Realtime API (no beta header)."""
+        return getattr(self.config, 'api_version', 'ga').lower() != 'beta'
+
+    def _ga_session_type(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        """Inject session type for GA API if not already present."""
+        if self._is_ga and "type" not in session:
+            session["type"] = "realtime"
+        return session
+
+    @property
+    def _modalities_key(self) -> str:
+        """GA uses 'output_modalities'; Beta uses 'modalities'."""
+        return "output_modalities" if self._is_ga else "modalities"
+
+    @property
+    def _response_modalities(self) -> list:
+        """GA only accepts ['audio'] or ['text']; Beta accepts ['audio','text']."""
+        if self._is_ga:
+            return ["audio"]
+        return [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
+
     def _build_ws_url(self) -> str:
         base = (self.config.base_url or "").strip()
         # Fallback if unresolved placeholders exist or scheme isn't ws/wss
@@ -792,78 +818,118 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_modalities = ["audio"]
 
         # CRITICAL FIX: Use output_encoding (what OpenAI sends), NOT target_encoding (downstream format)
-        # OpenAI should send in the configured output_encoding, which we then transcode to target_encoding.
-        # Server expects a string token for output_audio_format (e.g., 'pcm16', 'g711_ulaw').
         output_enc = (self.config.output_encoding or "linear16").lower()
-        if output_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            out_fmt = "g711_ulaw"
-        else:
-            out_fmt = "pcm16"
-        
-        # Map provider_input_encoding to OpenAI's input_audio_format
-        # provider_input_encoding = what WE send TO OpenAI
         input_enc = (getattr(self.config, "provider_input_encoding", None) or "linear16").lower()
-        if input_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            in_fmt = "g711_ulaw"
-        elif input_enc in ("alaw", "g711_alaw"):
-            in_fmt = "g711_alaw"
-        else:
-            in_fmt = "pcm16"
-        # Do not mutate local provider format state here; wait for session ACK/events
 
-        session: Dict[str, Any] = {
-            # Model is selected via URL; keep accepted keys here
-            "modalities": output_modalities,
-            "input_audio_format": in_fmt,
-            "output_audio_format": out_fmt,
-            "voice": self.config.voice,
-            # Enable user speech transcription for full call transcripts
-            # This works with server_vad - transcription runs asynchronously
-            "input_audio_transcription": {
-                "model": "whisper-1"
-            },
-        }
+        if self._is_ga:
+            # GA API: exact schema from official OpenAI API reference (session.created example)
+            # - format objects under audio.input.format / audio.output.format with type + rate
+            # - turn_detection under audio.input.turn_detection
+            # - transcription under audio.input.transcription
+            # - voice under audio.output.voice
+            # - MIME format types: audio/pcm (24kHz), audio/pcmu (8kHz), audio/pcma (8kHz)
+            def _ga_audio_fmt(enc: str) -> str:
+                enc = enc.lower()
+                if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    return "audio/pcmu"
+                elif enc in ("alaw", "g711_alaw"):
+                    return "audio/pcma"
+                return "audio/pcm"
+
+            in_fmt = _ga_audio_fmt(input_enc)
+            out_fmt = _ga_audio_fmt(output_enc)
+            # Rate is tied to format: audio/pcm=24000, audio/pcmu=8000, audio/pcma=8000
+            in_rate = 8000 if in_fmt in ("audio/pcmu", "audio/pcma") else 24000
+            out_rate = 8000 if out_fmt in ("audio/pcmu", "audio/pcma") else 24000
+
+            # Build audio.input with turn_detection nested inside
+            audio_input: Dict[str, Any] = {
+                "format": {"type": in_fmt, "rate": in_rate},
+                "transcription": {"model": "whisper-1"},
+            }
+            # turn_detection lives under audio.input per official GA schema
+            td_config: Dict[str, Any] = {
+                "type": "server_vad",
+                "create_response": True,
+                "interrupt_response": True,
+            }
+            if getattr(self.config, "turn_detection", None):
+                try:
+                    td = self.config.turn_detection
+                    td_config.update({
+                        "type": td.type,
+                        "silence_duration_ms": td.silence_duration_ms,
+                        "threshold": td.threshold,
+                        "prefix_padding_ms": td.prefix_padding_ms,
+                    })
+                except Exception:
+                    logger.debug("Failed to build turn_detection for GA", call_id=self._call_id, exc_info=True)
+            audio_input["turn_detection"] = td_config
+
+            # GA: always request audio/pcm @ 24kHz output — engine transcodes downstream
+            # (audio/pcmu output may be silently ignored by some models)
+            session: Dict[str, Any] = {
+                "type": "realtime",
+                "output_modalities": ["audio"],
+                "audio": {
+                    "input": audio_input,
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "voice": self.config.voice,
+                    },
+                },
+            }
+        else:
+            # Beta API: flat format strings (pcm16, g711_ulaw, g711_alaw)
+            def _beta_audio_fmt(enc: str) -> str:
+                enc = enc.lower()
+                if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    return "g711_ulaw"
+                elif enc in ("alaw", "g711_alaw"):
+                    return "g711_alaw"
+                return "pcm16"
+
+            in_fmt = _beta_audio_fmt(input_enc)
+            out_fmt = _beta_audio_fmt(output_enc)
+
+            session: Dict[str, Any] = {
+                "modalities": output_modalities,
+                "input_audio_format": in_fmt,
+                "output_audio_format": out_fmt,
+                "voice": self.config.voice,
+                "input_audio_transcription": {
+                    "model": "whisper-1"
+                },
+            }
+            # Beta: turn_detection at session level
+            if getattr(self.config, "turn_detection", None):
+                try:
+                    td = self.config.turn_detection
+                    session["turn_detection"] = {
+                        "type": td.type,
+                        "silence_duration_ms": td.silence_duration_ms,
+                        "threshold": td.threshold,
+                        "prefix_padding_ms": td.prefix_padding_ms,
+                    }
+                    logger.info(
+                        "Using custom turn_detection config from YAML",
+                        call_id=self._call_id,
+                        threshold=td.threshold,
+                        silence_ms=td.silence_duration_ms,
+                    )
+                except Exception:
+                    logger.debug("Failed to include turn_detection in session.update", call_id=self._call_id, exc_info=True)
+        
+        # GA API requires session type
+        self._ga_session_type(session)
         
         # Optional: Add temperature control (affects response creativity and consistency)
         if hasattr(self.config, 'temperature') and self.config.temperature is not None:
             session["temperature"] = self.config.temperature
-            logger.debug(
-                "OpenAI temperature configured",
-                call_id=self._call_id,
-                temperature=self.config.temperature
-            )
         
         # Optional: Add max response tokens (encourages complete audio responses)
         if hasattr(self.config, 'max_response_output_tokens') and self.config.max_response_output_tokens:
             session["max_response_output_tokens"] = self.config.max_response_output_tokens
-            logger.debug(
-                "OpenAI max_response_output_tokens configured",
-                call_id=self._call_id,
-                max_tokens=self.config.max_response_output_tokens
-            )
-        
-        # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
-        # Only override if explicitly configured in YAML
-        # OpenAI's defaults are tuned for their audio processing pipeline
-        if getattr(self.config, "turn_detection", None):
-            try:
-                td = self.config.turn_detection
-                session["turn_detection"] = {
-                    "type": td.type,
-                    "silence_duration_ms": td.silence_duration_ms,
-                    "threshold": td.threshold,
-                    "prefix_padding_ms": td.prefix_padding_ms,
-                }
-                logger.info(
-                    "Using custom turn_detection config from YAML",
-                    call_id=self._call_id,
-                    threshold=td.threshold,
-                    silence_ms=td.silence_duration_ms,
-                )
-            except Exception:
-                logger.debug("Failed to include turn_detection in session.update", call_id=self._call_id, exc_info=True)
-        # If not configured, DON'T SET IT - let OpenAI use optimized defaults
-        # This prevents us from interfering with OpenAI's audio processing
 
         # Build instructions with audio-forcing prefix
         # CRITICAL: Per OpenAI community reports (Dec 2024), the Realtime API has a bug
@@ -926,33 +992,41 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             call_id=self._call_id
         )
         
-        # Disable VAD before greeting
-        disable_vad_payload: Dict[str, Any] = {
-            "type": "session.update",
-            "event_id": f"sess-disable-vad-{uuid.uuid4()}",
-            "session": {
-                "turn_detection": None  # Disable automatic VAD
+        # Disable VAD before greeting (Beta only - GA doesn't accept turn_detection)
+        if not self._is_ga:
+            disable_vad_payload: Dict[str, Any] = {
+                "type": "session.update",
+                "event_id": f"sess-disable-vad-{uuid.uuid4()}",
+                "session": self._ga_session_type({
+                    "turn_detection": None  # Disable automatic VAD
+                })
             }
-        }
-        await self._send_json(disable_vad_payload)
+            await self._send_json(disable_vad_payload)
         
         # Small delay to ensure VAD disable is processed
         await asyncio.sleep(0.1)
 
-        # REVERT TO WORKING FORMAT - voice is a SESSION parameter, NOT response parameter
-        # The working version used simpler instructions without voice in response.create
-        output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
-        
-        response_payload: Dict[str, Any] = {
-            "type": "response.create",
-            "event_id": f"resp-{uuid.uuid4()}",
-            "response": {
-                "modalities": output_modalities,
-                # Simple instruction that was working before
-                "instructions": f"Please greet the user with the following: {greeting}",
-                "input": [],  # Empty input to avoid distractions
-            },
-        }
+        # Build response.create payload
+        if self._is_ga:
+            # GA: minimal response object — modalities set via session, not response
+            response_payload: Dict[str, Any] = {
+                "type": "response.create",
+                "event_id": f"resp-{uuid.uuid4()}",
+                "response": {
+                    "instructions": f"Please greet the user with the following: {greeting}",
+                },
+            }
+        else:
+            # Beta: include modalities and input
+            response_payload: Dict[str, Any] = {
+                "type": "response.create",
+                "event_id": f"resp-{uuid.uuid4()}",
+                "response": {
+                    "modalities": self._response_modalities,
+                    "instructions": f"Please greet the user with the following: {greeting}",
+                    "input": [],
+                },
+            }
         
         logger.info(
             "🎤 Sending greeting response.create",
@@ -1011,43 +1085,51 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 logger.debug("Failed to build turn_detection config, using OpenAI defaults", 
                            call_id=self._call_id, exc_info=True)
         
-        # If no config in YAML, let OpenAI use its defaults by not setting the field
-        # This is better than hardcoding default values
-        session_update = {}
-        if turn_detection_config:
-            session_update["turn_detection"] = turn_detection_config
+        # GA API does not accept turn_detection in session.update; skip entirely
+        if self._is_ga:
+            logger.info(
+                "🔊 GA mode: skipping turn_detection re-enable (server manages VAD)",
+                call_id=self._call_id,
+            )
         else:
-            # Use OpenAI's default server_vad configuration
-            session_update["turn_detection"] = {"type": "server_vad"}
-        
-        enable_vad_payload: Dict[str, Any] = {
-            "type": "session.update",
-            "event_id": f"sess-enable-vad-{uuid.uuid4()}",
-            "session": session_update
-        }
-        
-        await self._send_json(enable_vad_payload)
-        logger.info(
-            "🔊 Turn_detection re-enabled after greeting",
-            call_id=self._call_id,
-            config=turn_detection_config if turn_detection_config else "OpenAI defaults"
-        )
+            # If no config in YAML, let OpenAI use its defaults by not setting the field
+            # This is better than hardcoding default values
+            session_update = {}
+            if turn_detection_config:
+                session_update["turn_detection"] = turn_detection_config
+            else:
+                # Use OpenAI's default server_vad configuration
+                session_update["turn_detection"] = {"type": "server_vad"}
+            
+            enable_vad_payload: Dict[str, Any] = {
+                "type": "session.update",
+                "event_id": f"sess-enable-vad-{uuid.uuid4()}",
+                "session": self._ga_session_type(session_update)
+            }
+            
+            await self._send_json(enable_vad_payload)
+            logger.info(
+                "🔊 Turn_detection re-enabled after greeting",
+                call_id=self._call_id,
+                config=turn_detection_config if turn_detection_config else "OpenAI defaults"
+            )
 
     async def _ensure_response_request(self):
         if self._pending_response or not self.websocket or self.websocket.state.name != "OPEN":
             return
 
+        resp_obj: Dict[str, Any] = {}
+        if not self._is_ga:
+            resp_obj[self._modalities_key] = self._response_modalities
+        resp_obj["metadata"] = {"call_id": self._call_id}
+        if self.config.instructions:
+            resp_obj["instructions"] = self.config.instructions
+
         response_payload: Dict[str, Any] = {
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
-            "response": {
-                # Use 'modalities' which is accepted by server
-                "modalities": [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"],
-                "metadata": {"call_id": self._call_id},
-            },
+            "response": resp_obj,
         }
-        if self.config.instructions:
-            response_payload["response"]["instructions"] = self.config.instructions
 
         await self._send_json(response_payload)
         self._pending_response = True
@@ -1451,9 +1533,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Modern event naming variants (top-level types)
         if event_type == "response.output_audio.delta":
+            # GA: audio is in event["delta"] as a base64 string, or event["audio"]
+            delta = event.get("delta")
             audio_b64 = (
                 event.get("audio")
-                or (event.get("delta") or {}).get("audio")
+                or (delta if isinstance(delta, str) else (delta or {}).get("audio"))
             )
             if audio_b64:
                 await self._handle_output_audio(audio_b64)
@@ -2159,12 +2243,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 return
             try:
                 url = self._build_ws_url()
+                use_beta = getattr(self.config, 'api_version', 'ga').lower() == 'beta'
                 headers = [
                     ("Authorization", f"Bearer {self.config.api_key}"),
-                    ("OpenAI-Beta", "realtime=v1"),
                 ]
+                if use_beta:
+                    headers.append(("OpenAI-Beta", "realtime=v1"))
                 if self.config.organization:
                     headers.append(("OpenAI-Organization", self.config.organization))
+                if self.config.project_id:
+                    headers.append(("OpenAI-Project", self.config.project_id))
                 logger.info("Reconnecting to OpenAI Realtime", call_id=call_id, attempt=attempt)
                 self.websocket = await websockets.connect(url, additional_headers=headers)
                 # Reset minor state
@@ -2554,12 +2642,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             )
         except Exception:
             pass
+        if self._is_ga:
+            pcm_session = {"audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}}}}
+        else:
+            pcm_session = {"output_audio_format": "pcm16"}
         payload: Dict[str, Any] = {
             "type": "session.update",
             "event_id": f"sess-{uuid.uuid4()}",
-            "session": {
-                "output_audio_format": "pcm16",
-            },
+            "session": self._ga_session_type(pcm_session),
         }
         try:
             await self._send_json(payload)

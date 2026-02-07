@@ -289,31 +289,84 @@ class InCallHTTPTool(Tool):
                             "message": self.config.error_message,
                         }
                     
-                    # Parse JSON response
-                    body_text = ""
+                    # Read body with enforced size limit (do not trust Content-Length header).
+                    body_bytes = b""
                     try:
-                        data = await response.json()
-                        if debug_enabled(logger):
-                            try:
-                                body_text = json.dumps(data, ensure_ascii=False)
-                            except Exception:
-                                body_text = str(data)
-                    except Exception as e:
+                        max_bytes = int(self.config.max_response_size_bytes or 0)
+                        if max_bytes <= 0:
+                            logger.warning(
+                                "Invalid max_response_size_bytes for %s: %s",
+                                self.config.name,
+                                self.config.max_response_size_bytes,
+                            )
+                            return {
+                                "status": "error",
+                                "message": self.config.error_message,
+                            }
+
+                        total = 0
+                        chunks: list[bytes] = []
+                        async for chunk in response.content.iter_chunked(8192):
+                            if not chunk:
+                                continue
+                            total += len(chunk)
+                            if total > max_bytes:
+                                logger.warning(
+                                    "Response too large: %s max=%s",
+                                    self.config.name,
+                                    max_bytes,
+                                )
+                                if debug_enabled(logger):
+                                    elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                                    logger.debug(
+                                        "[HTTP_TOOL_TRACE] response_too_large in_call tool=%s status=%s elapsed_ms=%s body_len=%s max=%s call_id=%s",
+                                        self.config.name,
+                                        getattr(response, "status", None),
+                                        elapsed_ms,
+                                        total,
+                                        max_bytes,
+                                        context.call_id,
+                                    )
+                                return {
+                                    "status": "error",
+                                    "message": self.config.error_message,
+                                }
+                            chunks.append(chunk)
+
+                        body_bytes = b"".join(chunks)
+                        charset = getattr(response, "charset", None) or "utf-8"
+                        body_text = body_bytes.decode(charset, errors="replace")
+                        data = json.loads(body_text)
+                    except json.JSONDecodeError as e:
                         logger.warning(f"Failed to parse JSON response: {self.config.name} error={e}")
                         if debug_enabled(logger):
                             elapsed_ms = round((time.monotonic() - started) * 1000, 2)
-                            raw_text = ""
-                            try:
-                                raw_text = await response.text()
-                            except Exception:
-                                raw_text = ""
                             logger.debug(
-                                "[HTTP_TOOL_TRACE] response_invalid_json in_call tool=%s elapsed_ms=%s body_preview=%s call_id=%s error=%s",
+                                "[HTTP_TOOL_TRACE] response_invalid_json in_call tool=%s elapsed_ms=%s body_len=%s body_preview=%s call_id=%s error=%s",
                                 self.config.name,
                                 elapsed_ms,
-                                preview(raw_text),
+                                len(body_bytes or b""),
+                                preview(body_bytes),
                                 context.call_id,
                                 str(e),
+                            )
+                        return {
+                            "status": "error",
+                            "message": self.config.error_message,
+                        }
+                    except Exception as e:
+                        logger.warning(f"Failed to read response: {self.config.name} error={e}")
+                        if debug_enabled(logger):
+                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                            logger.debug(
+                                "[HTTP_TOOL_TRACE] response_read_failed in_call tool=%s status=%s elapsed_ms=%s error=%s body_len=%s body_preview=%s call_id=%s",
+                                self.config.name,
+                                getattr(response, "status", None),
+                                elapsed_ms,
+                                str(e),
+                                len(body_bytes or b""),
+                                preview(body_bytes),
+                                context.call_id,
                             )
                         return {
                             "status": "error",
