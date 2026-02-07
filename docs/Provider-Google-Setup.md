@@ -332,6 +332,9 @@ providers:
     response_modalities: audio
 ```
 
+> Model lifecycle note: Google Live currently publishes native-audio models with `preview` version labels.  
+> Keep `llm_model` pinned to a known working preview version unless Google announces a GA Live model family.
+
 ## Features
 
 ### 1. Barge-In (Interruption)
@@ -376,7 +379,7 @@ Conversation context is maintained automatically:
 |---------------|---------|
 | **Audio format** | Requires 16kHz PCM input (resampling needed for 8kHz) |
 | **WebSocket** | Persistent connection (manage reconnection) |
-| **API availability** | Preview/beta (check quota limits) |
+| **API availability** | Live API is still preview-labeled (use currently supported preview model IDs) |
 | **Latency** | Network-dependent (test in your environment) |
 
 ## Cost Comparison

@@ -111,6 +111,14 @@ class GoogleLiveProvider(AIProviderInterface):
     - Input: 8kHz µ-law → 16kHz PCM16 → Gemini Live API
     - Output: 24kHz PCM16 from Gemini → 8kHz µ-law/PCM16 → AudioSocket
     """
+    DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+    LEGACY_LIVE_MODEL_MAP = {
+        "gemini-2.5-flash-native-audio-latest": DEFAULT_LIVE_MODEL,
+        # Older preview aliases that are no longer available.
+        "gemini-live-2.5-flash-preview": DEFAULT_LIVE_MODEL,
+        "gemini-2.0-flash-live-001": DEFAULT_LIVE_MODEL,
+        "gemini-2.0-flash-live-001-preview-09-2025": DEFAULT_LIVE_MODEL,
+    }
 
     def __init__(
         self,
@@ -612,9 +620,30 @@ class GoogleLiveProvider(AIProviderInterface):
         Normalize model identifiers for compatibility with older UI/config options.
         """
         m = (model or "").strip()
-        if m == "gemini-2.5-flash-native-audio-latest":
-            return "gemini-2.5-flash-native-audio-preview-12-2025"
-        return m or "gemini-2.5-flash-native-audio-preview-12-2025"
+        if m.startswith("models/"):
+            m = m[7:]
+
+        if not m:
+            return GoogleLiveProvider.DEFAULT_LIVE_MODEL
+
+        if m in GoogleLiveProvider.LEGACY_LIVE_MODEL_MAP:
+            replacement = GoogleLiveProvider.LEGACY_LIVE_MODEL_MAP[m]
+            logger.warning(
+                "Google Live model alias/deprecated value configured; remapping",
+                configured_model=m,
+                replacement_model=replacement,
+            )
+            return replacement
+
+        if "native-audio" in m:
+            return m
+
+        logger.warning(
+            "Google Live model is not a native-audio Live model; falling back to default",
+            configured_model=m,
+            fallback_model=GoogleLiveProvider.DEFAULT_LIVE_MODEL,
+        )
+        return GoogleLiveProvider.DEFAULT_LIVE_MODEL
 
     async def _send_setup(self, context: Optional[Dict[str, Any]]) -> None:
         """Send session setup message to Gemini Live API."""

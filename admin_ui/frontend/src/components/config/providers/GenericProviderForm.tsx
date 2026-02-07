@@ -57,8 +57,18 @@ const PROVIDER_OPTIONS: Record<string, Record<string, string[]>> = {
         voice: ['alloy', 'echo', 'shimmer', 'ash', 'ballad', 'coral', 'sage', 'verse'],
     },
     google_live: {
-        model: ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'],
-        llm_model: ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+        model: [
+            'gemini-2.5-flash-native-audio-preview-12-2025',
+            'gemini-2.5-flash-native-audio-preview-09-2025',
+            'gemini-2.5-flash-preview-native-audio-dialog',
+            'gemini-2.5-flash-exp-native-audio-thinking-dialog',
+        ],
+        llm_model: [
+            'gemini-2.5-flash-native-audio-preview-12-2025',
+            'gemini-2.5-flash-native-audio-preview-09-2025',
+            'gemini-2.5-flash-preview-native-audio-dialog',
+            'gemini-2.5-flash-exp-native-audio-thinking-dialog',
+        ],
         tts_voice_name: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
     },
 };

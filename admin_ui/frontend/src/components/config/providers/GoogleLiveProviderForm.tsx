@@ -5,6 +5,20 @@ interface GoogleLiveProviderFormProps {
     onChange: (newConfig: any) => void;
 }
 
+const DEFAULT_LIVE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
+const LEGACY_LIVE_MODEL_MAP: Record<string, string> = {
+    'gemini-2.5-flash-native-audio-latest': DEFAULT_LIVE_MODEL,
+    'gemini-live-2.5-flash-preview': DEFAULT_LIVE_MODEL,
+    'gemini-2.0-flash-live-001': DEFAULT_LIVE_MODEL,
+    'gemini-2.0-flash-live-001-preview-09-2025': DEFAULT_LIVE_MODEL,
+};
+const SUPPORTED_LIVE_MODELS = [
+    'gemini-2.5-flash-native-audio-preview-12-2025',
+    'gemini-2.5-flash-native-audio-preview-09-2025',
+    'gemini-2.5-flash-preview-native-audio-dialog',
+    'gemini-2.5-flash-exp-native-audio-thinking-dialog',
+];
+
 const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config, onChange }) => {
     const handleChange = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
@@ -12,10 +26,16 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
 
     const selectedModel = (() => {
         const raw = (config.llm_model || '').toString().trim();
-        if (raw === 'gemini-2.5-flash-native-audio-latest') {
-            return 'gemini-2.5-flash-native-audio-preview-12-2025';
+        if (!raw) {
+            return DEFAULT_LIVE_MODEL;
         }
-        return raw || 'gemini-2.5-flash-native-audio-preview-12-2025';
+        if (raw in LEGACY_LIVE_MODEL_MAP) {
+            return LEGACY_LIVE_MODEL_MAP[raw];
+        }
+        if (raw.includes('native-audio')) {
+            return raw;
+        }
+        return DEFAULT_LIVE_MODEL;
     })();
 
     return (
@@ -36,7 +56,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                         placeholder="wss://generativelanguage.googleapis.com/ws/..."
                     />
                     <p className="text-xs text-muted-foreground">
-                        Google Live API WebSocket endpoint for bidirectional streaming.
+                        Google Live bidirectional endpoint. Keep `v1beta` unless Google publishes a stable `v1` Live WS path.
                     </p>
                 </div>
             </div>
@@ -52,15 +72,22 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             value={selectedModel}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
-                            <optgroup label="Native Audio Models (Live API) - 24 Languages">
+                            <optgroup label="Preview Models (Currently Supported)">
                                 <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
                                 <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
+                            </optgroup>
+                            <optgroup label="Preview Models (Experimental)">
                                 <option value="gemini-2.5-flash-preview-native-audio-dialog">Gemini 2.5 Flash Native Audio Dialog (Preview)</option>
                                 <option value="gemini-2.5-flash-exp-native-audio-thinking-dialog">Gemini 2.5 Flash Native Audio Thinking Dialog (Experimental)</option>
                             </optgroup>
+                            {!SUPPORTED_LIVE_MODELS.includes(selectedModel) && (
+                                <optgroup label="Custom">
+                                    <option value={selectedModel}>{selectedModel}</option>
+                                </optgroup>
+                            )}
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            Supports 24 languages with seamless multilingual switching. 30 HD voices available.
+                            Google Live models are preview-labeled at this time (no separate GA Live model family yet).
                             <a href="https://ai.google.dev/gemini-api/docs/live-guide" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
                         </p>
                     </div>
