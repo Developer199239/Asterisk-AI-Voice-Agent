@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Plus, Trash2, Edit2, ArrowRight, MoveUp, MoveDown } from 'lucide-react';
 
 interface PipelinesConfigProps {
@@ -7,6 +9,7 @@ interface PipelinesConfigProps {
 }
 
 const PipelinesConfig: React.FC<PipelinesConfigProps> = ({ config, onChange }) => {
+    const { confirm } = useConfirmDialog();
     const [editingPipeline, setEditingPipeline] = useState<string | null>(null);
     const [pipelineForm, setPipelineForm] = useState<any>({});
     const [isNewPipeline, setIsNewPipeline] = useState(false);
@@ -35,7 +38,7 @@ const PipelinesConfig: React.FC<PipelinesConfigProps> = ({ config, onChange }) =
         const { name, ...pipelineData } = pipelineForm;
 
         if (isNewPipeline && newPipelines[name]) {
-            alert('Pipeline already exists');
+            toast.error('Pipeline already exists');
             return;
         }
 
@@ -44,8 +47,14 @@ const PipelinesConfig: React.FC<PipelinesConfigProps> = ({ config, onChange }) =
         setEditingPipeline(null);
     };
 
-    const handleDeletePipeline = (name: string) => {
-        if (!confirm(`Are you sure you want to delete pipeline "${name}"?`)) return;
+    const handleDeletePipeline = async (name: string) => {
+        const confirmed = await confirm({
+            title: 'Delete Pipeline?',
+            description: `Are you sure you want to delete pipeline "${name}"?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newPipelines = { ...config };
         delete newPipelines[name];
         onChange(newPipelines);

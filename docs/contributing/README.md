@@ -24,7 +24,7 @@ Welcome to Asterisk AI Voice Agent development! This directory contains everythi
 
 ### Technical Deep Dives
 
-- **[Architecture Deep Dive](architecture-deep-dive.md)** - Complete technical architecture (v4.2)
+- **[Architecture Deep Dive](architecture-deep-dive.md)** - Complete technical architecture
 - **[Schema Reference](schema-reference.md)** - Tool schema formats by provider
 - **[API Reference](api-reference.md)** - Core API documentation
 
@@ -109,7 +109,7 @@ For end-user and operator documentation, see the parent [/docs](../) directory:
 
 ## 📅 Project Status
 
-- **Current Version:** 4.2
+- **Current Version:** 6.0.0
 - **Active Branch:** `develop`
 - **Roadmap:** See [/docs/ROADMAP.md](../ROADMAP.md)
 - **Community Features:** GitHub Issues + Linear integration

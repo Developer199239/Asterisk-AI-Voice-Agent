@@ -22,9 +22,10 @@
 
 - **[Production Deployment](PRODUCTION_DEPLOYMENT.md)** - Security, networking, and best practices
 - **[Monitoring Guide](MONITORING_GUIDE.md)** - Prometheus + Grafana setup
+- **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - `.env` reference (secrets + wiring)
 - **[Supported Platforms](SUPPORTED_PLATFORMS.md)** - Tiered OS support matrix
 - **[Local Profiles](LOCAL_PROFILES.md)** - Recommended local model/runtime profiles
-- **[CLI Tools Reference](../cli/README.md)** - Agent command-line utilities
+- **[CLI Tools Reference](CLI_TOOLS_GUIDE.md)** - Agent command-line utilities
 
 ## 💻 Developer Documentation
 

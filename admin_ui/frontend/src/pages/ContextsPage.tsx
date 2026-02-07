@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, MessageSquare, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
@@ -10,6 +12,7 @@ import { Modal } from '../components/ui/Modal';
 import ContextForm from '../components/config/ContextForm';
 
 const ContextsPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -156,7 +159,7 @@ const ContextsPage = () => {
             setPendingApply(true);
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         }
     };
 
@@ -170,11 +173,13 @@ const ContextsPage = () => {
             const status = response.data?.status ?? (response.status === 200 ? 'success' : undefined);
 
             if (status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message} Do you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
-                    setRestartingEngine(false);
                     return handleApplyChanges(true);
                 }
                 return;
@@ -182,7 +187,7 @@ const ContextsPage = () => {
 
             if (status === 'degraded') {
                 setPendingApply(false);
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 fetchConfig();
                 return;
             }
@@ -192,13 +197,13 @@ const ContextsPage = () => {
                 // MCP reload deferred due to active calls).
                 setApplyMethod('restart');
                 setPendingApply(true);
-                alert(response.data.message || 'Hot reload applied partially; restart AI Engine to fully apply changes.');
+                toast.warning(response.data.message || 'Hot reload applied partially; restart AI Engine to fully apply changes.');
                 return;
             }
 
             if (status === 'success') {
                 setPendingApply(false);
-                alert(applyMethod === 'hot_reload'
+                toast.success(applyMethod === 'hot_reload'
                     ? 'AI Engine hot reloaded! Changes apply to new calls.'
                     : 'AI Engine restarted! Changes are now active.');
                 // Refresh config/tool availability after apply (best-effort)
@@ -210,13 +215,13 @@ const ContextsPage = () => {
             // completed so the UI doesn't get stuck showing "Apply Changes" forever.
             if (response.status === 200) {
                 setPendingApply(false);
-                alert('AI Engine updated. Please verify with a test call and logs.');
+                toast.success('AI Engine updated. Please verify with a test call and logs.');
                 fetchConfig();
                 return;
             }
         } catch (error: any) {
             const action = applyMethod === 'hot_reload' ? 'hot reload' : 'restart';
-            alert(`Failed to ${action} AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error(`Failed to ${action} AI Engine`, { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
@@ -249,7 +254,13 @@ const ContextsPage = () => {
     };
 
     const handleDeleteContext = async (name: string) => {
-        if (!confirm(`Are you sure you want to delete context "${name}"?`)) return;
+        const confirmed = await confirm({
+            title: 'Delete Context?',
+            description: `Are you sure you want to delete context "${name}"?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newContexts = { ...config.contexts };
         delete newContexts[name];
         await saveConfig({ ...config, contexts: newContexts });
@@ -262,11 +273,11 @@ const ContextsPage = () => {
         if (contextForm.provider) {
             const provider = config.providers?.[contextForm.provider];
             if (!provider) {
-                alert(`Provider '${contextForm.provider}' does not exist.`);
+                toast.error(`Provider '${contextForm.provider}' does not exist.`);
                 return;
             }
             if (provider.enabled === false) {
-                alert(`Provider '${contextForm.provider}' is disabled. Please enable it or select another provider.`);
+                toast.error(`Provider '${contextForm.provider}' is disabled. Please enable it or select another provider.`);
                 return;
             }
         }
@@ -275,7 +286,7 @@ const ContextsPage = () => {
         if (contextForm.pipeline) {
             const pipeline = config.pipelines?.[contextForm.pipeline];
             if (!pipeline) {
-                alert(`Pipeline '${contextForm.pipeline}' does not exist.\n\nPlease select a valid pipeline or leave blank to use the active pipeline.`);
+                toast.error(`Pipeline '${contextForm.pipeline}' does not exist. Please select a valid pipeline or leave blank to use the active pipeline.`);
                 return;
             }
         }
@@ -293,7 +304,7 @@ const ContextsPage = () => {
         });
 
         if (isNewContext && newConfig.contexts[name]) {
-            alert('Context already exists');
+            toast.error('Context already exists');
             return;
         }
 
@@ -344,12 +355,18 @@ const ContextsPage = () => {
                         {applyMethod === 'hot_reload' ? 'Changes saved. Apply to make them active.' : 'Changes saved. Restart required to make them active.'}
                     </div>
                     <button
-                        onClick={() => {
+                        onClick={async () => {
                             const msg = applyMethod === 'hot_reload'
                                 ? 'Apply changes via hot reload now? Active calls should continue, new calls use updated config.'
                                 : 'Restart AI Engine now? This may disconnect active calls.';
-                            if (window.confirm(msg)) {
-                                handleApplyChanges(false);
+                            const confirmed = await confirm({
+                                title: applyMethod === 'hot_reload' ? 'Apply Changes?' : 'Restart AI Engine?',
+                                description: msg,
+                                confirmText: applyMethod === 'hot_reload' ? 'Apply' : 'Restart',
+                                variant: 'default'
+                            });
+                            if (confirmed) {
+                                await handleApplyChanges(false);
                             }
                         }}
                         disabled={restartingEngine}

@@ -90,7 +90,7 @@ const Sidebar = () => {
                 </SidebarGroup>
 
                 <SidebarGroup title="Advanced Settings">
-                    <SidebarItem to="/vad" icon={Activity} label="VAD" />
+                    <SidebarItem to="/vad" icon={Activity} label="Voice Activity Detection" />
                     <SidebarItem to="/streaming" icon={Zap} label="Streaming" />
                     <SidebarItem to="/llm" icon={Brain} label="LLM Defaults" />
                     <SidebarItem to="/transport" icon={Radio} label="Audio Transport" />

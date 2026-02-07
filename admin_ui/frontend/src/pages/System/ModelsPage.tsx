@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Globe, Mic, Volume2, Brain, AlertTriangle } from 'lucide-react';
-import { ConfigSection } from '../../components/ui/ConfigSection';
+import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle, Cpu, Terminal, Settings, Play } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { ConfigCard } from '../../components/ui/ConfigCard';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import axios from 'axios';
 
 interface ModelInfo {
@@ -45,7 +46,20 @@ interface DownloadProgress {
     current_file: string;
 }
 
+interface ActiveModels {
+    stt: { backend: string; path: string; loaded: boolean };
+    tts: { backend: string; path: string; loaded: boolean };
+    llm: { path: string; loaded: boolean };
+}
+
+interface AvailableModels {
+    stt: Record<string, { name: string; path: string }[]>;
+    tts: Record<string, { name: string; path: string }[]>;
+    llm: { name: string; path: string }[];
+}
+
 const ModelsPage = () => {
+    const { confirm } = useConfirmDialog();
     const [catalog, setCatalog] = useState<{ stt: ModelInfo[]; tts: ModelInfo[]; llm: ModelInfo[] }>({ stt: [], tts: [], llm: [] });
     const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
     const [languageNames, setLanguageNames] = useState<Record<string, string>>({});
@@ -57,6 +71,14 @@ const ModelsPage = () => {
     const [selectedTab, setSelectedTab] = useState<'installed' | 'stt' | 'tts' | 'llm'>('installed');
     const [selectedRegion, setSelectedRegion] = useState<string>('all');
     const [toasts, setToasts] = useState<Toast[]>([]);
+    
+    // Active models state (from Local AI Server)
+    const [activeModels, setActiveModels] = useState<ActiveModels | null>(null);
+    const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
+    const [serverStatus, setServerStatus] = useState<'connected' | 'error' | 'loading'>('loading');
+    const [restarting, setRestarting] = useState(false);
+    const [pendingChanges, setPendingChanges] = useState<{ stt?: string; tts?: string; llm?: string }>({});
+    const [startingServer, setStartingServer] = useState(false);
 
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         const id = Date.now();
@@ -138,7 +160,61 @@ const ModelsPage = () => {
 
     useEffect(() => {
         fetchModels();
+        fetchActiveModels();
     }, []);
+
+    // Fetch active models from Local AI Server health
+    const fetchActiveModels = async () => {
+        try {
+            const healthRes = await axios.get('/api/system/health');
+            const localAI = healthRes.data?.local_ai_server;
+            if (localAI?.status === 'connected') {
+                setServerStatus('connected');
+                setActiveModels({
+                    stt: {
+                        backend: localAI.details?.models?.stt?.backend || 'unknown',
+                        path: localAI.details?.models?.stt?.path || '',
+                        loaded: localAI.details?.models?.stt?.loaded || false
+                    },
+                    tts: {
+                        backend: localAI.details?.models?.tts?.backend || 'unknown',
+                        path: localAI.details?.models?.tts?.path || '',
+                        loaded: localAI.details?.models?.tts?.loaded || false
+                    },
+                    llm: {
+                        path: localAI.details?.models?.llm?.path || '',
+                        loaded: localAI.details?.models?.llm?.loaded || false
+                    }
+                });
+            } else {
+                setServerStatus('error');
+            }
+            
+            // Also fetch available models for switching
+            const modelsRes = await axios.get('/api/local-ai/models');
+            if (modelsRes.data) {
+                setAvailableModels(modelsRes.data);
+            }
+        } catch (err) {
+            setServerStatus('error');
+        }
+    };
+
+    // Handle model switch
+    const handleModelSwitch = async (modelType: 'stt' | 'tts' | 'llm', backend: string, modelPath: string) => {
+        return axios.post('/api/local-ai/switch', {
+            model_type: modelType,
+            backend: backend,
+            model_path: modelPath
+        });
+    };
+
+    // Get model name from path
+    const getModelName = (path: string) => {
+        if (!path) return 'None';
+        const parts = path.split('/');
+        return parts[parts.length - 1] || path;
+    };
 
     const handleDownload = async (model: ModelInfo, type: 'stt' | 'tts' | 'llm') => {
         if (!model.download_url) {
@@ -208,9 +284,13 @@ const ModelsPage = () => {
     };
 
     const handleDelete = async (model: InstalledModel) => {
-        if (!confirm(`Are you sure you want to delete "${model.name}"? This cannot be undone.`)) {
-            return;
-        }
+        const confirmed = await confirm({
+            title: 'Delete Model?',
+            description: `Are you sure you want to delete "${model.name}"? This cannot be undone.`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
 
         setDeletingModel(model.name);
         try {
@@ -289,83 +369,322 @@ const ModelsPage = () => {
                 ))}
             </div>
 
-            <ConfigSection
-                title="Models"
-                description="Download and manage STT, TTS, and LLM models for the Local AI Server"
-                icon={<HardDrive className="w-5 h-5" />}
-            >
-                {/* Header with tabs and refresh */}
-                <div className="flex justify-between items-center mb-6">
-                    <div className="flex gap-2">
-                        <button
-                            onClick={() => setSelectedTab('installed')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                selectedTab === 'installed'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            Installed ({installedModels.length})
-                        </button>
-                        <button
-                            onClick={() => setSelectedTab('stt')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                                selectedTab === 'stt'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            <Mic className="w-4 h-4" /> STT ({catalog.stt.length})
-                        </button>
-                        <button
-                            onClick={() => setSelectedTab('tts')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                                selectedTab === 'tts'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            <Volume2 className="w-4 h-4" /> TTS ({catalog.tts.length})
-                        </button>
-                        <button
-                            onClick={() => setSelectedTab('llm')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                                selectedTab === 'llm'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted hover:bg-muted/80'
-                            }`}
-                        >
-                            <Brain className="w-4 h-4" /> LLM ({catalog.llm.length})
-                        </button>
+            {/* Local AI Server Section - Compact Header */}
+            <div className="rounded-lg border border-border bg-card">
+                <div className="flex justify-between items-center px-4 py-3 border-b border-border">
+                    <div className="flex items-center gap-3">
+                        <Cpu className="w-5 h-5 text-blue-500" />
+                        <h3 className="font-semibold">Local AI Server</h3>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex items-center gap-1 ${
+                            serverStatus === 'connected' ? 'bg-green-500/10 text-green-500' : 
+                            serverStatus === 'error' ? 'bg-red-500/10 text-red-500' : 'bg-yellow-500/10 text-yellow-500'
+                        }`}>
+                            {serverStatus === 'connected' ? (
+                                <><CheckCircle2 className="w-3 h-3" /> Connected</>
+                            ) : serverStatus === 'error' ? (
+                                <><XCircle className="w-3 h-3" /> Error</>
+                            ) : (
+                                'Loading...'
+                            )}
+                        </span>
                     </div>
-                    <div className="flex gap-2 items-center">
-                        {selectedTab !== 'installed' && selectedTab !== 'llm' && (
-                            <select
-                                value={selectedRegion}
-                                onChange={e => setSelectedRegion(e.target.value)}
-                                className="px-3 py-2 rounded-md border border-input bg-background text-sm"
-                            >
-                                <option value="all">All Regions</option>
-                                {getUniqueRegions().map(region => (
-                                    <option key={region} value={region}>
-                                        {regionNames[region] || region}
-                                    </option>
-                                ))}
-                            </select>
-                        )}
-                        <button
-                            onClick={fetchModels}
-                            disabled={loading}
-                            className="p-2 rounded-md bg-muted hover:bg-muted/80 transition-colors"
+                    <div className="flex gap-1">
+                        <Link
+                            to="/env"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                            title="Configure"
                         >
-                            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                            <Settings className="w-4 h-4" />
+                        </Link>
+                        <button
+                            onClick={async () => {
+                                const confirmed = await confirm({
+                                    title: 'Restart Local AI Server?',
+                                    description: 'Are you sure you want to restart the Local AI Server? This will temporarily interrupt model inference.',
+                                    confirmText: 'Restart',
+                                    variant: 'destructive'
+                                });
+                                if (!confirmed) return;
+                                setRestarting(true);
+                                axios.post('/api/system/containers/local_ai_server/restart')
+                                    .then(() => setTimeout(() => { fetchActiveModels(); setRestarting(false); }, 5000))
+                                    .catch(() => setRestarting(false));
+                            }}
+                            disabled={restarting}
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                            title="Restart"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${restarting ? 'animate-spin' : ''}`} />
                         </button>
+                        <Link
+                            to="/logs?container=local_ai_server"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                            title="View Logs"
+                        >
+                            <Terminal className="w-4 h-4" />
+                        </Link>
                     </div>
                 </div>
 
-                {/* Download Progress Bar */}
-                {downloadingModel && downloadProgress && (
-                    <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                {serverStatus === 'connected' && activeModels && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
+                        {/* STT Model */}
+                        <div className="p-4 rounded-lg border border-border bg-muted/30">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Mic className="w-4 h-4 text-blue-500" />
+                                <span className="text-sm font-medium">STT</span>
+                                <span className={`ml-auto px-2 py-0.5 rounded text-xs ${
+                                    activeModels.stt.loaded ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'
+                                }`}>
+                                    {activeModels.stt.loaded ? 'Loaded' : 'Not Loaded'}
+                                </span>
+                            </div>
+                            <select 
+                                className="w-full text-xs p-2 rounded border border-border bg-background"
+                                value={pendingChanges.stt || `${activeModels.stt.backend}:${activeModels.stt.path}`}
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    setPendingChanges(prev => ({ ...prev, stt: val }));
+                                }}
+                                disabled={restarting}
+                            >
+                                {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => (
+                                    <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
+                                        {models.map((m: any) => (
+                                            <option key={m.path} value={`${backend}:${m.path}`}>{m.name}</option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                            </select>
+                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.stt.path}>
+                                {getModelName(activeModels.stt.path)}
+                            </div>
+                        </div>
+
+                        {/* LLM Model */}
+                        <div className="p-4 rounded-lg border border-border bg-muted/30">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Brain className="w-4 h-4 text-purple-500" />
+                                <span className="text-sm font-medium">LLM</span>
+                                <span className={`ml-auto px-2 py-0.5 rounded text-xs ${
+                                    activeModels.llm.loaded ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'
+                                }`}>
+                                    {activeModels.llm.loaded ? 'Loaded' : 'Not Loaded'}
+                                </span>
+                            </div>
+                            <select 
+                                className="w-full text-xs p-2 rounded border border-border bg-background"
+                                value={pendingChanges.llm || activeModels.llm.path}
+                                onChange={(e) => {
+                                    setPendingChanges(prev => ({ ...prev, llm: e.target.value }));
+                                }}
+                                disabled={restarting}
+                            >
+                                {availableModels?.llm?.map((m: any) => (
+                                    <option key={m.path} value={m.path}>{m.name}</option>
+                                ))}
+                            </select>
+                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.llm.path}>
+                                {getModelName(activeModels.llm.path)}
+                            </div>
+                        </div>
+
+                        {/* TTS Model */}
+                        <div className="p-4 rounded-lg border border-border bg-muted/30">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Volume2 className="w-4 h-4 text-green-500" />
+                                <span className="text-sm font-medium">TTS</span>
+                                <span className={`ml-auto px-2 py-0.5 rounded text-xs ${
+                                    activeModels.tts.loaded ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'
+                                }`}>
+                                    {activeModels.tts.loaded ? 'Loaded' : 'Not Loaded'}
+                                </span>
+                            </div>
+                            <select 
+                                className="w-full text-xs p-2 rounded border border-border bg-background"
+                                value={pendingChanges.tts || `${activeModels.tts.backend}:${activeModels.tts.path}`}
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    setPendingChanges(prev => ({ ...prev, tts: val }));
+                                }}
+                                disabled={restarting}
+                            >
+                                {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => (
+                                    <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
+                                        {models.map((m: any) => (
+                                            <option key={m.path} value={`${backend}:${m.path}`}>{m.name}</option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                            </select>
+                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.tts.path}>
+                                {getModelName(activeModels.tts.path)}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {serverStatus === 'error' && (
+                    <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                        <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
+                            Local AI Server is not reachable. The container may still be running.
+                        </p>
+                        <button
+                            onClick={() => {
+                                setStartingServer(true);
+                                axios.post('/api/system/containers/local_ai_server/start')
+                                    .then(() => setTimeout(() => { fetchActiveModels(); setStartingServer(false); }, 5000))
+                                    .catch(() => setStartingServer(false));
+                            }}
+                            disabled={startingServer}
+                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+                        >
+                            {startingServer ? (
+                                <>
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Starting...
+                                </>
+                            ) : (
+                                <>
+                                    <Play className="w-4 h-4" />
+                                    Start Local AI Server
+                                </>
+                            )}
+                        </button>
+                    </div>
+                )}
+
+                {/* Apply Changes Button */}
+                {Object.keys(pendingChanges).length > 0 && (
+                    <div className="mt-4 flex gap-2">
+                        <button
+                            onClick={async () => {
+                                setRestarting(true);
+                                try {
+                                    for (const [type, value] of Object.entries(pendingChanges)) {
+                                        if (type === 'llm') {
+                                            await handleModelSwitch('llm', '', value);
+                                        } else {
+                                            const [backend, ...pathParts] = value.split(':');
+                                            await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'));
+                                        }
+                                    }
+                                    showToast('Model switch requested. Server will restart.', 'success');
+                                    setPendingChanges({});
+                                    setTimeout(() => {
+                                        fetchActiveModels();
+                                        setRestarting(false);
+                                    }, 15000);
+                                } catch (err: any) {
+                                    showToast(`Failed to switch model: ${err.response?.data?.detail || err.message}`, 'error');
+                                    setRestarting(false);
+                                }
+                            }}
+                            disabled={restarting}
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+                        >
+                            {restarting ? (
+                                <>
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Restarting...
+                                </>
+                            ) : (
+                                <>
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    Apply Changes & Restart
+                                </>
+                            )}
+                        </button>
+                        <button
+                            onClick={() => setPendingChanges({})}
+                            disabled={restarting}
+                            className="px-4 py-2 bg-muted text-muted-foreground rounded-md hover:bg-muted/80 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Model Library Section - Full Width */}
+            <div className="rounded-lg border border-border bg-card">
+                <div className="flex justify-between items-center px-4 py-3 border-b border-border">
+                    <div>
+                        <h3 className="font-semibold">Model Library</h3>
+                        <p className="text-sm text-muted-foreground">Download and manage STT, TTS, and LLM models</p>
+                    </div>
+                    <button
+                        onClick={fetchModels}
+                        disabled={loading}
+                        className="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                        title="Refresh"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
+                </div>
+                {/* Tabs and Region Filter */}
+                <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border">
+                    <button
+                        onClick={() => setSelectedTab('installed')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                            selectedTab === 'installed'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        Installed ({installedModels.length})
+                    </button>
+                    <button
+                        onClick={() => setSelectedTab('stt')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                            selectedTab === 'stt'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        <Mic className="w-3.5 h-3.5" /> STT ({catalog.stt.length})
+                    </button>
+                    <button
+                        onClick={() => setSelectedTab('tts')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                            selectedTab === 'tts'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        <Volume2 className="w-3.5 h-3.5" /> TTS ({catalog.tts.length})
+                    </button>
+                    <button
+                        onClick={() => setSelectedTab('llm')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                            selectedTab === 'llm'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                        }`}
+                    >
+                        <Brain className="w-3.5 h-3.5" /> LLM ({catalog.llm.length})
+                    </button>
+                    {selectedTab !== 'installed' && selectedTab !== 'llm' && (
+                        <select
+                            value={selectedRegion}
+                            onChange={e => setSelectedRegion(e.target.value)}
+                            className="ml-auto px-3 py-1.5 rounded-md border border-input bg-background text-sm"
+                        >
+                            <option value="all">All Regions</option>
+                            {getUniqueRegions().map(region => (
+                                <option key={region} value={region}>
+                                    {regionNames[region] || region}
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                </div>
+
+                {/* Content Area */}
+                <div className="p-4">
+                    {/* Download Progress Bar */}
+                    {downloadingModel && downloadProgress && (
+                        <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
                                 Downloading: {downloadProgress.current_file || downloadingModel}
@@ -613,7 +932,8 @@ const ModelsPage = () => {
                         )}
                     </>
                 )}
-            </ConfigSection>
+                </div>
+            </div>
         </div>
     );
 };

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Container, RefreshCw, AlertCircle, Clock, CheckCircle2, XCircle, HardDrive, Trash2, Database, Layers, Box } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
@@ -84,14 +85,22 @@ const DockerPage = () => {
         }
     };
 
+    const { confirm } = useConfirmDialog();
+
     const handlePrune = async (type: 'build_cache' | 'images' | 'all') => {
-        if (!confirm(
-            type === 'all' 
-                ? 'This will clean up build cache and unused images. Continue?' 
-                : type === 'build_cache'
-                    ? 'This will clear the Docker build cache. Builds will take longer next time but this is safe. Continue?'
-                    : 'This will remove unused Docker images. Continue?'
-        )) return;
+        const message = type === 'all' 
+            ? 'This will clean up build cache and unused images. Continue?' 
+            : type === 'build_cache'
+                ? 'This will clear the Docker build cache. Builds will take longer next time but this is safe. Continue?'
+                : 'This will remove unused Docker images. Continue?';
+        
+        const confirmed = await confirm({
+            title: type === 'all' ? 'Clean All?' : type === 'build_cache' ? 'Clean Build Cache?' : 'Clean Unused Images?',
+            description: message,
+            confirmText: 'Clean',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
 
         setPruning(true);
         try {

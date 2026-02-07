@@ -8,11 +8,25 @@ audiosocket:
   port: 8090
 barge_in:
   enabled: true
-  energy_threshold: 700
-  initial_protection_ms: 100
-  min_ms: 150
-  post_tts_end_protection_ms: 800
-config_version: 4
+  initial_protection_ms: 200
+  min_ms: 250
+  energy_threshold: 1000
+  cooldown_ms: 500
+  pipeline_min_ms: 120
+  pipeline_energy_threshold: 300
+  pipeline_talk_detect_enabled: true
+  pipeline_talk_detect_silence_ms: 1200
+  pipeline_talk_detect_talking_threshold: 128
+  post_tts_end_protection_ms: 250
+  greeting_protection_ms: 0
+  provider_fallback_enabled: true
+  provider_fallback_providers:
+    - google_live
+    - deepgram
+  provider_output_suppress_ms: 1200
+  provider_output_suppress_extend_ms: 600
+  provider_output_suppress_chunk_extend_ms: 250
+config_version: 6
 farewell_hangup_delay_sec: 5
 contexts:
   default:
@@ -255,13 +269,17 @@ contexts:
       - Do not read punctuation characters out loud, pause briefly instead
 
 
-      CALL ENDING PROTOCOL:
+      CALL ENDING PROTOCOL (CRITICAL - follow exactly):
 
       - When user says goodbye, first offer to email them a transcript
 
       - If yes, use request_transcript tool to get their email
 
-      - If they accept or decline the transcript, end the call with a warm farewell in the caller's language and immediately use hangup_call
+      - To end ANY call, you MUST call the hangup_call tool with your farewell message as the parameter
+
+      - NEVER just say goodbye verbally - always use hangup_call tool to end the call
+
+      - Example: hangup_call(farewell_message="Thank you for calling! Have a great day!")
     tools:
       - transfer
       - cancel_transfer
@@ -1138,12 +1156,13 @@ providers:
     input_sample_rate_hz: 8000
     instructions: You are a voice assistant. Always speak your responses out loud.
     max_response_output_tokens: 4096
-    model: gpt-realtime
+    api_version: beta
+    model: gpt-4o-realtime-preview-2024-12-17
     organization: ''
     output_encoding: mulaw
-    output_sample_rate_hz: 8000
+    output_sample_rate_hz: 24000
     provider_input_encoding: linear16
-    provider_input_sample_rate_hz: 16000
+    provider_input_sample_rate_hz: 24000
     response_modalities:
       - audio
       - text
@@ -1507,7 +1526,7 @@ tools:
     enabled: true
     extension: '2765'
   request_transcript:
-    admin_email: haider@jugaar.llc
+    admin_email: admin@yourdomain.com
     api_key: ${RESEND_API_KEY}
     common_domains:
       - gmail.com
@@ -1516,17 +1535,17 @@ tools:
       - hotmail.com
       - icloud.com
     confirm_email: true
-    enabled: true
-    from_email: ava@jugaar.llc
+    enabled: false
+    from_email: agent@yourdomain.com
     from_name: AI Voice Agent
     max_attempts: 2
     provider: resend
     validate_domain: true
   send_email_summary:
-    admin_email: haider@jugaar.llc
+    admin_email: admin@yourdomain.com
     api_key: ${RESEND_API_KEY}
-    enabled: true
-    from_email: ava@jugaar.llc
+    enabled: false
+    from_email: agent@yourdomain.com
     from_name: AI Voice Agent
     include_metadata: true
     include_transcript: true

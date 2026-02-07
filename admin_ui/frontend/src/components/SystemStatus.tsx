@@ -213,6 +213,24 @@ const CheckRow = ({ check, isRootless }: { check: PlatformCheck; isRootless: boo
   );
 };
 
+// Update status from localStorage (set by UpdatesPage)
+interface UpdateStatusCache {
+  checked_at: string;
+  update_available: boolean | null;
+  local_version: string | null;
+  remote_version: string | null;
+}
+
+const getUpdateStatusFromCache = (): UpdateStatusCache | null => {
+  try {
+    const raw = localStorage.getItem('aava_update_status');
+    if (!raw) return null;
+    return JSON.parse(raw) as UpdateStatusCache;
+  } catch {
+    return null;
+  }
+};
+
 // Main component
 export const SystemStatus = () => {
   const [data, setData] = useState<PlatformResponse | null>(null);
@@ -220,6 +238,7 @@ export const SystemStatus = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
+  const [updateCache, setUpdateCache] = useState<UpdateStatusCache | null>(getUpdateStatusFromCache);
 
   const fetchPlatform = async () => {
     try {
@@ -243,6 +262,22 @@ export const SystemStatus = () => {
     // Refresh every 30 seconds
     const interval = setInterval(fetchPlatform, 30000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Listen for localStorage changes (cross-tab sync) and poll for local updates
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'aava_update_status') {
+        setUpdateCache(getUpdateStatusFromCache());
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    // Also poll every 5s in case same-tab update
+    const poll = setInterval(() => setUpdateCache(getUpdateStatusFromCache()), 5000);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      clearInterval(poll);
+    };
   }, []);
 
   const handleRefresh = () => {
@@ -347,7 +382,19 @@ export const SystemStatus = () => {
             <div className="text-sm text-foreground" title={platform.project?.source ? `source: ${platform.project.source}` : undefined}>
               {platform.project?.version || 'Unknown'}
             </div>
-            <div className="text-xs text-muted-foreground">Update status: not checked</div>
+            <div className="text-xs text-muted-foreground">
+              {updateCache ? (
+                updateCache.update_available === true ? (
+                  <span className="text-yellow-500">Update available: {updateCache.remote_version}</span>
+                ) : updateCache.update_available === false ? (
+                  <span className="text-primary">Up to date</span>
+                ) : (
+                  <span>Checked (status unknown)</span>
+                )
+              ) : (
+                <span>Update status: not checked</span>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">

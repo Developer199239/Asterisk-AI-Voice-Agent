@@ -4,7 +4,7 @@ Complete guide for integrating Asterisk AI Voice Agent v5.3.1+ with FreePBX.
 
 ## 1. Overview
 
-The Asterisk AI Voice Agent integrates with FreePBX using the **Asterisk REST Interface (ARI)**. Calls enter the Stasis application, and the `ai-engine` handles all call control, audio transport, and AI provider orchestration.
+The Asterisk AI Voice Agent integrates with FreePBX using the **Asterisk REST Interface (ARI)**. Calls enter the Stasis application, and the `ai_engine` service handles call control, audio transport, and AI provider orchestration.
 
 If you’re setting this up for the first time, follow the canonical “first successful call” flow first:
 
@@ -30,13 +30,13 @@ Transport selection is configuration-driven (see `Transport-Mode-Compatibility.m
 - Valid `.env` containing ARI credentials and provider API keys
 
 **For remote deployment** (Asterisk on different host/container):
-- Network connectivity between ai-engine and Asterisk hosts:
-  - **ARI**: TCP port 8088 (ai-engine → Asterisk)
-  - **AudioSocket**: TCP port 8090 (Asterisk → ai-engine)
-  - **ExternalMedia RTP**: UDP port 18080 (Asterisk → ai-engine, and ai-engine → Asterisk)
+- Network connectivity between `ai_engine` and Asterisk hosts:
+  - **ARI**: TCP port 8088 (`ai_engine` → Asterisk)
+  - **AudioSocket**: TCP port 8090 (Asterisk → `ai_engine`)
+  - **ExternalMedia RTP**: UDP port 18080 (Asterisk → `ai_engine`, and `ai_engine` → Asterisk)
 - **Shared storage** for media files (required for pipeline configurations):
   - NFS mount, Docker volume, or other network filesystem
-  - Both Asterisk and ai-engine must access the same generated-audio directory (see “Shared Storage Configuration” below)
+  - Both Asterisk and `ai_engine` must access the same generated-audio directory (see “Shared Storage Configuration” below)
 - Set `ASTERISK_HOST` in `.env` to Asterisk's IP/hostname (not 127.0.0.1)
 
 **Note**: Remote deployment requires careful network and storage configuration. See section 2.4 below.
@@ -98,7 +98,7 @@ Then select Asterisk 18+.
 
 ### 2.4 Remote Deployment Configuration
 
-**When to use**: Asterisk and ai-engine are on different hosts/containers.
+**When to use**: Asterisk and `ai_engine` are on different hosts/containers.
 
 #### Network Configuration
 
@@ -126,9 +126,9 @@ ASTERISK_ARI_PORT=8088
 
 | Port | Protocol | Direction | Purpose |
 |------|----------|-----------|---------|
-| 8088 | TCP | ai-engine → Asterisk | ARI/WebSocket |
-| 8090 | TCP | Asterisk → ai-engine | AudioSocket |
-| 18080 | UDP | Asterisk ↔ ai-engine | ExternalMedia RTP (or your configured `external_media.rtp_port` / `external_media.port_range`) |
+| 8088 | TCP | `ai_engine` → Asterisk | ARI/WebSocket |
+| 8090 | TCP | Asterisk → `ai_engine` | AudioSocket |
+| 18080 | UDP | Asterisk ↔ `ai_engine` | ExternalMedia RTP (or your configured `external_media.rtp_port` / `external_media.port_range`) |
 
 **ExternalMedia RTP security (recommended):**
 
@@ -144,17 +144,17 @@ external_media:
   lock_remote_endpoint: true
   # Strongly recommended when the Asterisk RTP source IP is stable:
   allowed_remote_hosts:
-    - "192.168.1.100"  # Asterisk host IP as seen by ai-engine
+    - "192.168.1.100"  # Asterisk host IP as seen by `ai_engine`
 ```
 
 Notes:
 - If you set `ASTERISK_HOST` to a hostname, **still use IP(s)** for `external_media.allowed_remote_hosts`.
-- If Asterisk is behind NAT, allowlist the IP that `ai-engine` actually observes as the RTP source.
+- If Asterisk is behind NAT, allowlist the IP that `ai_engine` actually observes as the RTP source.
 
 **Firewall guidance (minimum)**
-- Allow inbound **TCP 8090** from Asterisk → ai-engine (AudioSocket).
-- Allow inbound **UDP `external_media.rtp_port`** (or `port_range`) from Asterisk → ai-engine (ExternalMedia RTP).
-- Allow outbound **TCP 8088** (or your `ASTERISK_ARI_PORT`) from ai-engine → Asterisk (ARI).
+- Allow inbound **TCP 8090** from Asterisk → `ai_engine` (AudioSocket).
+- Allow inbound **UDP `external_media.rtp_port`** (or `port_range`) from Asterisk → `ai_engine` (ExternalMedia RTP).
+- Allow outbound **TCP 8088** (or your `ASTERISK_ARI_PORT`) from `ai_engine` → Asterisk (ARI).
 
 #### Shared Storage Configuration
 
@@ -162,7 +162,7 @@ Notes:
 
 **Path requirement**: Both systems must access the same generated files that Asterisk will play (commonly via `sound:ai-generated/...`).
 
-On the ai-engine host, the default repo mount is:
+On the `ai_engine` host, the default repo mount is:
 - Host path: `<repo>/asterisk_media/ai-generated`
 - Container path: `/mnt/asterisk_media/ai-generated` (via `docker-compose.yml` volume mount)
 
@@ -174,11 +174,11 @@ On the Asterisk/FreePBX host, Asterisk typically serves sounds from `/var/lib/as
 **Option 1: NFS Mount** (recommended for bare metal)
 
 ```bash
-# On ai-engine host (mount shared storage, then point repo storage to it):
+# On `ai_engine` host (mount shared storage, then point repo storage to it):
 sudo mkdir -p /mnt/asterisk_media/ai-generated
 sudo mount -t nfs asterisk-host:/mnt/asterisk_media /mnt/asterisk_media
 
-# Make ai-engine write into the shared storage (repo-local mount is what compose uses)
+# Make `ai_engine` write into the shared storage (repo-local mount is what compose uses)
 ln -sfn /mnt/asterisk_media ./asterisk_media
 
 # Make permanent in /etc/fstab:
@@ -238,7 +238,7 @@ spec:
 **Verification**:
 
 ```bash
-# On ai-engine host/container:
+# On `ai_engine` host/container:
 echo "test" > /mnt/asterisk_media/ai-generated/test.txt
 
 # On Asterisk host/container:
@@ -257,6 +257,7 @@ You can customize agent behavior per-call using Asterisk channel variables:
 |----------|-------------|----------------|-----------|
 | `AI_PROVIDER` | Override which provider/pipeline to use | `google_live`, `deepgram`, `openai_realtime`, `local_hybrid` | No (uses `default_provider` from config) |
 | `AI_CONTEXT` | Select custom greeting and system prompt | `sales-agent`, `demo_google_live`, `sales`, `support` | No (uses `default` context) |
+| `AI_AUDIO_PROFILE` | Override which audio profile to use (format/sample rate/pacing) | `telephony_ulaw_8k`, `wideband_pcm_16k` | No (uses context profile or `profiles.default`) |
 | `AI_GREETING` | Override the greeting for this call | `"Hello! Welcome to our sales team."` | No (deprecated - use AI_CONTEXT instead) |
 | `AI_PERSONA` | Override the AI persona/instructions | `"You are a helpful billing assistant."` | No (deprecated - use AI_CONTEXT instead) |
 | `CALLERID(name)` | Caller's name (automatically available to AI) | Any string | No |
@@ -273,6 +274,11 @@ You can customize agent behavior per-call using Asterisk channel variables:
 1. Context greeting/prompt (if AI_CONTEXT set)
 2. Provider/pipeline defaults
 3. Global `llm.prompt` from config
+
+**Audio Profile Selection:**
+1. `AI_AUDIO_PROFILE` variable (highest priority)
+2. Context profile field (if AI_CONTEXT set and context has `profile:` in YAML)
+3. `profiles.default` (fallback: `telephony_ulaw_8k`)
 
 **Note**: The AI engine reads these variables when the call enters Stasis. Set them **before** calling `Stasis()`.
 
@@ -310,7 +316,7 @@ exten => s,1,NoOp(Asterisk AI Voice Agent)
 **How it works:**
 
 - The dialplan always routes the call to `Stasis(asterisk-ai-voice-agent)`.
-- Optionally set `AI_PROVIDER` and/or `AI_CONTEXT` before `Stasis()` to override behavior per extension.
+- Optionally set `AI_PROVIDER`, `AI_CONTEXT`, and/or `AI_AUDIO_PROFILE` before `Stasis()` to override behavior per extension.
 - Audio transport (AudioSocket vs ExternalMedia RTP) is determined by your config and should match a validated combination in `Transport-Mode-Compatibility.md`.
 
 No `AudioSocket()` or `ExternalMedia()` needed in dialplan.
@@ -341,6 +347,18 @@ exten => s,1,NoOp(AI Agent - OpenAI Realtime)
 exten => s,1,NoOp(AI Agent - Local Hybrid)
  same => n,Set(AI_PROVIDER=local_hybrid)       ; Override to local_hybrid pipeline
  same => n,Set(AI_CONTEXT=demo_hybrid)         ; Optional: custom greeting/prompt
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+### 3.3.2 Per-Call Audio Profile Override
+
+To force a specific audio profile (format/sample rate/pacing) for a call, set `AI_AUDIO_PROFILE`:
+
+```asterisk
+[from-ai-agent-wideband]
+exten => s,1,NoOp(AI Agent - Wideband Profile)
+ same => n,Set(AI_AUDIO_PROFILE=wideband_pcm_16k)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -472,7 +490,7 @@ sudo chown -R asterisk:asterisk "${REPO_DIR}/asterisk_media/ai-generated"
 
 ### 5.1 Health Check
 
-Verify the ai-engine is running and ready:
+Verify `ai_engine` is running and ready:
 
 ```bash
 curl http://127.0.0.1:15000/health
@@ -584,7 +602,7 @@ docker compose logs ai_engine | grep -E "STT|transcription|utterance"
 # Check latency metrics
 curl http://127.0.0.1:15000/metrics | grep latency
 
-# For Local Hybrid: ensure local-ai-server is healthy
+# For Local Hybrid: ensure `local_ai_server` is healthy
 docker compose -p asterisk-ai-voice-agent logs local_ai_server | tail -20
 
 # Look for model loading messages

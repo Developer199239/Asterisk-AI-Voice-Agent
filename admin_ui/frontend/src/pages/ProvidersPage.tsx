@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, Server, AlertCircle, CheckCircle2, Loader2, RefreshCw, Wand2, Star } from 'lucide-react';
@@ -22,6 +24,7 @@ import { Capability, capabilityFromKey, ensureModularKey, isFullAgentProvider } 
 const stripModularSuffix = (name: string): string => (name || '').replace(/_(stt|llm|tts)$/i, '');
 
 const ProvidersPage: React.FC = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -100,7 +103,7 @@ const ProvidersPage: React.FC = () => {
             setPendingRestart(true);
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         }
     };
 
@@ -157,7 +160,7 @@ const ProvidersPage: React.FC = () => {
 
     const handleAddSelectedProviders = async () => {
         if (selectedTemplates.length === 0) {
-            alert('Please select at least one provider template.');
+            toast.error('Please select at least one provider template.');
             return;
         }
 
@@ -169,7 +172,8 @@ const ProvidersPage: React.FC = () => {
         const templates: Record<string, any> = {
             openai_realtime: {
                 enabled: false,
-                model: 'gpt-realtime',
+                api_version: 'beta',
+                model: 'gpt-4o-realtime-preview-2024-12-17',
                 voice: 'alloy',
                 input_encoding: 'ulaw',
                 input_sample_rate_hz: 8000,
@@ -214,13 +218,13 @@ const ProvidersPage: React.FC = () => {
                 target_encoding: 'ulaw',
                 target_sample_rate_hz: 8000
             },
-	            local_modular: {
-	                // This adds local_stt, local_llm, local_tts
-	                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
-	                local_llm: { type: 'local', capabilities: ['llm'], enabled: false, auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
-	                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' }
-	            }
-	        };
+            local_modular: {
+                // This adds local_stt, local_llm, local_tts
+                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+                local_llm: { type: 'local', capabilities: ['llm'], enabled: false, auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' }
+            }
+        };
 
         selectedTemplates.forEach(templateKey => {
             if (templateKey === 'local_modular') {
@@ -239,7 +243,7 @@ const ProvidersPage: React.FC = () => {
         });
 
         if (!changed) {
-            alert('Selected providers already exist.');
+            toast.info('Selected providers already exist.');
             setShowAddProvidersModal(false);
             return;
         }
@@ -271,27 +275,30 @@ const ProvidersPage: React.FC = () => {
             const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
 
             if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
-                    setRestartingEngine(false);
-                    return handleReloadAIEngine(true);
+                    await handleReloadAIEngine(true);
+                    return;
                 }
                 return;
             }
 
             if (response.data.status === 'degraded') {
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 return;
             }
 
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted! Changes are now active.');
+                toast.success('AI Engine restarted! Changes are now active.');
             }
         } catch (error: any) {
-            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error('Failed to restart AI Engine', { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
@@ -300,7 +307,7 @@ const ProvidersPage: React.FC = () => {
     const handleDeleteProvider = async (name: string) => {
         // P1 Guard: Check if this is the default provider
         if (config.default_provider === name) {
-            alert(`Cannot delete provider "${name}" because it is the default provider.\n\nPlease set a different default provider first.`);
+            toast.error(`Cannot delete provider "${name}"`, { description: 'Please set a different default provider first.' });
             return;
         }
 
@@ -313,7 +320,9 @@ const ProvidersPage: React.FC = () => {
         if (activePipeline && pipelines[activePipeline]) {
             const ap = pipelines[activePipeline] as any;
             if (ap.stt === name || ap.llm === name || ap.tts === name) {
-                alert(`Cannot delete provider "${name}" because it is used by the active pipeline "${activePipeline}".\n\nPlease update the active pipeline first.`);
+                toast.error(`Cannot delete provider "${name}"`, {
+                    description: `This provider is used by the active pipeline "${activePipeline}". Please update the active pipeline first.`
+                });
                 return;
             }
         }
@@ -334,10 +343,22 @@ const ProvidersPage: React.FC = () => {
         }
 
         if (warnings.length > 0) {
-            const warningMsg = `Provider "${name}" has the following dependencies:\n\n• ${warnings.join('\n• ')}\n\nDeleting may break calls. Are you sure?`;
-            if (!confirm(warningMsg)) return;
+            const warningMsg = `Provider "${name}" has the following dependencies:\n\n• ${warnings.join('\n• ')}\n\nDeleting may break calls.`;
+            const confirmed = await confirm({
+                title: 'Delete Provider?',
+                description: warningMsg,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
+            if (!confirmed) return;
         } else {
-            if (!confirm(`Are you sure you want to delete provider "${name}"?`)) return;
+            const confirmed = await confirm({
+                title: 'Delete Provider?',
+                description: `Are you sure you want to delete provider "${name}"?`,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
+            if (!confirmed) return;
         }
 
         const newProviders = { ...(config.providers || {}) };
@@ -355,14 +376,14 @@ const ProvidersPage: React.FC = () => {
                 const ap = pipelines[activePipeline] as any;
                 if (ap.stt === name || ap.llm === name || ap.tts === name) {
                     const role = ap.stt === name ? 'STT' : ap.llm === name ? 'LLM' : 'TTS';
-                    alert(`Cannot disable provider "${name}" because it is the ${role} provider for the active pipeline "${activePipeline}".\n\nDisabling will break all calls. Please update the active pipeline first.`);
+                    toast.error(`Cannot disable provider "${name}"`, { description: `It is the ${role} provider for the active pipeline "${activePipeline}". Please update the active pipeline first.` });
                     return;
                 }
             }
 
             // Check if it's the default provider
             if (config.default_provider === name) {
-                alert(`Cannot disable provider "${name}" because it is the default provider.\n\nPlease set a different default provider first.`);
+                toast.error(`Cannot disable provider "${name}"`, { description: 'Please set a different default provider first.' });
                 return;
             }
         }
@@ -374,7 +395,7 @@ const ProvidersPage: React.FC = () => {
 
     const handleSaveProvider = async () => {
         if (!providerForm.name) {
-            alert('Provider name is required.');
+            toast.error('Provider name is required.');
             return;
         }
 
@@ -393,7 +414,7 @@ const ProvidersPage: React.FC = () => {
                     cap = inferred;
                     capabilities = [cap];
                 } else {
-                    alert('Capability is required for modular providers. Select STT, LLM, or TTS.');
+                    toast.error('Capability is required for modular providers. Select STT, LLM, or TTS.');
                     return;
                 }
             }
@@ -411,7 +432,7 @@ const ProvidersPage: React.FC = () => {
         if (!newConfig.providers) newConfig.providers = {};
 
         if ((isNewProvider || editingProvider !== finalName) && newConfig.providers[finalName]) {
-            alert(`Provider "${finalName}" already exists.`);
+            toast.error(`Provider "${finalName}" already exists.`);
             return;
         }
 
@@ -419,12 +440,12 @@ const ProvidersPage: React.FC = () => {
         const providerData = { ...existingData, ...providerForm, name: finalName, capabilities };
 
         if (!isFull && providerData.capabilities.length !== 1) {
-            alert('Modular providers must have exactly one capability.');
+            toast.error('Modular providers must have exactly one capability.');
             return;
         }
 
         if (!isFull && !providerData.capabilities[0]) {
-            alert('Capability is required for modular providers.');
+            toast.error('Capability is required for modular providers.');
             return;
         }
 
@@ -478,7 +499,7 @@ const ProvidersPage: React.FC = () => {
     const handleSetModularCapability = (cap: Capability) => {
         const rawName = (providerForm.name || '').toLowerCase();
         if (!rawName.trim()) {
-            alert('Please enter a provider name before selecting a capability.');
+            toast.error('Please enter a provider name before selecting a capability.');
             return;
         }
         const normalizedName = ensureModularKey(stripModularSuffix(rawName), cap);
@@ -624,25 +645,25 @@ const ProvidersPage: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {Object.entries(config.providers || {}).filter(([_, p]) => isFullAgentProvider(p)).map(([name, providerData]: [string, any]) => (
                         <ConfigCard key={name} className="group relative hover:border-primary/50 transition-colors">
-                            <div className="flex items-start justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className={`p-2 rounded-md ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
-                                        <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                            {/* Row 1: Provider info */}
+                            <div className="flex items-start gap-3">
+                                <div className={`p-2 rounded-md flex-shrink-0 ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
+                                    <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled ? 'text-muted-foreground' : ''}`}>{name}</h4>
+                                        {config.default_provider === name && (
+                                            <span className="text-xs bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0">
+                                                <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                                                Default
+                                            </span>
+                                        )}
+                                        {!providerData.enabled && (
+                                            <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
+                                        )}
                                     </div>
-                                    <div>
-                                        <div className="flex items-center gap-2">
-                                            <h4 className={`font-semibold text-lg ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
-                                            {config.default_provider === name && (
-                                                <span className="text-xs bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
-                                                    Default
-                                                </span>
-                                            )}
-                                            {!providerData.enabled && (
-                                                <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">Disabled</span>
-                                            )}
-                                        </div>
-                                        <div className="flex flex-wrap gap-2 mt-1">
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
                                             {(providerData.model || providerData.voice || providerData.tts_model || providerData.llm_model || providerData.tts_voice_name || providerData.agent_id || providerData.voice_id || providerData.model_id) && (
                                                 <>
                                                     {providerData.model && (
@@ -690,57 +711,60 @@ const ProvidersPage: React.FC = () => {
                                         </div>
                                     </div>
                                 </div>
+                            {/* Row 2: Actions */}
+                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
                                 <div className="flex items-center gap-2">
-                                    <div className="flex items-center space-x-2 mr-2">
-                                        <label className="relative inline-flex items-center cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                className="sr-only peer"
-                                                checked={providerData.enabled ?? true}
-                                                onChange={(e) => handleToggleProvider(name, providerData, e.target.checked)}
-                                            />
-                                            <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
-                                        </label>
-                                    </div>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        {config.default_provider !== name && (
-                                            <button
-                                                onClick={() => handleSetAsDefault(name)}
-                                                className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
-                                                title="Set as Default"
-                                            >
-                                                <Star className="w-4 h-4" />
-                                            </button>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={providerData.enabled ?? true}
+                                            onChange={(e) => handleToggleProvider(name, providerData, e.target.checked)}
+                                        />
+                                        <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                                    </label>
+                                    <span className="text-xs text-muted-foreground">{providerData.enabled !== false ? 'Enabled' : 'Disabled'}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    {config.default_provider !== name && (
+                                        <button
+                                            onClick={() => handleSetAsDefault(name)}
+                                            className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                                            title="Set as Default"
+                                        >
+                                            <Star className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => handleTestConnection(name, providerData)}
+                                        disabled={testingProvider === name}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+                                        title="Test Connection"
+                                    >
+                                        {testingProvider === name ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : testResults[name]?.success ? (
+                                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                        ) : testResults[name]?.success === false ? (
+                                            <AlertCircle className="w-4 h-4 text-destructive" />
+                                        ) : (
+                                            <Server className="w-4 h-4" />
                                         )}
-                                        <button
-                                            onClick={() => handleTestConnection(name, providerData)}
-                                            disabled={testingProvider === name}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
-                                            title="Test Connection"
-                                        >
-                                            {testingProvider === name ? (
-                                                <Loader2 className="w-4 h-4 animate-spin" />
-                                            ) : testResults[name]?.success ? (
-                                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                            ) : testResults[name]?.success === false ? (
-                                                <AlertCircle className="w-4 h-4 text-destructive" />
-                                            ) : (
-                                                <Server className="w-4 h-4" />
-                                            )}
-                                        </button>
-                                        <button
-                                            onClick={() => handleEditProvider(name)}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
-                                        >
-                                            <Settings className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => handleDeleteProvider(name)}
-                                            className="p-2 hover:bg-destructive/10 rounded-md text-destructive"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
+                                    </button>
+                                    <button
+                                        onClick={() => handleEditProvider(name)}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                                        title="Settings"
+                                    >
+                                        <Settings className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteProvider(name)}
+                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive transition-colors"
+                                        title="Delete"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
                                 </div>
                             </div>
                             {testResults[name] && (
@@ -765,29 +789,31 @@ const ProvidersPage: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {Object.entries(config.providers || {}).filter(([_, p]) => !isFullAgentProvider(p)).map(([name, providerData]: [string, any]) => (
                         <ConfigCard key={name} className="group relative hover:border-primary/50 transition-colors">
-                            <div className="flex items-start justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className={`p-2 rounded-md ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
-                                        <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                            {/* Row 1: Provider info */}
+                            <div className="flex items-start gap-3">
+                                <div className={`p-2 rounded-md flex-shrink-0 ${providerData.enabled ? 'bg-secondary' : 'bg-muted'}`}>
+                                    <Server className={`w-5 h-5 ${providerData.enabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <h4 className={`font-semibold text-lg truncate ${!providerData.enabled ? 'text-muted-foreground' : ''}`}>{name}</h4>
+                                        {!providerData.enabled && (
+                                            <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
+                                        )}
                                     </div>
-                                    <div>
-                                        <div className="flex items-center gap-2">
-                                            <h4 className={`font-semibold text-lg ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
-                                            {!providerData.enabled && (
-                                                <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">Disabled</span>
-                                            )}
-                                        </div>
-                                        <div className="flex flex-wrap gap-2 mt-1">
-                                            {(providerData.capabilities || []).map((cap: string) => (
-                                                <span key={cap} className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                    {cap.toUpperCase()}
-                                                </span>
-                                            ))}
-                                        </div>
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                        {(providerData.capabilities || []).map((cap: string) => (
+                                            <span key={cap} className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold text-muted-foreground">
+                                                {cap.toUpperCase()}
+                                            </span>
+                                        ))}
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                    <label className="relative inline-flex items-center cursor-pointer mr-2">
+                            </div>
+                            {/* Row 2: Actions */}
+                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
+                                <div className="flex items-center gap-2">
+                                    <label className="relative inline-flex items-center cursor-pointer">
                                         <input
                                             type="checkbox"
                                             className="sr-only peer"
@@ -796,10 +822,13 @@ const ProvidersPage: React.FC = () => {
                                         />
                                         <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                                     </label>
+                                    <span className="text-xs text-muted-foreground">{providerData.enabled !== false ? 'Enabled' : 'Disabled'}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
                                     <button
                                         onClick={() => handleTestConnection(name, providerData)}
                                         disabled={testingProvider === name}
-                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
                                         title="Test Connection"
                                     >
                                         {testingProvider === name ? (
@@ -814,14 +843,14 @@ const ProvidersPage: React.FC = () => {
                                     </button>
                                     <button
                                         onClick={() => handleEditProvider(name)}
-                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors"
                                         title="Settings"
                                     >
                                         <Settings className="w-4 h-4" />
                                     </button>
                                     <button
                                         onClick={() => handleDeleteProvider(name)}
-                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive"
+                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive transition-colors"
                                         title="Delete"
                                     >
                                         <Trash2 className="w-4 h-4" />

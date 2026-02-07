@@ -118,7 +118,7 @@ exten => s,n,Hangup()
 ## Test Call Transcript (v4.3.0)
 
 ```text
-AI: Hi Haider Jarral, I'm Ava with the Google Gemini Live voice demo. 
+AI: Hi Caller Name, I'm Ava with the Google Gemini Live voice demo. 
     Ask me about the Asterisk AI Voice Agent project.
 
 Caller: What's the latency on this project?
@@ -131,13 +131,13 @@ Caller: That is great. Can you email me a transcript of this conversation?
 AI: I can definitely send you the transcript. Can you please tell me 
     your email address?
 
-Caller: My email is Heider Khalil at Hotmill.com.
+Caller: My email is caller at example dot com.
 
-AI: I have h a i d e r k h a l i l @ hotmail dot com. Is that correct?
+AI: I have c a l l e r @ hotmail dot com. Is that correct?
 
 Caller: That is correct, yeah.
 
-AI: Perfect! I'll send the complete transcript to haiderkhalil@hotmail dot com 
+AI: Perfect! I'll send the complete transcript to caller at example dot com 
     when our call ends. Is there anything else I can help you with?
 
 Caller: No, that is all. Thank you so much. Goodbye.
@@ -150,7 +150,7 @@ AI: Thank you for calling! Have a great day!
 ### v4.2.0 Transcript (Previous Baseline)
 
 ```text
-AI: Hi HAIDER JARRAL, I'm Ava demonstrating Google Gemini Live API! 
+AI: Hi CALLER NAME, I'm Ava demonstrating Google Gemini Live API! 
     I can tell you all about the Asterisk AI Voice Agent project - 
     ask me anything about how it works, setup, or features. Try 
     interrupting me anytime!
@@ -162,14 +162,14 @@ AI: The Google Gemini Live configuration is incredibly fast, with
     audio processing and true duplex communication.
 
 Caller: Please send me transcript of this conversation at 
-        haiderkhalil@hotmail.com.
+        caller@example.com.
 
-AI: Certainly. I can send a transcript to haiderkhalil@hotmail.com. 
+AI: Certainly. I can send a transcript to caller@example.com. 
     Is that correct?
 
 Caller: That is correct.
 
-AI: Perfect! I'll send the complete transcript to haiderkhalil@hotmail.com 
+AI: Perfect! I'll send the complete transcript to caller@example.com 
     when our call ends.
 
 [Call ends cleanly with transcript sent successfully]

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import {
     AlertTriangle,
     Ban,
@@ -288,6 +289,7 @@ const formatSeconds = (secs: number): string => {
 };
 
 const CallSchedulingPage = () => {
+    const { confirm } = useConfirmDialog();
     const [meta, setMeta] = useState<OutboundMeta | null>(null);
     const [serverOffsetMs, setServerOffsetMs] = useState(0);
     const [clockTick, setClockTick] = useState(0);
@@ -967,7 +969,13 @@ const CallSchedulingPage = () => {
     };
 
     const deleteLead = async (leadId: string) => {
-        if (!confirm('Delete this lead and all its attempts? This cannot be undone.')) return;
+        const confirmed = await confirm({
+            title: 'Delete Lead?',
+            description: 'Delete this lead and all its attempts? This cannot be undone.',
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         try {
             await axios.delete(`/api/outbound/leads/${leadId}`);
             if (selectedCampaignId) await refreshCampaignDetails(selectedCampaignId);
@@ -1275,8 +1283,14 @@ const CallSchedulingPage = () => {
                                     <button
                                         className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500/30 text-red-600 hover:bg-red-500/10 text-sm disabled:opacity-50"
                                         disabled={selectedCampaign.status === 'running'}
-                                        onClick={() => {
-                                            if (!confirm('Permanently delete this campaign and all leads/attempts? This cannot be undone.')) return;
+                                        onClick={async () => {
+                                            const confirmed = await confirm({
+                                                title: 'Delete Campaign?',
+                                                description: 'Permanently delete this campaign and all leads/attempts? This cannot be undone.',
+                                                confirmText: 'Delete',
+                                                variant: 'destructive'
+                                            });
+                                            if (!confirmed) return;
                                             deleteCampaign(selectedCampaign.id);
                                         }}
                                     >
@@ -1305,11 +1319,11 @@ const CallSchedulingPage = () => {
                                             </button>
                                             <button
                                                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500 text-white hover:bg-red-500/90 text-sm"
-                                                onClick={() => {
-                                                    const cancel = confirm(
-                                                        'Stop campaign. Cancel all remaining pending leads?\n\nOK = Stop + cancel pending (non-resumable)\nCancel = Stop only (resumable)'
+                                                onClick={async () => {
+                                                    const cancelPending = window.confirm(
+                                                        'Stop campaign and cancel all remaining pending leads?\n\nOK = Stop + cancel pending (non-resumable)\nCancel = Stop only (resumable)'
                                                     );
-                                                    setStatus(selectedCampaign.id, 'stopped', cancel);
+                                                    await setStatus(selectedCampaign.id, 'stopped', cancelPending);
                                                 }}
                                             >
                                                 <Square className="w-4 h-4" /> Stop

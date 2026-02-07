@@ -275,26 +275,51 @@ class OpenAIToolAdapter:
             # Extract any message from the tool result to use as speech instruction
             tool_message = safe_result.get('message', '')
             ai_should_speak = safe_result.get('ai_should_speak', True)
+            if not ai_should_speak:
+                logger.info(
+                    "Skipping response.create because ai_should_speak is false",
+                    call_id=context.get("call_id"),
+                    function_call_id=call_id,
+                )
+                return
             
-            # Use EXACT same format as greeting which reliably produces audio
-            response_config = {
-                "modalities": ["text", "audio"],
-                "input": [],  # Empty input to avoid context confusion (matches greeting)
-            }
+            # Check if using GA API (modalities not supported in response.create for GA)
+            is_ga = context.get('is_ga', True)  # Default to GA for safety
+            
+            # Build response config based on API version
+            response_config = {}
+            
+            # Only add modalities and input for Beta API
+            # GA API only accepts instructions in response.create
+            if not is_ga:
+                response_config["modalities"] = ["text", "audio"]
+                response_config["input"] = []  # Empty input to avoid context confusion
+                logger.debug("Using Beta API format for response.create (with modalities)")
+            else:
+                logger.debug("Using GA API format for response.create (no modalities)")
             
             # If tool has a message and AI should speak, add direct instruction to speak it
-            if tool_message and ai_should_speak:
+            # Instructions work in both GA and Beta modes
+            if tool_message:
                 # Use direct instruction format like greeting: "Please say: {text}"
                 response_config["instructions"] = f"Please say the following to the user: {tool_message}"
-                logger.info(f"✅ Added speech instructions for tool response", 
-                           message_preview=tool_message[:50] if tool_message else "")
+                logger.info(
+                    "✅ Added speech instructions for tool response",
+                    message_preview=tool_message[:50] if tool_message else "",
+                )
+            else:
+                # Keep response.create explicit in GA mode to avoid sending an empty response object.
+                response_config["instructions"] = (
+                    "Please respond briefly to the user based on the latest tool result."
+                )
+                logger.debug("Using fallback instructions for tool response")
             
             response_event = {
                 "type": "response.create",
                 "response": response_config
             }
             await websocket.send(json.dumps(response_event))
-            logger.info(f"✅ Triggered OpenAI response generation (audio+text)")
+            logger.info("✅ Triggered OpenAI response generation (audio+text)")
             
         except Exception as e:
             logger.error(f"Failed to send tool result to OpenAI: {e}", exc_info=True)

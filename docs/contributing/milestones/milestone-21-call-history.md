@@ -217,7 +217,7 @@ project/
 
 2. **`.gitignore` rules** - Database files (`*.db`, `*.sqlite`, journal files) are excluded from version control. Only `.gitkeep` is committed.
 
-3. **Volume mounts** - Both `ai-engine` and `admin-ui` containers mount `./data:/app/data` to share the same database.
+3. **Volume mounts** - Both `ai_engine` and `admin_ui` containers mount `./data:/app/data` to share the same database.
 
 ### Setup Flow
 

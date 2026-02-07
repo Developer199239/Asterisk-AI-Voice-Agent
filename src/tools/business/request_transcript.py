@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 import html
 import structlog
-from jinja2 import Template
 
 try:
     import resend  # type: ignore
@@ -21,99 +20,11 @@ except Exception:
 from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolParameter
 from src.tools.context import ToolExecutionContext
 from src.utils.email_validator import EmailValidator
-from src.tools.business.resend_client import send_email
+from src.tools.business.email_dispatcher import send_email, resolve_context_value
+from src.tools.business.email_templates import DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE
+from src.tools.business.template_renderer import render_html_template_with_fallback
 
 logger = structlog.get_logger(__name__)
-
-# HTML email template for caller transcript
-TRANSCRIPT_EMAIL_TEMPLATE = """
-<html>
-<head>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      max-width: 800px;
-      margin: 0 auto;
-    }
-    .header {
-      background: #10B981;
-      color: white;
-      padding: 20px;
-      border-radius: 5px 5px 0 0;
-    }
-    .content {
-      padding: 20px;
-      background: #ffffff;
-      border: 1px solid #e5e7eb;
-      border-top: none;
-      border-radius: 0 0 5px 5px;
-    }
-    .greeting {
-      font-size: 16px;
-      margin-bottom: 20px;
-    }
-    .metadata {
-      background: #F0FDF4;
-      padding: 15px;
-      border-radius: 5px;
-      margin-bottom: 20px;
-    }
-    .metadata p {
-      margin: 5px 0;
-    }
-    .transcript {
-      background: #FAFAFA;
-      padding: 15px;
-      border-left: 3px solid #10B981;
-      margin-top: 20px;
-      font-family: monospace;
-      word-wrap: break-word;
-    }
-    .footer {
-      margin-top: 20px;
-      padding-top: 20px;
-      border-top: 1px solid #e5e7eb;
-      color: #6b7280;
-      font-size: 14px;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h2>📧 Your Call Transcript</h2>
-  </div>
-  <div class="content">
-    <div class="greeting">
-      {% if caller_name %}
-      <p>Hello {{ caller_name }},</p>
-      {% else %}
-      <p>Hello,</p>
-      {% endif %}
-      <p>Thank you for your call. As requested, here is the transcript of your conversation with our AI Voice Agent.</p>
-    </div>
-    
-    <div class="metadata">
-      <p><strong>Date:</strong> {{ call_date }}</p>
-      <p><strong>Duration:</strong> {{ duration }}</p>
-      {% if caller_number %}
-      <p><strong>Caller:</strong> {{ caller_number }}</p>
-      {% endif %}
-    </div>
-    
-    <h3>Conversation Transcript</h3>
-    <div class="transcript">{{ transcript_html }}</div>
-    
-    <div class="footer">
-      <p>If you have any questions or need assistance, please don't hesitate to contact us.</p>
-      <p><em>Powered by AI Voice Agent</em></p>
-    </div>
-  </div>
-</body>
-</html>
-"""
-
 
 class RequestTranscriptTool(Tool):
     """
@@ -129,7 +40,6 @@ class RequestTranscriptTool(Tool):
     
     def __init__(self):
         super().__init__()
-        self._template = Template(TRANSCRIPT_EMAIL_TEMPLATE)
         self._validator = EmailValidator()
         # Track sent emails per call to prevent duplicates
         # Note: Dict grows with calls, but cleared on container restart
@@ -258,23 +168,7 @@ class RequestTranscriptTool(Tool):
                         ),
                         "ai_should_speak": True
                     }
-            
-            # Check for duplicate email (deduplication)
-            if call_id not in self._sent_emails:
-                self._sent_emails[call_id] = set()
-            
-            if parsed_email.lower() in self._sent_emails[call_id]:
-                logger.info(
-                    "Duplicate transcript request detected, skipping",
-                    call_id=call_id,
-                    email=parsed_email
-                )
-                return {
-                    "status": "success",
-                    "message": f"I already sent the transcript to {parsed_email}. Please check your inbox.",
-                    "ai_should_speak": True
-                }
-            
+
             # Get session data
             session = await context.get_session()
             if not session:
@@ -284,6 +178,49 @@ class RequestTranscriptTool(Tool):
                     "message": "I'm sorry, I couldn't access the call data to send the transcript.",
                     "ai_should_speak": True
                 }
+
+            allow_multiple = bool(config.get("allow_multiple_recipients", False))
+            normalized_email = parsed_email.lower()
+            existing_emails = getattr(session, "transcript_emails", None)
+            existing_single: Optional[str] = None
+            if isinstance(existing_emails, set) and len(existing_emails) == 1:
+                try:
+                    existing_single = next(iter(existing_emails))
+                except Exception:
+                    existing_single = None
+
+            # Idempotency / duplicate handling:
+            # - Default behavior is "set/update": only the latest email is kept for end-of-call send.
+            # - When allow_multiple_recipients is true, we keep additive behavior and suppress duplicates.
+            if not allow_multiple and existing_single and existing_single == normalized_email:
+                email_for_speech = self._validator.format_for_speech(parsed_email)
+                logger.info(
+                    "Transcript email already set (no-op)",
+                    call_id=call_id,
+                    caller_email=parsed_email,
+                )
+                return {
+                    "status": "success",
+                    "message": f"Got it. I'll send the complete transcript to {email_for_speech} when our call ends.",
+                    "ai_should_speak": True,
+                    "caller_email": parsed_email,
+                    "email_for_speech": email_for_speech,
+                }
+
+            if allow_multiple:
+                if call_id not in self._sent_emails:
+                    self._sent_emails[call_id] = set()
+                if normalized_email in self._sent_emails[call_id]:
+                    logger.info(
+                        "Duplicate transcript recipient detected, skipping",
+                        call_id=call_id,
+                        email=parsed_email,
+                    )
+                    return {
+                        "status": "success",
+                        "message": f"I already added {parsed_email} for the transcript. Please check your inbox after the call ends.",
+                        "ai_should_speak": True,
+                    }
             
             # Format email for speech readback
             email_for_speech = self._validator.format_for_speech(parsed_email)
@@ -291,15 +228,21 @@ class RequestTranscriptTool(Tool):
             # IMPORTANT: Store email address in session for end-of-call transcript sending
             # Do NOT send immediately - conversation isn't complete yet!
             # Engine will check for this attribute in cleanup and send complete transcript
-            if not hasattr(session, 'transcript_emails'):
+            if not hasattr(session, 'transcript_emails') or not isinstance(getattr(session, 'transcript_emails', None), set):
                 session.transcript_emails = set()
-            session.transcript_emails.add(parsed_email.lower())
+            if allow_multiple:
+                session.transcript_emails.add(normalized_email)
+            else:
+                # Default: last email wins (set/update semantics).
+                session.transcript_emails.clear()
+                session.transcript_emails.add(normalized_email)
             
             # Save session with transcript email
             await context.session_store.upsert_call(session)
             
-            # Mark as requested to prevent duplicates during call
-            self._sent_emails[call_id].add(parsed_email.lower())
+            # Mark as requested to prevent noisy repeats when allow_multiple_recipients is enabled.
+            if allow_multiple:
+                self._sent_emails[call_id].add(normalized_email)
             
             logger.info(
                 "Transcript email saved for end-of-call sending",
@@ -311,8 +254,7 @@ class RequestTranscriptTool(Tool):
             return {
                 "status": "success",
                 "message": (
-                    f"Perfect! I'll send the complete transcript to {email_for_speech} "
-                    "when our call ends."
+                    f"Perfect! I'll send the complete transcript to {email_for_speech} when our call ends."
                 ),
                 "ai_should_speak": True,
                 "caller_email": parsed_email,
@@ -343,6 +285,8 @@ class RequestTranscriptTool(Tool):
         call_id: str
     ) -> Dict[str, Any]:
         """Prepare email data for transcript."""
+        context_name = getattr(session, "context_name", None)
+        called_number = getattr(session, "called_number", None)
         
         # Extract metadata
         caller_name = getattr(session, "caller_name", None)
@@ -366,6 +310,7 @@ class RequestTranscriptTool(Tool):
             duration_str = self._format_duration(duration_seconds)
         else:
             duration_str = "Unknown"
+            duration_seconds = None
         
         # Get transcript from conversation_history
         transcript = ""
@@ -377,25 +322,72 @@ class RequestTranscriptTool(Tool):
             transcript = "Transcript not available for this call."
             transcript_html = self._format_pretty_html(transcript)
         
-        # Render email HTML
-        html_content = self._template.render(
-            call_date=start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            duration=duration_str,
-            caller_name=caller_name,
-            caller_number=caller_number,
-            transcript=transcript,
-            transcript_html=transcript_html,
+        variables = {
+            "call_id": call_id,
+            "context_name": context_name,
+            "recipient_email": caller_email,
+            "call_date": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "call_start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "call_end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration": duration_str,
+            "duration_seconds": duration_seconds,
+            "caller_name": caller_name,
+            "caller_number": caller_number,
+            "called_number": called_number,
+            "outcome": getattr(session, "call_outcome", ""),
+            "call_outcome": getattr(session, "call_outcome", ""),
+            "hangup_initiator": (
+                "caller"
+                if getattr(session, "call_outcome", "") == "caller_hangup"
+                else "agent"
+                if getattr(session, "call_outcome", "") == "agent_hangup"
+                else "system"
+                if getattr(session, "call_outcome", "") == "transferred"
+                else ""
+            ),
+            "transcript": transcript,
+            "transcript_html": transcript_html,
+        }
+
+        html_content = render_html_template_with_fallback(
+            template_override=config.get("html_template"),
+            default_template=DEFAULT_REQUEST_TRANSCRIPT_HTML_TEMPLATE,
+            variables=variables,
+            call_id=call_id,
+            tool_name="request_transcript",
         )
         
         # Build email data
-        from_email = config.get("from_email", "agent@company.com")
+        from_email = resolve_context_value(
+            tool_config=config,
+            key="from_email",
+            context_name=context_name,
+            default=config.get("from_email", "agent@company.com"),
+        )
         from_name = config.get("from_name", "AI Voice Agent")
-        admin_email = config.get("admin_email")
+        admin_email = resolve_context_value(
+            tool_config=config,
+            key="admin_email",
+            context_name=context_name,
+            default=None,
+        )
+
+        subject_prefix = resolve_context_value(
+            tool_config=config,
+            key="subject_prefix",
+            context_name=context_name,
+            default="",
+        )
+        subject_prefix = str(subject_prefix or "").strip()
+        if subject_prefix and not subject_prefix.endswith(" "):
+            subject_prefix = subject_prefix + " "
+        include_context_in_subject = bool(config.get("include_context_in_subject", True))
+        context_tag = f"[{context_name}] " if (include_context_in_subject and context_name) else ""
         
         email_data = {
             "to": caller_email,
             "from": f"{from_name} <{from_email}>",
-            "subject": f"Your Call Transcript - {start_time.strftime('%Y-%m-%d %H:%M')}",
+            "subject": f"{subject_prefix}{context_tag}Your Call Transcript - {start_time.strftime('%Y-%m-%d %H:%M')}",
             "html": html_content
         }
         
@@ -416,18 +408,18 @@ class RequestTranscriptTool(Tool):
         safe = safe.replace("\r\n", "\n").replace("\r", "\n")
         return safe.replace("\n", "<br/>\n")
     
-    async def _send_transcript_async(self, email_data: Dict[str, Any], call_id: str):
-        """Send transcript email asynchronously via Resend API."""
+    async def _send_transcript_async(self, email_data: Dict[str, Any], call_id: str, tool_config: Dict[str, Any]):
+        """Send transcript email asynchronously via configured provider."""
         try:
-            # Send email
             logger.info(
-                "Sending transcript via Resend",
+                "Sending transcript",
                 call_id=call_id,
                 recipient=email_data["to"],
                 bcc=email_data.get("bcc")
             )
             await send_email(
                 email_data=email_data,
+                tool_config=tool_config,
                 call_id=call_id,
                 log_label="Transcript",
                 recipient=str(email_data.get("to") or ""),

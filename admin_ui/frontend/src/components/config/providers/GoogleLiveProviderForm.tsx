@@ -5,6 +5,22 @@ interface GoogleLiveProviderFormProps {
     onChange: (newConfig: any) => void;
 }
 
+const DEFAULT_LIVE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
+const LEGACY_LIVE_MODEL_MAP: Record<string, string> = {
+    'gemini-2.5-flash-native-audio-latest': DEFAULT_LIVE_MODEL,
+    'gemini-live-2.5-flash-preview': DEFAULT_LIVE_MODEL,
+    'gemini-2.0-flash-live-001': DEFAULT_LIVE_MODEL,
+    'gemini-2.0-flash-live-001-preview-09-2025': DEFAULT_LIVE_MODEL,
+    'gemini-2.5-flash-preview-native-audio-dialog': DEFAULT_LIVE_MODEL,
+    'gemini-2.5-flash-exp-native-audio-thinking-dialog': DEFAULT_LIVE_MODEL,
+};
+const SUPPORTED_LIVE_MODELS = [
+    'gemini-2.5-flash-native-audio-preview-12-2025',
+    'gemini-2.5-flash-native-audio-preview-09-2025',
+    'gemini-live-2.5-flash-native-audio',
+    'gemini-live-2.5-flash-preview-native-audio-09-2025',
+];
+
 const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config, onChange }) => {
     const handleChange = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
@@ -12,10 +28,16 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
 
     const selectedModel = (() => {
         const raw = (config.llm_model || '').toString().trim();
-        if (raw === 'gemini-2.5-flash-native-audio-latest') {
-            return 'gemini-2.5-flash-native-audio-preview-12-2025';
+        if (!raw) {
+            return DEFAULT_LIVE_MODEL;
         }
-        return raw || 'gemini-2.5-flash-native-audio-preview-12-2025';
+        if (raw in LEGACY_LIVE_MODEL_MAP) {
+            return LEGACY_LIVE_MODEL_MAP[raw];
+        }
+        if (raw.includes('native-audio')) {
+            return raw;
+        }
+        return DEFAULT_LIVE_MODEL;
     })();
 
     return (
@@ -36,7 +58,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                         placeholder="wss://generativelanguage.googleapis.com/ws/..."
                     />
                     <p className="text-xs text-muted-foreground">
-                        Google Live API WebSocket endpoint for bidirectional streaming.
+                        Google Live bidirectional endpoint. Keep `v1beta` unless Google publishes a stable `v1` Live WS path.
                     </p>
                 </div>
             </div>
@@ -52,15 +74,22 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             value={selectedModel}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
-                            <optgroup label="Native Audio Models (Live API) - 24 Languages">
+                            <optgroup label="Gemini Developer API">
                                 <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
                                 <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
-                                <option value="gemini-2.5-flash-preview-native-audio-dialog">Gemini 2.5 Flash Native Audio Dialog (Preview)</option>
-                                <option value="gemini-2.5-flash-exp-native-audio-thinking-dialog">Gemini 2.5 Flash Native Audio Thinking Dialog (Experimental)</option>
                             </optgroup>
+                            <optgroup label="Vertex AI Live API">
+                                <option value="gemini-live-2.5-flash-native-audio">Gemini Live 2.5 Flash Native Audio (GA)</option>
+                                <option value="gemini-live-2.5-flash-preview-native-audio-09-2025">Gemini Live 2.5 Flash Native Audio (Preview 09-2025)</option>
+                            </optgroup>
+                            {!SUPPORTED_LIVE_MODELS.includes(selectedModel) && (
+                                <optgroup label="Custom">
+                                    <option value={selectedModel}>{selectedModel}</option>
+                                </optgroup>
+                            )}
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            Supports 24 languages with seamless multilingual switching. 30 HD voices available.
+                            Includes official Gemini Developer API and Vertex AI Live model names.
                             <a href="https://ai.google.dev/gemini-api/docs/live-guide" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
                         </p>
                     </div>
@@ -308,16 +337,6 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                         <div className="flex items-center space-x-2">
                             <input
                                 type="checkbox"
-                                id="continuous_input"
-                                className="rounded border-input"
-                                checked={config.continuous_input ?? true}
-                                onChange={(e) => handleChange('continuous_input', e.target.checked)}
-                            />
-                            <label htmlFor="continuous_input" className="text-sm font-medium">Continuous Input</label>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                            <input
-                                type="checkbox"
                                 id="enabled"
                                 className="rounded border-input"
                                 checked={config.enabled ?? true}
@@ -358,6 +377,55 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             <p className="text-xs text-muted-foreground">
                                 Seconds to wait after farewell audio before hanging up. Leave empty to use global default.
                             </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <h4 className="font-semibold text-sm border-b pb-2">Hangup Fallback Tuning</h4>
+                    <p className="text-xs text-muted-foreground">
+                        Used when Google Live does not emit a reliable turn-complete event after a hangup farewell.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Audio Idle Timeout (sec)</label>
+                            <input
+                                type="number"
+                                step="0.05"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_audio_idle_sec ?? 1.25}
+                                onChange={(e) => handleChange('hangup_fallback_audio_idle_sec', e.target.value ? parseFloat(e.target.value) : null)}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Minimum Armed Time (sec)</label>
+                            <input
+                                type="number"
+                                step="0.05"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_min_armed_sec ?? 0.8}
+                                onChange={(e) => handleChange('hangup_fallback_min_armed_sec', e.target.value ? parseFloat(e.target.value) : null)}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">No Audio Timeout (sec)</label>
+                            <input
+                                type="number"
+                                step="0.1"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_no_audio_timeout_sec ?? 4.0}
+                                onChange={(e) => handleChange('hangup_fallback_no_audio_timeout_sec', e.target.value ? parseFloat(e.target.value) : null)}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Turn Complete Timeout (sec)</label>
+                            <input
+                                type="number"
+                                step="0.1"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.hangup_fallback_turn_complete_timeout_sec ?? 2.5}
+                                onChange={(e) => handleChange('hangup_fallback_turn_complete_timeout_sec', e.target.value ? parseFloat(e.target.value) : null)}
+                            />
                         </div>
                     </div>
                 </div>

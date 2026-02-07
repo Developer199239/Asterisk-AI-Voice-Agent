@@ -9,6 +9,7 @@ import (
 type Context struct {
 	Name        string
 	Provider    string
+	AIContext   string
 	Description string
 }
 
@@ -20,6 +21,7 @@ func GenerateSnippet(provider string) string {
 	sb.WriteString(fmt.Sprintf("; AI Voice Agent - %s\n", ctx.Description))
 	sb.WriteString(fmt.Sprintf("[%s]\n", ctx.Name))
 	sb.WriteString(fmt.Sprintf("exten => s,1,NoOp(%s)\n", ctx.Description))
+	sb.WriteString(fmt.Sprintf(" same => n,Set(AI_CONTEXT=%s)\n", ctx.AIContext))
 	sb.WriteString(fmt.Sprintf(" same => n,Set(AI_PROVIDER=%s)\n", ctx.Provider))
 	sb.WriteString(" same => n,Stasis(asterisk-ai-voice-agent)\n")
 	sb.WriteString(" same => n,Hangup()\n")
@@ -33,21 +35,25 @@ func getContextForProvider(provider string) Context {
 		"openai_realtime": {
 			Name:        "from-ai-agent-openai",
 			Provider:    "openai_realtime",
+			AIContext:   "default",
 			Description: "AI Agent - OpenAI Realtime",
 		},
 		"deepgram": {
 			Name:        "from-ai-agent-deepgram",
 			Provider:    "deepgram",
+			AIContext:   "default",
 			Description: "AI Agent - Deepgram",
 		},
 		"local_hybrid": {
 			Name:        "from-ai-agent-hybrid",
 			Provider:    "local_hybrid",
+			AIContext:   "default",
 			Description: "AI Agent - Local Hybrid",
 		},
 		"google_live": {
 			Name:        "from-ai-agent-google",
 			Provider:    "google_live",
+			AIContext:   "default",
 			Description: "AI Agent - Google Live",
 		},
 	}
@@ -60,6 +66,7 @@ func getContextForProvider(provider string) Context {
 	return Context{
 		Name:        "from-ai-agent",
 		Provider:    provider,
+		AIContext:   "default",
 		Description: "AI Agent - " + provider,
 	}
 }

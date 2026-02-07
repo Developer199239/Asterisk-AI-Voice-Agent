@@ -6,6 +6,8 @@ import {
     BarChart3, Users, Timer, Activity, TrendingUp, Zap, PieChart
 } from 'lucide-react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { useLocation } from 'react-router-dom';
 
 interface CallRecordSummary {
@@ -94,6 +96,7 @@ const OutcomeIcon = ({ outcome }: { outcome: string }) => {
 };
 
 const CallHistoryPage = () => {
+    const { confirm } = useConfirmDialog();
     const location = useLocation();
     const [calls, setCalls] = useState<CallRecordSummary[]>([]);
     const [stats, setStats] = useState<CallStats | null>(null);
@@ -242,7 +245,13 @@ const CallHistoryPage = () => {
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm('Are you sure you want to delete this call record?')) return;
+        const confirmed = await confirm({
+            title: 'Delete Call Record?',
+            description: 'Are you sure you want to delete this call record?',
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         try {
             await axios.delete(`/api/calls/${id}`);
             fetchCalls();
@@ -253,6 +262,7 @@ const CallHistoryPage = () => {
             }
         } catch (err) {
             console.error('Failed to delete:', err);
+            toast.error('Failed to delete call record');
         }
     };
 

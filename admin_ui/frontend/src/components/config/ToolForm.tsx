@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+import { toast } from 'sonner';
 import { Plus, Trash2, Settings } from 'lucide-react';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { Modal } from '../ui/Modal';
+import { EmailTemplateModal } from './EmailTemplateModal';
 
 interface ToolFormProps {
     config: any;
+    contexts?: Record<string, any>;
     onChange: (newConfig: any) => void;
+    onSaveNow?: (newConfig: any) => Promise<void>;
 }
 
 const DEFAULT_ATTENDED_ANNOUNCEMENT_TEMPLATE =
@@ -15,85 +20,28 @@ const DEFAULT_ATTENDED_AGENT_DTMF_PROMPT_TEMPLATE =
 const DEFAULT_ATTENDED_CALLER_CONNECTED_PROMPT = "Connecting you now.";
 const DEFAULT_ATTENDED_CALLER_DECLINED_PROMPT =
     "I’m not able to complete that transfer right now. Would you like me to take a message, or is there anything else I can help with?";
-const DEFAULT_HANGUP_POLICY_MODE = 'normal';
-const DEFAULT_HANGUP_END_CALL_MARKERS = [
-    "no transcript",
-    "no transcript needed",
-    "don't send a transcript",
-    "do not send a transcript",
-    "no need for a transcript",
-    "no thanks",
-    "no thank you",
-    "that's all",
-    "that is all",
-    "that's it",
-    "that is it",
-    "nothing else",
-    "all set",
-    "all good",
-    "end the call",
-    "end call",
-    "hang up",
-    "hangup",
-    "goodbye",
-    "bye",
-];
-const DEFAULT_HANGUP_ASSISTANT_FAREWELL_MARKERS = [
-    "goodbye",
-    "bye",
-    "thank you for calling",
-    "thanks for calling",
-    "have a great day",
-    "have a good day",
-    "take care",
-    "ending the call",
-    "i'll let you go",
-];
-const DEFAULT_HANGUP_AFFIRMATIVE_MARKERS = [
-    "yes",
-    "yeah",
-    "yep",
-    "correct",
-    "that's correct",
-    "thats correct",
-    "that's right",
-    "thats right",
-    "right",
-    "exactly",
-    "affirmative",
-];
-const DEFAULT_HANGUP_NEGATIVE_MARKERS = [
-    "no",
-    "nope",
-    "nah",
-    "negative",
-    "don't",
-    "dont",
-    "do not",
-    "not",
-    "not needed",
-    "no need",
-    "no thanks",
-    "no thank you",
-    "decline",
-    "skip",
-];
+// Note: Hangup guardrails (markers, policy modes) removed in v5.0
+// Call ending behavior is now controlled via context prompts
 
-const ToolForm = ({ config, onChange }: ToolFormProps) => {
+const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	    const [editingDestination, setEditingDestination] = useState<string | null>(null);
 	    const [destinationForm, setDestinationForm] = useState<any>({});
-	    const [hangupMarkerDraft, setHangupMarkerDraft] = useState({
-	        end_call: '',
-	        assistant_farewell: '',
-	        affirmative: '',
-	        negative: '',
-	    });
-	    const [hangupMarkerDirty, setHangupMarkerDirty] = useState({
-	        end_call: false,
-	        assistant_farewell: false,
-	        affirmative: false,
-	        negative: false,
-	    });
+        const [emailDefaults, setEmailDefaults] = useState<any>(null);
+        const [emailDefaultsError, setEmailDefaultsError] = useState<string | null>(null);
+        const [showSummaryEmailAdvanced, setShowSummaryEmailAdvanced] = useState(false);
+        const [showTranscriptEmailAdvanced, setShowTranscriptEmailAdvanced] = useState(false);
+        const [templateModalOpen, setTemplateModalOpen] = useState(false);
+        const [templateModalTool, setTemplateModalTool] = useState<'send_email_summary' | 'request_transcript'>('send_email_summary');
+
+        // Per-context override draft rows
+        const [summaryAdminCtx, setSummaryAdminCtx] = useState('');
+        const [summaryAdminVal, setSummaryAdminVal] = useState('');
+        const [summaryFromCtx, setSummaryFromCtx] = useState('');
+        const [summaryFromVal, setSummaryFromVal] = useState('');
+        const [transcriptAdminCtx, setTranscriptAdminCtx] = useState('');
+        const [transcriptAdminVal, setTranscriptAdminVal] = useState('');
+        const [transcriptFromCtx, setTranscriptFromCtx] = useState('');
+        const [transcriptFromVal, setTranscriptFromVal] = useState('');
 
     const updateConfig = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
@@ -109,77 +57,89 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
         });
     };
 
-    const updateHangupPolicy = (field: string, value: any) => {
-        const current = config.hangup_call?.policy || {};
-        updateNestedConfig('hangup_call', 'policy', { ...current, [field]: value });
+    const unsetNestedConfig = (section: string, field: string) => {
+        const next = { ...config };
+        const current = next[section];
+        if (!current || typeof current !== 'object') return;
+        const copy = { ...current };
+        delete copy[field];
+        next[section] = copy;
+        onChange(next);
     };
 
-    const updateHangupMarkers = (field: string, value: string[]) => {
-        const current = config.hangup_call?.policy || {};
-        const markers = { ...(current.markers || {}), [field]: value };
-        updateNestedConfig('hangup_call', 'policy', { ...current, markers });
+    const updateByContextMap = (section: string, key: string, contextName: string, value: string) => {
+        const next = { ...config };
+        const toolCfg = { ...(next[section] || {}) };
+        const mapKey = `${key}_by_context`;
+        const existing = (toolCfg as any)[mapKey];
+        const map = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? { ...existing } : {};
+        (map as any)[contextName] = value;
+        (toolCfg as any)[mapKey] = map;
+        next[section] = toolCfg;
+        onChange(next);
     };
 
-	    const parseMarkerList = (value: string) =>
-	        (value || '')
-	            .split('\n')
-	            .map((line) => line.trim())
-	            .filter((line) => line.length > 0);
+    const removeByContextKey = (section: string, key: string, contextName: string) => {
+        const next = { ...config };
+        const toolCfg = { ...(next[section] || {}) };
+        const mapKey = `${key}_by_context`;
+        const existing = (toolCfg as any)[mapKey];
+        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return;
+        const map = { ...existing };
+        delete (map as any)[contextName];
+        (toolCfg as any)[mapKey] = map;
+        next[section] = toolCfg;
+        onChange(next);
+    };
 
-	    const renderMarkerList = (value: string[] | undefined, fallback: string[]) =>
-	        (Array.isArray(value) && value.length > 0 ? value : fallback).join('\n');
+    const contextNames = Object.keys(contexts || {}).slice().sort();
 
-	    const endCallMarkerText = renderMarkerList(
-	        config.hangup_call?.policy?.markers?.end_call,
-	        DEFAULT_HANGUP_END_CALL_MARKERS
-	    );
-	    const assistantFarewellMarkerText = renderMarkerList(
-	        config.hangup_call?.policy?.markers?.assistant_farewell,
-	        DEFAULT_HANGUP_ASSISTANT_FAREWELL_MARKERS
-	    );
-	    const affirmativeMarkerText = renderMarkerList(
-	        config.hangup_call?.policy?.markers?.affirmative,
-	        DEFAULT_HANGUP_AFFIRMATIVE_MARKERS
-	    );
-	    const negativeMarkerText = renderMarkerList(
-	        config.hangup_call?.policy?.markers?.negative,
-	        DEFAULT_HANGUP_NEGATIVE_MARKERS
-	    );
+    const getDefaultEmailTemplate = (tool: 'send_email_summary' | 'request_transcript') => {
+        if (!emailDefaults) return '';
+        return tool === 'send_email_summary' ? (emailDefaults.send_email_summary || '') : (emailDefaults.request_transcript || '');
+    };
 
-	    useEffect(() => {
-	        setHangupMarkerDraft((prev) => {
-	            let changed = false;
-	            const next = { ...prev };
+    const isTemplateOverrideEnabled = (section: string) => {
+        const raw = config?.[section]?.html_template;
+        return typeof raw === 'string' && raw.trim().length > 0;
+    };
 
-	            if (!hangupMarkerDirty.end_call && prev.end_call !== endCallMarkerText) {
-	                next.end_call = endCallMarkerText;
-	                changed = true;
-	            }
-	            if (!hangupMarkerDirty.assistant_farewell && prev.assistant_farewell !== assistantFarewellMarkerText) {
-	                next.assistant_farewell = assistantFarewellMarkerText;
-	                changed = true;
-	            }
-	            if (!hangupMarkerDirty.affirmative && prev.affirmative !== affirmativeMarkerText) {
-	                next.affirmative = affirmativeMarkerText;
-	                changed = true;
-	            }
-	            if (!hangupMarkerDirty.negative && prev.negative !== negativeMarkerText) {
-	                next.negative = negativeMarkerText;
-	                changed = true;
-	            }
+    const loadEmailDefaults = async () => {
+        try {
+            setEmailDefaultsError(null);
+            const res = await axios.get('/api/tools/email-templates/defaults');
+            setEmailDefaults(res.data || null);
+            return true;
+        } catch (e: any) {
+            setEmailDefaults(null);
+            setEmailDefaultsError(e?.response?.data?.detail || e?.message || 'Failed to load defaults.');
+            return false;
+        }
+    };
 
-	            return changed ? next : prev;
-	        });
-	    }, [
-	        hangupMarkerDirty.end_call,
-	        hangupMarkerDirty.assistant_farewell,
-	        hangupMarkerDirty.affirmative,
-	        hangupMarkerDirty.negative,
-	        endCallMarkerText,
-	        assistantFarewellMarkerText,
-	        affirmativeMarkerText,
-	        negativeMarkerText,
-	    ]);
+    useEffect(() => {
+        let cancelled = false;
+        const load = async () => {
+            try {
+                if (cancelled) return;
+                await loadEmailDefaults();
+            } catch {
+                // ignore
+            }
+        };
+        load();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const openTemplateModal = (tool: 'send_email_summary' | 'request_transcript') => {
+        setTemplateModalTool(tool);
+        setTemplateModalOpen(true);
+        if (!emailDefaults && !emailDefaultsError) {
+            loadEmailDefaults();
+        }
+    };
 
     const handleAttendedTransferToggle = (enabled: boolean) => {
         const existing = config.attended_transfer || {};
@@ -237,14 +197,14 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
     const renameInternalExtensionKey = (fromKey: string, toKeyRaw: string) => {
         const toKey = (toKeyRaw || '').trim();
         if (!toKey) {
-            alert('Extension key cannot be empty.');
+            toast.error('Extension key cannot be empty.');
             return;
         }
         if (toKey === fromKey) return;
 
         const existing = { ...(config.extensions?.internal || {}) };
         if (Object.prototype.hasOwnProperty.call(existing, toKey)) {
-            alert(`An extension with key '${toKey}' already exists.`);
+            toast.error(`An extension with key '${toKey}' already exists.`);
             return;
         }
 
@@ -462,7 +422,7 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                 <div className="border border-border rounded-lg p-4 bg-card/50">
                     <FormSwitch
                         label="Hangup Call"
-                        description="Allow the agent to end the call gracefully."
+                        description="Allow the agent to end the call gracefully. Call ending behavior is controlled via context prompts."
                         checked={config.hangup_call?.enabled ?? true}
                         onChange={(e) => updateNestedConfig('hangup_call', 'enabled', e.target.checked)}
                         className="mb-0 border-0 p-0 bg-transparent"
@@ -470,14 +430,10 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     {config.hangup_call?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 grid grid-cols-1 md:grid-cols-2 gap-4">
                             <FormInput
-                                label="Farewell Message"
+                                label="Default Farewell Message"
                                 value={config.hangup_call?.farewell_message || ''}
                                 onChange={(e) => updateNestedConfig('hangup_call', 'farewell_message', e.target.value)}
-                            />
-                            <FormSwitch
-                                label="Require Confirmation"
-                                checked={config.hangup_call?.require_confirmation ?? false}
-                                onChange={(e) => updateNestedConfig('hangup_call', 'require_confirmation', e.target.checked)}
+                                tooltip="Used when the AI calls hangup_call without specifying a farewell. The AI typically provides its own message."
                             />
                             <FormInput
                                 label="Farewell Hangup Delay (seconds)"
@@ -487,94 +443,17 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 onChange={(e) => updateConfig('farewell_hangup_delay_sec', parseFloat(e.target.value) || 2.5)}
                                 tooltip="Time to wait after farewell audio before hanging up. Increase if farewell gets cut off."
                             />
-                            <FormSelect
-                                label="Hangup Guardrail Mode"
-                                value={config.hangup_call?.policy?.mode || DEFAULT_HANGUP_POLICY_MODE}
-                                onChange={(e) => updateHangupPolicy('mode', e.target.value)}
-                                options={[
-                                    { value: 'relaxed', label: 'Relaxed (allow hangup more freely)' },
-                                    { value: 'normal', label: 'Normal (default guardrail behavior)' },
-                                    { value: 'strict', label: 'Strict (require explicit end intent)' },
-                                ]}
-                                tooltip="Controls how strictly the system filters hangup_call tool calls when the user has not explicitly asked to end the call."
-                            />
-                            <FormSwitch
-                                label="Enforce Transcript Offer Before Hangup"
-                                checked={config.hangup_call?.policy?.enforce_transcript_offer ?? true}
-                                onChange={(e) => updateHangupPolicy('enforce_transcript_offer', e.target.checked)}
-                                description="If transcript emailing is enabled, block hangup_call until the user accepts or declines a transcript."
-                            />
-                            <FormSwitch
-                                label="Block During Contact Confirmation"
-                                checked={config.hangup_call?.policy?.block_during_contact_capture ?? true}
-                                onChange={(e) => updateHangupPolicy('block_during_contact_capture', e.target.checked)}
-                                description="Prevents hangup while confirming an email address or other contact details."
-                            />
                         </div>
                     )}
                     {config.hangup_call?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2">
-                            <FormLabel>Hangup Phrase Lists (one per line)</FormLabel>
-	                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-	                                <div className="space-y-2">
-	                                    <FormLabel tooltip="User phrases that indicate the call should end.">End-Call Markers</FormLabel>
-	                                    <textarea
-	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-	                                        value={hangupMarkerDirty.end_call ? hangupMarkerDraft.end_call : endCallMarkerText}
-	                                        onChange={(e) => {
-	                                            const text = e.target.value;
-	                                            setHangupMarkerDirty((prev) => ({ ...prev, end_call: true }));
-	                                            setHangupMarkerDraft((prev) => ({ ...prev, end_call: text }));
-	                                            updateHangupMarkers('end_call', parseMarkerList(text));
-	                                        }}
-	                                        placeholder="bye\nthat's all\nend the call"
-	                                    />
-	                                </div>
-	                                <div className="space-y-2">
-	                                    <FormLabel tooltip="Assistant farewell phrases that should trigger hangup completion.">Assistant Farewell Markers</FormLabel>
-	                                    <textarea
-	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-	                                        value={hangupMarkerDirty.assistant_farewell ? hangupMarkerDraft.assistant_farewell : assistantFarewellMarkerText}
-	                                        onChange={(e) => {
-	                                            const text = e.target.value;
-	                                            setHangupMarkerDirty((prev) => ({ ...prev, assistant_farewell: true }));
-	                                            setHangupMarkerDraft((prev) => ({ ...prev, assistant_farewell: text }));
-	                                            updateHangupMarkers('assistant_farewell', parseMarkerList(text));
-	                                        }}
-	                                        placeholder="thank you for calling\ngoodbye"
-	                                    />
-	                                </div>
-	                                <div className="space-y-2">
-	                                    <FormLabel tooltip="User phrases that indicate acceptance (e.g., transcript offer).">Affirmative Markers</FormLabel>
-	                                    <textarea
-	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-	                                        value={hangupMarkerDirty.affirmative ? hangupMarkerDraft.affirmative : affirmativeMarkerText}
-	                                        onChange={(e) => {
-	                                            const text = e.target.value;
-	                                            setHangupMarkerDirty((prev) => ({ ...prev, affirmative: true }));
-	                                            setHangupMarkerDraft((prev) => ({ ...prev, affirmative: text }));
-	                                            updateHangupMarkers('affirmative', parseMarkerList(text));
-	                                        }}
-	                                        placeholder="yes\nyep\ncorrect"
-	                                    />
-	                                </div>
-	                                <div className="space-y-2">
-	                                    <FormLabel tooltip="User phrases that indicate decline (e.g., transcript offer).">Negative Markers</FormLabel>
-	                                    <textarea
-	                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
-	                                        value={hangupMarkerDirty.negative ? hangupMarkerDraft.negative : negativeMarkerText}
-	                                        onChange={(e) => {
-	                                            const text = e.target.value;
-	                                            setHangupMarkerDirty((prev) => ({ ...prev, negative: true }));
-	                                            setHangupMarkerDraft((prev) => ({ ...prev, negative: text }));
-	                                            updateHangupMarkers('negative', parseMarkerList(text));
-	                                        }}
-	                                        placeholder="no\nno thanks\nskip"
-	                                    />
-	                                </div>
-	                            </div>
-	                        </div>
-	                    )}
+                            <p className="text-sm text-muted-foreground">
+                                <strong>Note:</strong> Call ending behavior (transcript offers, confirmation flows) is now controlled 
+                                via context prompts rather than code guardrails. Configure the CALL ENDING PROTOCOL section in your 
+                                context's system prompt to customize behavior.
+                            </p>
+                        </div>
+                    )}
                 </div>
 
                 {/* Leave Voicemail */}
@@ -744,6 +623,17 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     />
                     {config.send_email_summary?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <FormSelect
+                                label="Email Provider"
+                                options={[
+                                    { value: 'auto', label: 'Auto (SMTP → Resend)' },
+                                    { value: 'smtp', label: 'SMTP (local mail server)' },
+                                    { value: 'resend', label: 'Resend (API)' },
+                                ]}
+                                value={config.send_email_summary?.provider || 'auto'}
+                                onChange={(e) => updateNestedConfig('send_email_summary', 'provider', e.target.value)}
+                                tooltip="Auto uses SMTP if SMTP_HOST is configured; otherwise uses Resend if RESEND_API_KEY is set."
+                            />
                             <FormInput
                                 label="From Email"
                                 value={config.send_email_summary?.from_email || ''}
@@ -759,6 +649,180 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 checked={config.send_email_summary?.include_transcript ?? true}
                                 onChange={(e) => updateNestedConfig('send_email_summary', 'include_transcript', e.target.checked)}
                             />
+                            <div className="md:col-span-2 border-t border-border pt-4 mt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowSummaryEmailAdvanced(!showSummaryEmailAdvanced)}
+                                    className="text-sm font-medium text-primary hover:underline"
+                                >
+                                    {showSummaryEmailAdvanced ? 'Hide' : 'Show'} Advanced Email Format
+                                </button>
+
+                                {showSummaryEmailAdvanced && (
+                                    <div className="mt-4 space-y-4">
+                                        <div className="space-y-2">
+                                            <FormLabel>Per-Context Overrides</FormLabel>
+                                            <p className="text-xs text-muted-foreground">
+                                                Override recipients and sender per context (uses the call’s resolved context name).
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">Admin Email Overrides</div>
+                                            {Object.entries(config.send_email_summary?.admin_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.send_email_summary?.admin_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`summary-admin-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('send_email_summary', 'admin_email', ctx, e.target.value)}
+                                                                placeholder="admin@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('send_email_summary', 'admin_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryAdminCtx}
+                                                    onChange={(e) => setSummaryAdminCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`summary-admin-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryAdminVal}
+                                                    onChange={(e) => setSummaryAdminVal(e.target.value)}
+                                                    placeholder="admin@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!summaryAdminCtx || !summaryAdminVal) return;
+                                                        updateByContextMap('send_email_summary', 'admin_email', summaryAdminCtx, summaryAdminVal);
+                                                        setSummaryAdminCtx('');
+                                                        setSummaryAdminVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">From Email Overrides</div>
+                                            {Object.entries(config.send_email_summary?.from_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.send_email_summary?.from_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`summary-from-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('send_email_summary', 'from_email', ctx, e.target.value)}
+                                                                placeholder="agent@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('send_email_summary', 'from_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryFromCtx}
+                                                    onChange={(e) => setSummaryFromCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`summary-from-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={summaryFromVal}
+                                                    onChange={(e) => setSummaryFromVal(e.target.value)}
+                                                    placeholder="agent@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!summaryFromCtx || !summaryFromVal) return;
+                                                        updateByContextMap('send_email_summary', 'from_email', summaryFromCtx, summaryFromVal);
+                                                        setSummaryFromCtx('');
+                                                        setSummaryFromVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2 pt-2 border-t border-border">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <div className="text-sm font-medium">HTML Template</div>
+                                                    <div className="text-xs text-muted-foreground">Advanced: customize the full email HTML (Jinja2).</div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openTemplateModal('send_email_summary')}
+                                                        className="px-3 py-1 text-xs border rounded hover:bg-accent"
+                                                    >
+                                                        Edit / Preview
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                                <FormInput
+                                                    label="Subject Prefix (Optional)"
+                                                    value={config.send_email_summary?.subject_prefix || ''}
+                                                    onChange={(e) => updateNestedConfig('send_email_summary', 'subject_prefix', e.target.value)}
+                                                    placeholder="[AAVA] "
+                                                    tooltip="Prepended to the email subject. A space is automatically added if missing."
+                                                />
+                                                <FormSwitch
+                                                    label="Include Context Tag in Subject"
+                                                    checked={config.send_email_summary?.include_context_in_subject ?? true}
+                                                    onChange={(e) => updateNestedConfig('send_email_summary', 'include_context_in_subject', e.target.checked)}
+                                                    description="If enabled, subjects include a prefix like [support] or [demo_deepgram]."
+                                                />
+                                            </div>
+                                            <div className="text-xs text-muted-foreground">
+                                                Status: {isTemplateOverrideEnabled('send_email_summary') ? 'Custom template enabled' : 'Using default template'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -774,6 +838,17 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     />
                     {config.request_transcript?.enabled !== false && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <FormSelect
+                                label="Email Provider"
+                                options={[
+                                    { value: 'auto', label: 'Auto (SMTP → Resend)' },
+                                    { value: 'smtp', label: 'SMTP (local mail server)' },
+                                    { value: 'resend', label: 'Resend (API)' },
+                                ]}
+                                value={config.request_transcript?.provider || 'auto'}
+                                onChange={(e) => updateNestedConfig('request_transcript', 'provider', e.target.value)}
+                                tooltip="Auto uses SMTP if SMTP_HOST is configured; otherwise uses Resend if RESEND_API_KEY is set."
+                            />
                             <FormInput
                                 label="From Email"
                                 value={config.request_transcript?.from_email || ''}
@@ -795,6 +870,180 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 checked={config.request_transcript?.validate_domain ?? true}
                                 onChange={(e) => updateNestedConfig('request_transcript', 'validate_domain', e.target.checked)}
                             />
+                            <div className="md:col-span-2 border-t border-border pt-4 mt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTranscriptEmailAdvanced(!showTranscriptEmailAdvanced)}
+                                    className="text-sm font-medium text-primary hover:underline"
+                                >
+                                    {showTranscriptEmailAdvanced ? 'Hide' : 'Show'} Advanced Email Format
+                                </button>
+
+                                {showTranscriptEmailAdvanced && (
+                                    <div className="mt-4 space-y-4">
+                                        <div className="space-y-2">
+                                            <FormLabel>Per-Context Overrides</FormLabel>
+                                            <p className="text-xs text-muted-foreground">
+                                                Override BCC (admin) and sender per context.
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">Admin Email (BCC) Overrides</div>
+                                            {Object.entries(config.request_transcript?.admin_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.request_transcript?.admin_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`transcript-admin-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('request_transcript', 'admin_email', ctx, e.target.value)}
+                                                                placeholder="admin@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('request_transcript', 'admin_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptAdminCtx}
+                                                    onChange={(e) => setTranscriptAdminCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`transcript-admin-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptAdminVal}
+                                                    onChange={(e) => setTranscriptAdminVal(e.target.value)}
+                                                    placeholder="admin@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!transcriptAdminCtx || !transcriptAdminVal) return;
+                                                        updateByContextMap('request_transcript', 'admin_email', transcriptAdminCtx, transcriptAdminVal);
+                                                        setTranscriptAdminCtx('');
+                                                        setTranscriptAdminVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">From Email Overrides</div>
+                                            {Object.entries(config.request_transcript?.from_email_by_context || {}).length === 0 ? (
+                                                <div className="text-xs text-muted-foreground">No overrides configured.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {Object.entries(config.request_transcript?.from_email_by_context || {}).map(([ctx, val]: [string, any]) => (
+                                                        <div key={`transcript-from-${ctx}`} className="flex items-center gap-2">
+                                                            <div className="text-xs w-40 truncate" title={ctx}>{ctx}</div>
+                                                            <input
+                                                                className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                                value={String(val ?? '')}
+                                                                onChange={(e) => updateByContextMap('request_transcript', 'from_email', ctx, e.target.value)}
+                                                                placeholder="agent@yourdomain.com"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeByContextKey('request_transcript', 'from_email', ctx)}
+                                                                className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    className="border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptFromCtx}
+                                                    onChange={(e) => setTranscriptFromCtx(e.target.value)}
+                                                >
+                                                    <option value="">Select context…</option>
+                                                    {contextNames.map((c) => (
+                                                        <option key={`transcript-from-opt-${c}`} value={c}>{c}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    className="flex-1 border rounded px-2 py-1 text-sm bg-transparent"
+                                                    value={transcriptFromVal}
+                                                    onChange={(e) => setTranscriptFromVal(e.target.value)}
+                                                    placeholder="agent@yourdomain.com"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!transcriptFromCtx || !transcriptFromVal) return;
+                                                        updateByContextMap('request_transcript', 'from_email', transcriptFromCtx, transcriptFromVal);
+                                                        setTranscriptFromCtx('');
+                                                        setTranscriptFromVal('');
+                                                    }}
+                                                    className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2 pt-2 border-t border-border">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <div className="text-sm font-medium">HTML Template</div>
+                                                    <div className="text-xs text-muted-foreground">Advanced: customize the full email HTML (Jinja2).</div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openTemplateModal('request_transcript')}
+                                                        className="px-3 py-1 text-xs border rounded hover:bg-accent"
+                                                    >
+                                                        Edit / Preview
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                                <FormInput
+                                                    label="Subject Prefix (Optional)"
+                                                    value={config.request_transcript?.subject_prefix || ''}
+                                                    onChange={(e) => updateNestedConfig('request_transcript', 'subject_prefix', e.target.value)}
+                                                    placeholder="[AAVA] "
+                                                    tooltip="Prepended to the email subject. A space is automatically added if missing."
+                                                />
+                                                <FormSwitch
+                                                    label="Include Context Tag in Subject"
+                                                    checked={config.request_transcript?.include_context_in_subject ?? true}
+                                                    onChange={(e) => updateNestedConfig('request_transcript', 'include_context_in_subject', e.target.checked)}
+                                                    description="If enabled, subjects include a prefix like [support] or [demo_openai]."
+                                                />
+                                            </div>
+                                            <div className="text-xs text-muted-foreground">
+                                                Status: {isTemplateOverrideEnabled('request_transcript') ? 'Custom template enabled' : 'Using default template'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -852,6 +1101,58 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     />
                 </div>
             </Modal>
+
+            <EmailTemplateModal
+                isOpen={templateModalOpen}
+                onClose={() => setTemplateModalOpen(false)}
+                tool={templateModalTool}
+                currentTemplate={(config?.[templateModalTool]?.html_template || '').trim() ? (config?.[templateModalTool]?.html_template || '') : null}
+                includeTranscript={templateModalTool === 'send_email_summary' ? (config?.send_email_summary?.include_transcript ?? true) : true}
+                defaultTemplate={getDefaultEmailTemplate(templateModalTool)}
+                variableNames={(emailDefaults?.variables || []).map((v: any) => v?.name).filter(Boolean)}
+                defaultsStatusText={
+                    emailDefaultsError
+                        ? `Defaults error: ${emailDefaultsError}`
+                        : (emailDefaults ? 'Defaults loaded' : 'Defaults loading…')
+                }
+                onReloadDefaults={async () => {
+                    const ok = await loadEmailDefaults();
+                    if (ok) toast.success('Loaded default templates');
+                    else toast.error('Failed to load defaults');
+                }}
+                onSave={async (nextTemplate) => {
+                    const prevConfig = config;
+                    const nextConfig = (() => {
+                        if (!nextTemplate) {
+                            const next = { ...config };
+                            const current = next[templateModalTool];
+                            if (!current || typeof current !== 'object') return next;
+                            const copy = { ...current };
+                            delete copy.html_template;
+                            next[templateModalTool] = copy;
+                            return next;
+                        }
+                        return {
+                            ...config,
+                            [templateModalTool]: {
+                                ...config[templateModalTool],
+                                html_template: nextTemplate
+                            }
+                        };
+                    })();
+
+                    onChange(nextConfig);
+                    if (onSaveNow) {
+                        try {
+                            await onSaveNow(nextConfig);
+                        } catch (e) {
+                            // Revert local state so UI reflects the persisted config.
+                            onChange(prevConfig);
+                            throw e;
+                        }
+                    }
+                }}
+            />
         </div>
     );
 };

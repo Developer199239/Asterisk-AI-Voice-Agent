@@ -9,6 +9,9 @@ import glob
 import tempfile
 import sys
 import logging
+import ssl
+import smtplib
+from email.message import EmailMessage
 from contextlib import contextmanager
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, Union
@@ -20,6 +23,45 @@ MAX_BACKUPS = 5
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+def _is_prefix(key: str, prefixes: tuple[str, ...]) -> bool:
+    return any(key.startswith(p) for p in prefixes)
+
+
+def _ai_engine_env_key(key: str) -> bool:
+    return (
+        _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_"))
+        or key in (
+            "OPENAI_API_KEY",
+            "GROQ_API_KEY",
+            "DEEPGRAM_API_KEY",
+            "GOOGLE_API_KEY",
+            "RESEND_API_KEY",
+            "ELEVENLABS_API_KEY",
+            "ELEVENLABS_AGENT_ID",
+            "TZ",
+            "STREAMING_LOG_LEVEL",
+        )
+        or _is_prefix(key, ("AUDIO_TRANSPORT", "DOWNSTREAM_MODE", "AUDIOSOCKET_", "EXTERNAL_MEDIA_", "BARGE_IN_"))
+        or _is_prefix(key, ("SMTP_",))
+        # Local provider runtime uses these env vars via ${LOCAL_WS_*} placeholders in ai-agent.yaml
+        or _is_prefix(key, ("LOCAL_WS_",))
+    )
+
+
+def _local_ai_env_key(key: str) -> bool:
+    return (
+        _is_prefix(key, ("LOCAL_", "KROKO_", "FASTER_WHISPER_", "WHISPER_CPP_", "MELOTTS_", "KOKORO_"))
+        or key in ("SHERPA_MODEL_PATH",)
+    )
+
+
+def _admin_ui_env_key(key: str) -> bool:
+    return (
+        key in ("JWT_SECRET", "DOCKER_SOCK", "DOCKER_GID", "TZ")
+        or _is_prefix(key, ("UVICORN_", "ADMIN_UI_"))
+    )
+
 
 def _assert_no_duplicate_yaml_keys(node: yaml.Node) -> None:
     """
@@ -637,40 +679,19 @@ async def update_env(env_data: Dict[str, Optional[str]]):
         
         changed_keys = sorted(set(keys_to_update) | set(keys_to_delete))
 
-        def _is_prefix(key: str, prefixes: tuple[str, ...]) -> bool:
-            return any(key.startswith(p) for p in prefixes)
-
-        def _ai_engine_env_key(key: str) -> bool:
-            return (
-                _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_"))
-                or key in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "GOOGLE_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "TZ", "STREAMING_LOG_LEVEL")
-                or _is_prefix(key, ("AUDIO_TRANSPORT", "DOWNSTREAM_MODE", "AUDIOSOCKET_", "EXTERNAL_MEDIA_", "BARGE_IN_"))
-                # Local provider runtime uses these env vars via ${LOCAL_WS_*} placeholders in ai-agent.yaml
-                or _is_prefix(key, ("LOCAL_WS_",))
-            )
-
-        def _local_ai_env_key(key: str) -> bool:
-            return (
-                _is_prefix(key, ("LOCAL_", "KROKO_", "FASTER_WHISPER_", "WHISPER_CPP_", "MELOTTS_", "KOKORO_"))
-                or key in ("SHERPA_MODEL_PATH",)
-            )
-
-        def _admin_ui_env_key(key: str) -> bool:
-            return (
-                key in ("JWT_SECRET", "DOCKER_SOCK", "DOCKER_GID", "TZ")
-                or _is_prefix(key, ("UVICORN_", "ADMIN_UI_"))
-            )
-
         impacts_ai_engine = any(_ai_engine_env_key(k) for k in changed_keys)
         impacts_local_ai = any(_local_ai_env_key(k) for k in changed_keys)
         impacts_admin_ui = any(_admin_ui_env_key(k) for k in changed_keys)
 
         apply_plan = []
+        # NOTE: For ai_engine/local_ai_server, env_file (.env) changes require a force-recreate.
+        # The frontend calls /restart?recreate=true for these services.
         if impacts_ai_engine:
-            apply_plan.append({"service": "ai_engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"})
+            apply_plan.append({"service": "ai_engine", "method": "recreate", "endpoint": "/api/system/containers/ai_engine/restart"})
         if impacts_local_ai:
-            apply_plan.append({"service": "local_ai_server", "method": "restart", "endpoint": "/api/system/containers/local_ai_server/restart"})
+            apply_plan.append({"service": "local_ai_server", "method": "recreate", "endpoint": "/api/system/containers/local_ai_server/restart"})
         if impacts_admin_ui:
+            # Admin UI reads .env from disk at startup; a restart is sufficient in most cases.
             apply_plan.append({"service": "admin_ui", "method": "restart", "endpoint": "/api/system/containers/admin_ui/restart"})
 
         message = "Environment saved. Restart impacted services to apply changes."
@@ -690,9 +711,98 @@ async def update_env(env_data: Dict[str, Optional[str]]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/env/status")
+async def get_env_status():
+    """
+    Detect whether the running containers are out-of-sync with the project's `.env` file.
+
+    This allows the UI to keep showing a correct "Apply Changes" plan even after a refresh,
+    since `.env` edits persist but container environments only update on recreate/restart.
+    """
+    try:
+        from dotenv import dotenv_values
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="python-dotenv is required for env status") from e
+
+    env_map = dotenv_values(settings.ENV_PATH) if os.path.exists(settings.ENV_PATH) else {}
+    env_map = {k: str(v) for k, v in (env_map or {}).items() if k and v is not None}
+
+    try:
+        import docker  # type: ignore
+        client = docker.from_env()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Docker unavailable for env status: {str(e)}")
+
+    def _container_env(name: str) -> Dict[str, str]:
+        try:
+            c = client.containers.get(name)
+            raw = (c.attrs.get("Config", {}) or {}).get("Env", []) or []
+            out: Dict[str, str] = {}
+            for item in raw:
+                if not isinstance(item, str) or "=" not in item:
+                    continue
+                k, v = item.split("=", 1)
+                out[str(k)] = str(v)
+            return out
+        except Exception:
+            return {}
+
+    ai_env = _container_env("ai_engine")
+    local_env = _container_env("local_ai_server")
+    admin_env = _container_env("admin_ui")
+
+    def _diff_keys(*, desired: Dict[str, str], actual: Dict[str, str], key_pred) -> list[str]:
+        keys = set()
+        keys.update([k for k in desired.keys() if key_pred(k)])
+        keys.update([k for k in actual.keys() if key_pred(k)])
+        diffs = []
+        for k in sorted(keys):
+            want = str(desired.get(k, "") or "")
+            got = str(actual.get(k, "") or "")
+            if want != got:
+                diffs.append(k)
+        return diffs
+
+    drift_ai = _diff_keys(desired=env_map, actual=ai_env, key_pred=_ai_engine_env_key)
+    drift_local = _diff_keys(desired=env_map, actual=local_env, key_pred=_local_ai_env_key)
+    drift_admin = _diff_keys(desired=env_map, actual=admin_env, key_pred=_admin_ui_env_key)
+
+    apply_plan = []
+    if drift_local:
+        apply_plan.append({"service": "local_ai_server", "method": "recreate", "endpoint": "/api/system/containers/local_ai_server/restart"})
+    if drift_ai:
+        apply_plan.append({"service": "ai_engine", "method": "recreate", "endpoint": "/api/system/containers/ai_engine/restart"})
+    if drift_admin:
+        apply_plan.append({"service": "admin_ui", "method": "restart", "endpoint": "/api/system/containers/admin_ui/restart"})
+
+    return {
+        "pending_restart": bool(apply_plan),
+        "apply_plan": apply_plan,
+        "drift": {
+            "ai_engine": drift_ai,
+            "local_ai_server": drift_local,
+            "admin_ui": drift_admin,
+        },
+    }
+
 class ProviderTestRequest(BaseModel):
     name: str
     config: Dict[str, Any]
+
+class SmtpTestRequest(BaseModel):
+    to_email: str
+    from_email: Optional[str] = None
+    subject: Optional[str] = None
+    text: Optional[str] = None
+    # Optional overrides (when testing unsaved UI form values).
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[Union[int, str]] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_tls_mode: Optional[str] = None  # starttls | smtps | none
+    smtp_tls_verify: Optional[Union[bool, str]] = None
+    smtp_timeout_seconds: Optional[Union[float, str]] = None
 
 @router.post("/providers/test")
 async def test_provider_connection(request: ProviderTestRequest):
@@ -1070,6 +1180,107 @@ async def export_configuration():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/env/smtp/test")
+async def test_smtp_settings(req: SmtpTestRequest):
+    """
+    Send a test email using SMTP_* settings from the project's .env file.
+
+    This validates connectivity + auth using the *configured* SMTP settings (as saved by the UI),
+    even before the ai_engine container is force-recreated to pick up env_file changes.
+    """
+    try:
+        from dotenv import dotenv_values
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="python-dotenv is required for SMTP test") from e
+
+    if not (req.to_email or "").strip():
+        raise HTTPException(status_code=400, detail="to_email is required")
+
+    env_map = dotenv_values(settings.ENV_PATH) if os.path.exists(settings.ENV_PATH) else {}
+
+    host = str((req.smtp_host if req.smtp_host is not None else (env_map or {}).get("SMTP_HOST")) or "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="SMTP_HOST is not set (save it in .env or pass smtp_host)")
+
+    tls_mode = str((req.smtp_tls_mode if req.smtp_tls_mode is not None else (env_map or {}).get("SMTP_TLS_MODE")) or "starttls").strip().lower()
+    if tls_mode not in {"starttls", "smtps", "none"}:
+        raise HTTPException(status_code=400, detail="SMTP_TLS_MODE must be starttls, smtps, or none")
+
+    port_raw = str((req.smtp_port if req.smtp_port is not None else (env_map or {}).get("SMTP_PORT")) or "").strip()
+    try:
+        port = int(port_raw) if port_raw else (465 if tls_mode == "smtps" else 587)
+    except Exception:
+        raise HTTPException(status_code=400, detail="SMTP_PORT must be an integer")
+
+    username = str((req.smtp_username if req.smtp_username is not None else (env_map or {}).get("SMTP_USERNAME")) or "").strip() or None
+    password = str((req.smtp_password if req.smtp_password is not None else (env_map or {}).get("SMTP_PASSWORD")) or "").strip() or None
+
+    timeout_raw = str((req.smtp_timeout_seconds if req.smtp_timeout_seconds is not None else (env_map or {}).get("SMTP_TIMEOUT_SECONDS")) or "10").strip()
+    try:
+        timeout_s = float(timeout_raw or "10")
+    except Exception:
+        timeout_s = 10.0
+
+    tls_verify_raw = req.smtp_tls_verify if req.smtp_tls_verify is not None else (env_map or {}).get("SMTP_TLS_VERIFY")
+    if isinstance(tls_verify_raw, bool):
+        tls_verify = tls_verify_raw
+    else:
+        tls_verify = str(tls_verify_raw or "true").strip().lower() in {"1", "true", "yes", "on"}
+    context = ssl.create_default_context()
+    if not tls_verify:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    from_email = (req.from_email or "").strip()
+    if not from_email:
+        # Best-effort default: many SMTP servers expect From to match the authenticated mailbox.
+        from_email = (username or "test@localhost")
+
+    subject = (req.subject or "").strip() or "Asterisk AI Voice Agent - SMTP Test"
+    text = (req.text or "").strip() or (
+        "This is a test email sent by the Admin UI to verify your SMTP settings.\n\n"
+        "If you received this, SMTP is configured correctly."
+    )
+
+    msg = EmailMessage()
+    msg["To"] = req.to_email.strip()
+    msg["From"] = from_email
+    msg["Subject"] = subject
+    msg.set_content(text)
+
+    def _send_sync() -> None:
+        if tls_mode == "smtps":
+            with smtplib.SMTP_SSL(host=host, port=port, timeout=timeout_s, context=context) as smtp:
+                smtp.ehlo()
+                if username and password:
+                    smtp.login(username, password)
+                smtp.send_message(msg, to_addrs=[req.to_email.strip()])
+            return
+
+        with smtplib.SMTP(host=host, port=port, timeout=timeout_s) as smtp:
+            smtp.ehlo()
+            if tls_mode == "starttls":
+                smtp.starttls(context=context)
+                smtp.ehlo()
+            if username and password:
+                smtp.login(username, password)
+            smtp.send_message(msg, to_addrs=[req.to_email.strip()])
+
+    try:
+        await asyncio.to_thread(_send_sync)
+        return {
+            "success": True,
+            "message": "Test email accepted by SMTP server",
+            "host": host,
+            "port": port,
+            "tls_mode": tls_mode,
+            "tls_verify": tls_verify,
+        }
+    except Exception as e:
+        # Do not echo secrets; only return the error string.
+        raise HTTPException(status_code=500, detail=f"SMTP test failed: {str(e)}")
 
 @router.get("/export-logs")
 async def export_logs():

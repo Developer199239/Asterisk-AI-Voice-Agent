@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import axios from 'axios';
+import { toast } from 'sonner';
 import yaml from 'js-yaml';
 import { Plus, Save, Play, RefreshCw, AlertCircle, Settings2, Trash2 } from 'lucide-react';
 import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
@@ -52,6 +54,7 @@ const _parseArgLine = (raw: string): string[] => {
 };
 
 const MCPPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
@@ -114,19 +117,19 @@ const MCPPage = () => {
                 setReloadingEngine(true);
                 const res = await axios.post('/api/system/containers/ai_engine/reload');
                 if (res.data?.restart_required) {
-                    alert('MCP configuration saved, but a full AI Engine restart is required for some changes.');
+                    toast.warning('MCP configuration saved, but a full AI Engine restart is required for some changes.');
                 } else {
-                    alert('MCP configuration saved and AI Engine reloaded.');
+                    toast.success('MCP configuration saved and AI Engine reloaded.');
                 }
             } catch (err: any) {
-                alert(`MCP configuration saved. AI Engine reload failed: ${err.response?.data?.detail || err.message}`);
+                toast.warning('MCP configuration saved', { description: `AI Engine reload failed: ${err.response?.data?.detail || err.message}` });
             } finally {
                 setReloadingEngine(false);
                 await fetchStatus();
             }
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         } finally {
             setSaving(false);
         }
@@ -186,20 +189,20 @@ const MCPPage = () => {
         setEditing(true);
     };
 
-    const saveServerForm = () => {
+    const saveServerForm = async () => {
         if (!serverForm) return;
         const id = (serverForm.id || '').trim();
         if (!id) {
-            alert('Server ID is required');
+            toast.error('Server ID is required');
             return;
         }
         if (!/^[a-zA-Z0-9_]+$/.test(id)) {
-            alert('Server ID must be provider-safe (letters, numbers, underscores)');
+            toast.error('Server ID must be provider-safe (letters, numbers, underscores)');
             return;
         }
         const cmd = [serverForm.commandExec.trim(), ..._parseArgLine(serverForm.commandArgs)].filter(Boolean);
         if (cmd.length === 0) {
-            alert('Command is required');
+            toast.error('Command is required');
             return;
         }
 
@@ -218,9 +221,13 @@ const MCPPage = () => {
         const unsafeEnv = Object.entries(envObj).filter(([_k, v]) => v && !/^\$\{[A-Za-z0-9_]+\}$/.test(v));
         if (unsafeEnv.length > 0) {
             const names = unsafeEnv.map(([k]) => k).join(', ');
-            if (!confirm(`Some env values are not placeholders like \${VAR} (keys: ${names}). This may expose secrets in YAML/UI. Continue?`)) {
-                return;
-            }
+            const confirmed = await confirm({
+                title: 'Potential Security Risk',
+                description: `Some env values are not placeholders like \${VAR} (keys: ${names}). This may expose secrets in YAML/UI. Continue?`,
+                confirmText: 'Continue Anyway',
+                variant: 'destructive'
+            });
+            if (!confirmed) return;
         }
 
         const toolList = (serverForm.tools || [])
@@ -229,12 +236,12 @@ const MCPPage = () => {
         const seenToolNames = new Set<string>();
         for (const t of toolList) {
             if (seenToolNames.has(t.name)) {
-                alert(`Duplicate tool override name: ${t.name}`);
+                toast.error(`Duplicate tool override name: ${t.name}`);
                 return;
             }
             seenToolNames.add(t.name);
             if (t.expose_as && !/^[a-zA-Z0-9_]+$/.test(t.expose_as)) {
-                alert(`Invalid expose_as '${t.expose_as}' (letters, numbers, underscores)`);
+                toast.error(`Invalid expose_as '${t.expose_as}' (letters, numbers, underscores)`);
                 return;
             }
         }
@@ -256,8 +263,14 @@ const MCPPage = () => {
         setServerForm(null);
     };
 
-    const deleteServer = (id: string) => {
-        if (!confirm(`Delete MCP server '${id}' from config?`)) return;
+    const deleteServer = async (id: string) => {
+        const confirmed = await confirm({
+            title: 'Delete MCP Server?',
+            description: `Delete MCP server '${id}' from config?`,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const nextServers = { ...servers };
         delete nextServers[id];
         updateMcp({ enabled: mcpConfig.enabled ?? false, servers: nextServers });
@@ -268,12 +281,12 @@ const MCPPage = () => {
         try {
             const res = await axios.post(`/api/mcp/servers/${id}/test`);
             if (res.data.ok) {
-                alert(`MCP server '${id}' OK. Tools: ${(res.data.tools || []).join(', ')}`);
+                toast.success(`MCP server '${id}' OK`, { description: `Tools: ${(res.data.tools || []).join(', ')}` });
             } else {
-                alert(`MCP server '${id}' failed: ${res.data.error || 'unknown error'}`);
+                toast.error(`MCP server '${id}' failed`, { description: res.data.error || 'unknown error' });
             }
         } catch (err: any) {
-            alert(`MCP test failed: ${err.response?.data?.detail || err.message}`);
+            toast.error('MCP test failed', { description: err.response?.data?.detail || err.message });
         } finally {
             setTestRunning(prev => ({ ...prev, [id]: false }));
             await fetchStatus();

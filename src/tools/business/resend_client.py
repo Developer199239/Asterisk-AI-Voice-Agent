@@ -5,10 +5,14 @@ import os
 import time
 from typing import Any, Dict, Optional
 
-import resend
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+try:
+    import resend  # type: ignore
+except Exception:
+    resend = None
 
 
 class _ResendRateLimiter:
@@ -37,6 +41,8 @@ _recent_send_keys: Dict[str, float] = {}
 
 def _ensure_api_key() -> bool:
     global _api_key_configured
+    if resend is None:
+        return False
     api_key = os.getenv("RESEND_API_KEY")
     if not api_key:
         return False
@@ -86,6 +92,9 @@ async def send_email(
     Resend enforces 2 requests/second on many plans; outbound tooling can trigger multiple
     email sends back-to-back (summary + transcript). We serialize + retry to avoid 429s.
     """
+    if resend is None:
+        logger.error("Resend SDK not available (pip install resend)", call_id=call_id)
+        return None
     if not _ensure_api_key():
         logger.error("RESEND_API_KEY not configured", call_id=call_id)
         return None

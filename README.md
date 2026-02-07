@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-5.3.1-blue.svg)
+![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -21,11 +21,11 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v531)
+- [🎉 What's New](#-whats-new-in-v600)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
-- [🛠️ AI-Powered Actions](#-ai-powered-actions-v43)
+- [🛠️ AI-Powered Actions](#-ai-powered-actions)
 - [🩺 Agent CLI Tools](#-agent-cli-tools)
 - [⚙️ Configuration](#-configuration)
 - [🏗️ Project Architecture](#-project-architecture)
@@ -110,7 +110,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.3.1.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.0.0.
 
 ### Option B: Manual Setup
 ```bash
@@ -153,28 +153,45 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v5.3.1
+## 🎉 What's New in v6.0.0
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🧰 Phase Tools (v5.3.1)
-- Pre-call HTTP lookups, in-call HTTP tools, and post-call webhooks (Milestone 24)
-- Admin UI includes an HTTP tool **Test** feature with SSRF-safe defaults
+### OpenAI Realtime GA API (v6.0.0)
+- Full Beta-to-GA migration with `api_version` toggle, nested audio schema, MIME format types
+- New `project_id` field for OpenAI project tracking
+- 10 voices with gender labels (alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse)
 
-### 🗣️ Deepgram Voice Agent Language (v5.3.1)
-- Configure `providers.deepgram.agent_language` via Admin UI or YAML
+### Email System Overhaul (v6.0.0)
+- SMTP support alongside Resend with auto-detection
+- HTML template editor with per-context overrides, subject prefix, call outcome variables
+- Template autoescaping for security
 
-### 🩹 Stability & Ops (v5.3.1)
-- Fix ExternalMedia RTP greeting cutoff on some trunk calls
-- Admin UI: safer “Apply Changes”, improved YAML error recovery, and log export redaction
+### 🖥️ Admin UI Modernization (v6.0.0)
+- Live System Topology with clickable navigation to settings pages
+- Modern confirm dialogs, toast notifications, tab-based EnvPage, Help section
+- Models page redesign with active model cards during calls
 
-For full release notes, see [CHANGELOG.md](CHANGELOG.md).
+### 🌐 NAT & GPU Support (v6.0.0)
+- `AUDIOSOCKET_ADVERTISE_HOST` / `EXTERNAL_MEDIA_ADVERTISE_HOST` for split-horizon deployments
+- GPU acceleration via `docker-compose.gpu.yml` overlay with CUDA support
+
+### 🔧 Google Live Improvements (v6.0.0)
+- Hangup fallback watchdog with tunable timeouts
+- Model normalization hardening and `toolConfig` support
+
+For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 </details>
 
 <details>
 <summary><b>Previous Versions</b></summary>
+
+#### v5.3.1 - Phase Tools & Stability
+- Pre-call HTTP lookups, in-call HTTP tools, and post-call webhooks (Milestone 24)
+- Deepgram Voice Agent language configuration
+- ExternalMedia RTP greeting cutoff fix
 
 #### v4.4.3 - Cross-Platform Support
 - **🌍 Pre-flight Script**: System compatibility checker with auto-fix mode.
@@ -187,8 +204,8 @@ For full release notes, see [CHANGELOG.md](CHANGELOG.md).
 - **🔄 Model Management**: Dynamic backend switching from Dashboard.
 - **📚 Documentation**: LOCAL_ONLY_SETUP.md guide.
 
-#### v4.4.1 - Admin UI v1.0
-- **🖥️ Admin UI v1.0**: Modern web interface (http://localhost:3003).
+#### v4.4.1 - Admin UI
+- **🖥️ Admin UI**: Modern web interface (http://localhost:3003).
 - **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider.
 - **🎵 Background Music**: Ambient music during AI calls.
 
@@ -264,7 +281,12 @@ Run your own local LLM using [Ollama](https://ollama.ai) - perfect for privacy-f
 
 ```yaml
 # In ai-agent.yaml
-active_pipeline: local_ollama
+active_pipeline: local_hybrid
+pipelines:
+  local_hybrid:
+    stt: local_stt
+    llm: ollama_llm
+    tts: local_tts
 ```
 
 **Features:**
@@ -293,14 +315,14 @@ active_pipeline: local_ollama
 - **Tool Calling System**: AI-powered actions (transfers, emails) work with any provider.
 - **Agent CLI Tools**: `setup`, `check`, `rca`, `update`, `version` commands (legacy aliases: `init`, `doctor`, `troubleshoot`).
 - **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection.
-- **Dual Transport Support**: AudioSocket and ExternalMedia RTP (the shipped default config uses ExternalMedia; both are supported — see the transport matrix).
+- **Dual Transport Support**: AudioSocket (default in `config/ai-agent.yaml`) and ExternalMedia RTP (both supported — see the transport matrix).
 - **Streaming-First Downstream**: Streaming playback when possible, with automatic fallback to file playback for robustness.
 - **High-Performance Architecture**: Separate `ai_engine` and `local_ai_server` containers.
 - **Observability**: Built-in **Call History** for per-call debugging + optional `/metrics` scraping.
 - **State Management**: SessionStore for centralized, typed call state.
 - **Barge-In Support**: Interrupt handling with configurable gating.
 
-### 🖥️ Admin UI v1.0
+### 🖥️ Admin UI
 
 Modern web interface for configuration and system management.
 
@@ -338,7 +360,7 @@ Experience our production-ready configurations with a single phone call:
 
 ---
 
-## 🛠️ AI-Powered Actions (v4.3+)
+## 🛠️ AI-Powered Actions
 
 Your AI agent can perform real-world telephony actions through tool calling.
 
@@ -372,8 +394,41 @@ Agent: "I'll connect you to our sales team right away."
 | `cancel_transfer` | Cancel in-progress transfer (during ring) | ✅ |
 | `hangup_call` | End call gracefully with farewell message | ✅ |
 | `leave_voicemail` | Route caller to voicemail extension | ✅ |
-| `send_email_summary` | Auto-send call summaries to admins | ✅ |
-| `request_transcript` | Caller-initiated email transcripts | ✅ |
+| `send_email_summary` | Auto-send call summaries to admins | ⚙️ Disabled by default |
+| `request_transcript` | Caller-initiated email transcripts | ⚙️ Disabled by default |
+
+### HTTP Tools (Pre/In/Post-Call) Example
+
+```yaml
+# In ai-agent.yaml
+tools:
+  pre_call_lookup:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    is_global: false
+  post_call_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: true
+    is_global: false
+
+in_call_tools:
+  intent_router:
+    kind: in_call_http_lookup
+    enabled: true
+    is_global: false
+
+contexts:
+  default:
+    pre_call_tools:
+      - pre_call_lookup
+    tools:
+      - intent_router
+      - hangup_call
+    post_call_tools:
+      - post_call_webhook
+```
 
 ---
 

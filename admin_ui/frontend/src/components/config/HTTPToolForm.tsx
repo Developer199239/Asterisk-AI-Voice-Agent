@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Plus, Trash2, Settings, Webhook, Search, Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, Lock } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
@@ -82,6 +84,7 @@ const DEFAULT_TEST_VALUES: Record<string, string> = {
 };
 
 const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) => {
+    const { confirm } = useConfirmDialog();
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
     const [toolForm, setToolForm] = useState<any>({});
@@ -149,11 +152,11 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
 
     const handleSaveTool = () => {
         if (!toolForm.key) {
-            alert('Please enter a Tool Name');
+            toast.error('Please enter a Tool Name');
             return;
         }
         if (!toolForm.url) {
-            alert('Please enter a URL');
+            toast.error('Please enter a URL');
             return;
         }
 
@@ -169,14 +172,19 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
         setEditingTool(null);
     };
 
-    const handleDeleteTool = (key: string) => {
+    const handleDeleteTool = async (key: string) => {
         const toolData = config[key] as HTTPToolConfig;
+        let confirmed = false;
         
         // P2 Fix: Check if tool is global - affects ALL contexts
         if (toolData?.is_global) {
             const contextCountText = contexts ? `${Object.keys(contexts).length} context(s)` : 'all contexts';
-            const warningMsg = `⚠️ Global Tool Warning\n\nHTTP tool "${key}" is marked as GLOBAL and automatically applies to ${contextCountText}.\n\nDeleting this tool will affect every context. Continue?`;
-            if (!confirm(warningMsg)) return;
+            confirmed = await confirm({
+                title: '⚠️ Global Tool Warning',
+                description: `HTTP tool "${key}" is marked as GLOBAL and automatically applies to ${contextCountText}.\n\nDeleting this tool will affect every context.`,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
         } else if (contexts) {
             // P1: Check if tool is used by any context (for all phases)
             // Map phase to the context config key
@@ -195,14 +203,30 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
                 .map(([ctxName]) => ctxName);
             
             if (usingContexts.length > 0) {
-                const warningMsg = `HTTP tool "${key}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nDeleting will remove it from those contexts. Continue?`;
-                if (!confirm(warningMsg)) return;
+                confirmed = await confirm({
+                    title: 'Delete HTTP Tool?',
+                    description: `HTTP tool "${key}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nDeleting will remove it from those contexts.`,
+                    confirmText: 'Delete',
+                    variant: 'destructive'
+                });
             } else {
-                if (!confirm(`Delete ${key}?`)) return;
+                confirmed = await confirm({
+                    title: 'Delete HTTP Tool?',
+                    description: `Delete "${key}"?`,
+                    confirmText: 'Delete',
+                    variant: 'destructive'
+                });
             }
         } else {
-            if (!confirm(`Delete ${key}?`)) return;
+            confirmed = await confirm({
+                title: 'Delete HTTP Tool?',
+                description: `Delete "${key}"?`,
+                confirmText: 'Delete',
+                variant: 'destructive'
+            });
         }
+        
+        if (!confirmed) return;
 
         const updated = { ...config };
         delete updated[key];
@@ -259,7 +283,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
 
     const handleTestTool = async () => {
         if (!toolForm.url) {
-            alert('Please enter a URL first');
+            toast.error('Please enter a URL first');
             return;
         }
         

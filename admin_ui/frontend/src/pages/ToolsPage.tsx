@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { Save, AlertCircle, RefreshCw, Loader2, Phone, Webhook, Search } from 'lucide-react';
 import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
@@ -13,8 +15,10 @@ import { sanitizeConfigForSave } from '../utils/configSanitizers';
 type ToolPhase = 'in_call' | 'pre_call' | 'post_call';
 
 const ToolsPage = () => {
+    const { confirm } = useConfirmDialog();
     const { token } = useAuth();
     const [config, setConfig] = useState<any>({});
+    const configRef = useRef<any>({});
     const [loading, setLoading] = useState(true);
     const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
@@ -25,6 +29,10 @@ const ToolsPage = () => {
     useEffect(() => {
         fetchConfig();
     }, []);
+
+    useEffect(() => {
+        configRef.current = config;
+    }, [config]);
 
     const fetchConfig = async () => {
         try {
@@ -45,23 +53,28 @@ const ToolsPage = () => {
         }
     };
 
-    const handleSave = async () => {
+    const persistConfigNow = async (nextConfig: any, successToast?: string) => {
         setSaving(true);
         try {
-            const sanitized = sanitizeConfigForSave(config);
+            const sanitized = sanitizeConfigForSave(nextConfig);
             await axios.post('/api/config/yaml', { content: yaml.dump(sanitized) }, {
                 headers: { Authorization: `Bearer ${token}` },
                 timeout: 30000  // 30 second timeout
             });
             setPendingRestart(true);
-            alert('Tools configuration saved successfully');
+            if (successToast) toast.success(successToast);
         } catch (err: any) {
             console.error('Failed to save config', err);
             const detail = err.response?.data?.detail || err.message || 'Unknown error';
-            alert(`Failed to save configuration: ${detail}`);
+            toast.error('Failed to save configuration', { description: detail });
+            throw err;
         } finally {
             setSaving(false);
         }
+    };
+
+    const handleSave = async () => {
+        await persistConfigNow(configRef.current, 'Tools configuration saved');
     };
 
     const handleRestartAIEngine = async (force: boolean = false) => {
@@ -72,9 +85,12 @@ const ToolsPage = () => {
             });
 
             if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleRestartAIEngine(true);
@@ -83,20 +99,20 @@ const ToolsPage = () => {
             }
 
             if (response.data.status === 'degraded') {
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 return;
             }
 
             setPendingRestart(false);
-            alert('AI Engine restarted! Changes are now active.');
+            toast.success('AI Engine restarted! Changes are now active.');
         } catch (error: any) {
-            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error('Failed to restart AI Engine', { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
     };
 
-    const updateToolsConfig = (newToolsConfig: any) => {
+    const mergeToolsConfig = (baseConfig: any, newToolsConfig: any) => {
         // Extract root-level settings that should not be nested under tools
         const { farewell_hangup_delay_sec, ...toolsOnly } = newToolsConfig;
 
@@ -106,7 +122,7 @@ const ToolsPage = () => {
         // send_email_summary, request_transcript
         const builtInToolKeys = ['transfer', 'attended_transfer', 'cancel_transfer', 'hangup_call', 'leave_voicemail', 'send_email_summary', 'request_transcript'];
         
-        const existingTools = config.tools || {};
+        const existingTools = baseConfig.tools || {};
         const preservedTools: Record<string, any> = {};
         
         Object.entries(existingTools).forEach(([k, v]) => {
@@ -125,11 +141,21 @@ const ToolsPage = () => {
         });
 
         // Update both tools config and root-level farewell_hangup_delay_sec
-        const updatedConfig = { ...config, tools: { ...preservedTools, ...toolsOnly } };
+        const updatedConfig = { ...baseConfig, tools: { ...preservedTools, ...toolsOnly } };
         if (farewell_hangup_delay_sec !== undefined) {
             updatedConfig.farewell_hangup_delay_sec = farewell_hangup_delay_sec;
         }
-        setConfig(updatedConfig);
+        return updatedConfig;
+    };
+
+    const updateToolsConfig = (newToolsConfig: any) => {
+        setConfig((prev: any) => mergeToolsConfig(prev, newToolsConfig));
+    };
+
+    const updateToolsConfigAndSaveNow = async (newToolsConfig: any) => {
+        const nextConfig = mergeToolsConfig(configRef.current, newToolsConfig);
+        setConfig(nextConfig);
+        await persistConfigNow(nextConfig);
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
@@ -257,7 +283,9 @@ const ToolsPage = () => {
                         <ConfigCard>
                             <ToolForm
                                 config={{ ...(config.tools || {}), farewell_hangup_delay_sec: config.farewell_hangup_delay_sec }}
+                                contexts={config.contexts || {}}
                                 onChange={updateToolsConfig}
+                                onSaveNow={updateToolsConfigAndSaveNow}
                             />
                         </ConfigCard>
                     </ConfigSection>

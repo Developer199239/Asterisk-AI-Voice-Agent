@@ -50,6 +50,21 @@ const OpenAIProviderForm: React.FC<OpenAIProviderFormProps> = ({ config, onChang
                             placeholder="proj_123..."
                         />
                     </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Realtime API Version</label>
+                        <select
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.api_version || 'beta'}
+                            onChange={(e) => handleChange('api_version', e.target.value)}
+                        >
+                            <option value="beta">Beta (default)</option>
+                            <option value="ga">GA</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">
+                            <strong>Beta</strong> uses the <code>OpenAI-Beta</code> header and is the default for broad compatibility.
+                            <strong className="ml-1">GA</strong> removes that header and may require additional OpenAI account verification.
+                        </p>
+                    </div>
                 </div>
             </div>
 

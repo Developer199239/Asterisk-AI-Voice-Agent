@@ -5,7 +5,7 @@ import "testing"
 func TestExtractRCAHeaderFromConsoleLog(t *testing.T) {
 	t.Parallel()
 
-	logData := "2026-01-30T12:00:00.000000-07:00 [info     ] RCA_CALL_START [src.engine] call_id=1769799752.1415 caller_number=13164619284 called_number=2765 context_name=demo_google provider_name=google_live audio_transport=externalmedia tp_encoding=ulaw tp_sample_rate=8000 streaming_sample_rate=8000\n"
+	logData := "2026-01-30T12:00:00.000000-07:00 [info     ] RCA_CALL_START [src.engine] call_id=1769799752.1415 caller_number=15555550123 called_number=2765 context_name=demo_google provider_name=google_live audio_transport=externalmedia tp_encoding=ulaw tp_sample_rate=8000 streaming_sample_rate=8000\n"
 
 	h := ExtractRCAHeader(logData)
 	if h == nil {
@@ -14,7 +14,7 @@ func TestExtractRCAHeaderFromConsoleLog(t *testing.T) {
 	if h.CallID != "1769799752.1415" {
 		t.Fatalf("call_id=%q", h.CallID)
 	}
-	if h.CallerNumber != "13164619284" {
+	if h.CallerNumber != "15555550123" {
 		t.Fatalf("caller_number=%q", h.CallerNumber)
 	}
 	if h.CalledNumber != "2765" {

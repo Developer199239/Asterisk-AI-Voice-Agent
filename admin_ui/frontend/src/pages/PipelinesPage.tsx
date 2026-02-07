@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Plus, Settings, Trash2, ArrowRight, Workflow, AlertTriangle, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
@@ -11,6 +13,7 @@ import PipelineForm from '../components/config/PipelineForm';
 import { ensureModularKey, isFullAgentProvider } from '../utils/providerNaming';
 
 const PipelinesPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -137,7 +140,7 @@ const PipelinesPage = () => {
             setPendingRestart(true);
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         }
     };
 
@@ -148,9 +151,12 @@ const PipelinesPage = () => {
             const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
 
             if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleReloadAIEngine(true);
@@ -159,16 +165,16 @@ const PipelinesPage = () => {
             }
 
             if (response.data.status === 'degraded') {
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 return;
             }
 
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted! Changes are now active.');
+                toast.success('AI Engine restarted! Changes are now active.');
             }
         } catch (error: any) {
-            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error('Failed to restart AI Engine', { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
@@ -201,7 +207,7 @@ const PipelinesPage = () => {
     const handleDeletePipeline = async (name: string) => {
         // P0 Guard: Check if this is the active pipeline
         if (config.active_pipeline === name) {
-            alert(`Cannot delete pipeline "${name}" because it is the currently active pipeline.\n\nPlease set a different active pipeline first.`);
+            toast.error(`Cannot delete pipeline "${name}"`, { description: 'Please set a different active pipeline first.' });
             return;
         }
 
@@ -216,7 +222,13 @@ const PipelinesPage = () => {
             confirmMessage = `Pipeline "${name}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nThose contexts will fall back to the default pipeline.\n\nAre you sure you want to delete it?`;
         }
 
-        if (!confirm(confirmMessage)) return;
+        const confirmed = await confirm({
+            title: 'Delete Pipeline?',
+            description: confirmMessage,
+            confirmText: 'Delete',
+            variant: 'destructive'
+        });
+        if (!confirmed) return;
         const newPipelines = { ...config.pipelines };
         delete newPipelines[name];
         await saveConfig({ ...config, pipelines: newPipelines });
@@ -224,7 +236,7 @@ const PipelinesPage = () => {
 
     const handleSavePipeline = async () => {
         if (!pipelineForm.name) {
-            alert('Pipeline name is required');
+            toast.error('Pipeline name is required');
             return;
         }
 
@@ -245,28 +257,28 @@ const PipelinesPage = () => {
 
         // Validate required components
         if (!normalizedForm.stt || !normalizedForm.llm || !normalizedForm.tts) {
-            alert('STT, LLM, and TTS providers are required');
+            toast.error('STT, LLM, and TTS providers are required');
             return;
         }
 
         // Validate provider existence
         const providers = config.providers || {};
         if (!providers[normalizedForm.stt]) {
-            alert(`STT provider '${normalizedForm.stt}' does not exist`);
+            toast.error(`STT provider '${normalizedForm.stt}' does not exist`);
             return;
         }
         if (!providers[normalizedForm.llm]) {
-            alert(`LLM provider '${normalizedForm.llm}' does not exist`);
+            toast.error(`LLM provider '${normalizedForm.llm}' does not exist`);
             return;
         }
         if (!providers[normalizedForm.tts]) {
-            alert(`TTS provider '${normalizedForm.tts}' does not exist`);
+            toast.error(`TTS provider '${normalizedForm.tts}' does not exist`);
             return;
         }
 
         // Block full agents in modular slots
         if (isFullAgentProvider(providers[normalizedForm.stt]) || isFullAgentProvider(providers[normalizedForm.llm]) || isFullAgentProvider(providers[normalizedForm.tts])) {
-            alert('Full-agent providers cannot be used in modular pipeline slots. Please select modular providers with a single capability.');
+            toast.error('Full-agent providers cannot be used in modular pipeline slots. Please select modular providers with a single capability.');
             return;
         }
 
@@ -275,15 +287,15 @@ const PipelinesPage = () => {
         const llmCaps = providers[normalizedForm.llm]?.capabilities || [];
         const ttsCaps = providers[normalizedForm.tts]?.capabilities || [];
         if (sttCaps.length && !sttCaps.includes('stt')) {
-            alert(`Provider '${normalizedForm.stt}' is not marked as STT-capable.`);
+            toast.error(`Provider '${normalizedForm.stt}' is not marked as STT-capable.`);
             return;
         }
         if (llmCaps.length && !llmCaps.includes('llm')) {
-            alert(`Provider '${normalizedForm.llm}' is not marked as LLM-capable.`);
+            toast.error(`Provider '${normalizedForm.llm}' is not marked as LLM-capable.`);
             return;
         }
         if (ttsCaps.length && !ttsCaps.includes('tts')) {
-            alert(`Provider '${normalizedForm.tts}' is not marked as TTS-capable.`);
+            toast.error(`Provider '${normalizedForm.tts}' is not marked as TTS-capable.`);
             return;
         }
 
@@ -299,7 +311,7 @@ const PipelinesPage = () => {
         });
 
         if (disabledComponents.length > 0) {
-            alert(`Cannot save pipeline. The following providers are disabled:\n- ${disabledComponents.join('\n- ')}\n\nPlease enable them in the Providers page first.`);
+            toast.error('Cannot save pipeline - disabled providers', { description: `The following are disabled: ${disabledComponents.join(', ')}` });
             return;
         }
 

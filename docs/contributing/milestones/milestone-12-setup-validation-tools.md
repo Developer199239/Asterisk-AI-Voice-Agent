@@ -86,7 +86,7 @@ Next steps:
 6. **Log Directory**: Writable and accessible
 7. **Network**: Required ports available
 8. **Media Directory**: Exists and writable
-9. **Container Health**: ai-engine and local-ai-server healthy
+9. **Container Health**: `ai_engine` and `local_ai_server` healthy
 10. **Audio Profiles**: Valid profile definitions
 11. **Contexts**: Valid context configurations
 
@@ -105,7 +105,7 @@ $ ./bin/agent doctor
 ✅ Log Directory: Writable (logs/)
 ✅ Network: Port 8088 available
 ✅ Media Directory: Exists (media/)
-✅ Container Health: ai-engine healthy
+✅ Container Health: `ai_engine` healthy
 ⚠️  Audio Profiles: 5 profiles defined
 ⚠️  Contexts: 3 contexts defined
 

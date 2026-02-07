@@ -84,7 +84,7 @@ Implemented a production-ready web-based administration interface for the Asteri
   - Skip wizard if config exists
   - Validation before progression
   - Error handling with clear messages
-  - Auto-restart of ai-engine after setup
+  - Auto-restart of `ai_engine` after setup
 
 ### 6. Provider Management
 - **Supported Providers**:
@@ -139,7 +139,7 @@ Implemented a production-ready web-based administration interface for the Asteri
 The Admin UI Logs page supports two workflows:
 
 - **Raw** (default): quick level filtering over container logs (tail-based).
-- **Troubleshoot**: a call-centric, filterable timeline built from existing ai-engine logs (no ai-engine logging changes required).
+- **Troubleshoot**: a call-centric, filterable timeline built from existing `ai_engine` logs (no `ai_engine` logging changes required).
 
 **Implementation**:
 - Backend reads Docker container logs via Docker socket.
@@ -202,7 +202,7 @@ The Admin UI Logs page supports two workflows:
 This builds on the existing Logs and Call History pages by adding:
 - a structured **Troubleshoot** view over Docker logs
 - call-finding via Call History-style filters
-- correlation using `call_id` plus related channel IDs observed in ai-engine logs
+- correlation using `call_id` plus related channel IDs observed in `ai_engine` logs
 
 ### Problem Statement
 
@@ -415,7 +415,7 @@ Login Form → POST /api/auth/login → Validate credentials
 ## Migration Path
 
 ### For New Users
-1. Start admin-ui container
+1. Start `admin_ui` container
 2. Access http://localhost:3003
 3. Login with admin/admin
 4. Complete setup wizard
@@ -423,7 +423,7 @@ Login Form → POST /api/auth/login → Validate credentials
 
 ### For Existing Users
 1. Pull latest code
-2. Start admin-ui container
+2. Start `admin_ui` container
 3. Existing config auto-detected
 4. Wizard skipped
 5. Configuration editable via UI

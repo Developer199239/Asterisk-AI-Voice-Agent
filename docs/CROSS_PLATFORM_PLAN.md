@@ -871,16 +871,16 @@ response:
 
 # Example: POST /api/system/containers/restart
 request:
-  containers: ["ai-engine", "admin-ui"]  # Optional, default: all
+  containers: ["ai_engine", "admin_ui"]  # Optional, default: all (aliases: ai-engine/admin-ui also accepted)
   
 response:
   success: true
   results:
-    - container: "ai-engine"
+    - container: "ai_engine"
       action: "restart"
       status: "completed"
       duration_ms: 3200
-    - container: "admin-ui"
+    - container: "admin_ui"
       action: "restart"
       status: "completed"
       duration_ms: 1800

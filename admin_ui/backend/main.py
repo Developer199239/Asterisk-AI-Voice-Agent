@@ -72,7 +72,7 @@ if _is_remote_bind and _raw_jwt_secret in _placeholder_secrets:
         _uvicorn_host,
     )
 
-from api import config, system, wizard, logs, local_ai, ollama, mcp, calls, outbound, tools  # noqa: E402
+from api import config, system, wizard, logs, local_ai, ollama, mcp, calls, outbound, tools, docs  # noqa: E402
 import auth  # noqa: E402
 
 app = FastAPI(title="Asterisk AI Voice Agent Admin API")
@@ -125,6 +125,7 @@ app.include_router(ollama.router, tags=["ollama"], dependencies=[Depends(auth.ge
 app.include_router(calls.router, prefix="/api", tags=["calls"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(outbound.router, prefix="/api", tags=["outbound"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"], dependencies=[Depends(auth.get_current_user)])
+app.include_router(docs.router, tags=["documentation"], dependencies=[Depends(auth.get_current_user)])
 
 @app.get("/health")
 async def health_check():

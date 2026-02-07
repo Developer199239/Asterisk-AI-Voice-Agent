@@ -1,12 +1,12 @@
-# Asterisk AI Voice Agent - Installation Guide (v5.3.1)
+# Asterisk AI Voice Agent - Installation Guide (v6.0.0)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v5.3.1 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v6.0.0 on your server.
 
 ## Three Setup Paths
 
 Choose the path that best fits your experience level:
 
-## Upgrade from v4.6.0 → v5.3.1 (Existing Checkout)
+## Upgrade from v5.3.1 → v6.0.0 (Existing Checkout)
 
 This section is for operators upgrading an existing repo checkout (not a fresh install).
 
@@ -18,11 +18,18 @@ This section is for operators upgrading an existing repo checkout (not a fresh i
 
 ### 1) Pull the new release
 
-Once `v5.3.1` is published (GA: 2026-02-01):
+To upgrade to the tagged `v6.0.0` release (once the tag is published):
 
 ```bash
 git fetch --tags
-git checkout v5.3.1
+git checkout v6.0.0
+```
+
+If the tag is not published yet, track `main` temporarily:
+
+```bash
+git checkout main
+git pull
 ```
 
 If you track branches instead of tags:
@@ -155,6 +162,7 @@ If preflight reports warnings or failures, resolve them first, then re-run prefl
 - `.env`:
   - Review ARI settings: `ASTERISK_ARI_PORT`, `ASTERISK_ARI_SCHEME`, `ASTERISK_ARI_SSL_VERIFY`
   - If using rootless Docker/Podman, set a persistent `DOCKER_SOCK=...` in `.env` (not only `export ...`)
+  - Reference: `docs/ENVIRONMENT_VARIABLES.md`
 - Admin UI “save vs apply”:
   - `.env` edits from the UI may normalize quoting and remove duplicate keys; this is expected in 4.6+
 - OpenAI Realtime:
@@ -244,7 +252,7 @@ agent setup
 
 **Best for:** Headless servers, scripted deployments, CLI preference
 
-> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v5.3.1.
+> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.0.0.
 
 ---
 
@@ -278,7 +286,7 @@ Notes:
 
 **Local note:** This project does **not** bundle models in images. For recommended local build/run profiles (including a smaller `local-core` build), see `docs/LOCAL_PROFILES.md`.
 
-**Kroko note:** `INCLUDE_KROKO_EMBEDDED` is off by default to keep the local-ai-server image lighter. Enable it only if you need embedded Kroko (see `docs/LOCAL_PROFILES.md`).
+**Kroko note:** `INCLUDE_KROKO_EMBEDDED` is off by default to keep the `local_ai_server` image lighter. Enable it only if you need embedded Kroko (see `docs/LOCAL_PROFILES.md`).
 
 **Container OS note:** `admin_ui` and `ai_engine` ship on Debian `bookworm` (Python `3.11`). `local_ai_server` ships on Debian `trixie` intentionally (for embedded Kroko glibc compatibility).
 
@@ -449,7 +457,7 @@ docker compose -p asterisk-ai-voice-agent up --build -d
 
 > IMPORTANT: First startup time (local models)
 >
-> If you selected a Local or Hybrid workflow, the `local-ai-server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
+> If you selected a Local or Hybrid workflow, the `local_ai_server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
 >
 > ```bash
 > docker compose -p asterisk-ai-voice-agent logs -f local_ai_server

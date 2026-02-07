@@ -1307,6 +1307,39 @@ async def get_system_health():
     }
 
 
+@router.get("/sessions")
+async def get_active_sessions():
+    """
+    Get active call sessions from AI Engine for topology visualization.
+    Returns list of active calls with provider and pipeline info.
+    """
+    import httpx
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for url in [
+                "http://127.0.0.1:15000/sessions/stats",
+                "http://ai_engine:15000/sessions/stats",
+                "http://ai-engine:15000/sessions/stats",
+            ]:
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+                    return {
+                        "active_calls": data.get("active_calls", 0),
+                        "sessions": data.get("sessions", []),
+                        "reachable": True,
+                    }
+                except httpx.ConnectError:
+                    continue
+    except Exception as e:
+        logger.debug("Could not fetch active sessions: %s", e)
+    
+    return {"active_calls": 0, "sessions": [], "reachable": False}
+
+
 @router.get("/directories")
 async def get_directory_health():
     """

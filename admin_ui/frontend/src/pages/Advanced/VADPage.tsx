@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
 import { Save, Activity, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 import { YamlErrorBanner, YamlErrorInfo } from '../../components/ui/YamlErrorBanner';
@@ -9,6 +11,7 @@ import { FormInput, FormSwitch } from '../../components/ui/FormComponents';
 import { sanitizeConfigForSave } from '../../utils/configSanitizers';
 
 const VADPage = () => {
+    const { confirm } = useConfirmDialog();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
@@ -45,10 +48,10 @@ const VADPage = () => {
             const sanitized = sanitizeConfigForSave(config);
             await axios.post('/api/config/yaml', { content: yaml.dump(sanitized) });
             setPendingRestart(true);
-            alert('VAD configuration saved successfully');
+            toast.success('VAD configuration saved');
         } catch (err) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            toast.error('Failed to save configuration');
         } finally {
             setSaving(false);
         }
@@ -61,9 +64,12 @@ const VADPage = () => {
             const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
 
             if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
+                const confirmForce = await confirm({
+                    title: 'Force Restart?',
+                    description: `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`,
+                    confirmText: 'Force Restart',
+                    variant: 'destructive'
+                });
                 if (confirmForce) {
                     setRestartingEngine(false);
                     return handleReloadAIEngine(true);
@@ -72,16 +78,16 @@ const VADPage = () => {
             }
 
             if (response.data.status === 'degraded') {
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 return;
             }
 
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted! Changes are now active.');
+                toast.success('AI Engine restarted! Changes are now active.');
             }
         } catch (error: any) {
-            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+            toast.error('Failed to restart AI Engine', { description: error.response?.data?.detail || error.message });
         } finally {
             setRestartingEngine(false);
         }
