@@ -142,6 +142,41 @@ class ContainerInfo(BaseModel):
     status: str
     state: str
 
+
+def _safe_container_image_name(container) -> str:
+    """
+    Resolve a human-readable image name without failing the whole containers endpoint.
+
+    Docker can return ImageNotFound for stale image IDs after prune/rebuild windows.
+    """
+    try:
+        image = container.image
+        tags = getattr(image, "tags", None) or []
+        if tags:
+            return tags[0]
+        short_id = getattr(image, "short_id", "")
+        if short_id:
+            return short_id
+    except docker.errors.ImageNotFound:
+        pass
+    except Exception as e:
+        logger.debug("Error resolving image object for container %s: %s", getattr(container, "name", "<unknown>"), e)
+
+    try:
+        config_image = str((container.attrs.get("Config", {}) or {}).get("Image") or "").strip()
+        if config_image:
+            return f"{config_image} (missing locally)"
+        image_id = str(container.attrs.get("Image") or "").strip()
+        if image_id:
+            if image_id.startswith("sha256:") and len(image_id) > 19:
+                return f"{image_id[:19]}... (missing locally)"
+            return f"{image_id} (missing locally)"
+    except Exception:
+        pass
+
+    return "unknown (image unavailable)"
+
+
 @router.get("/containers")
 async def get_containers():
     try:
@@ -152,7 +187,7 @@ async def get_containers():
         result = []
         for c in containers:
             # Get image name
-            image_name = c.image.tags[0] if c.image.tags else c.image.short_id
+            image_name = _safe_container_image_name(c)
             
             # Calculate uptime from StartedAt
             uptime = None
@@ -214,7 +249,7 @@ async def get_containers():
                 "name": c.name,
                 "image": image_name,
                 "status": c.status,
-                "state": c.attrs['State']['Status'],
+                "state": c.attrs.get("State", {}).get("Status", c.status),
                 "uptime": uptime,
                 "started_at": started_at,
                 "ports": ports,
