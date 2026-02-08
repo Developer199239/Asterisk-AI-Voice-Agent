@@ -186,12 +186,12 @@ ElevenLabs uses **Client Tools** - tools defined in the dashboard but executed b
 
 > **Important**: The description must be imperative - simply saying "goodbye" does NOT end the call. The LLM must invoke this tool.
 
-### transfer_call
+### transfer
 
 ```json
 {
   "type": "client",
-  "name": "transfer_call",
+  "name": "transfer",
   "description": "Transfer the caller to another extension or department. Use when the caller asks to speak with a live person, agent, or specific department like sales or support.",
   "disable_interruptions": false,
   "force_pre_tool_speech": "auto",
@@ -358,7 +358,7 @@ contexts:
 
 **Context fields override ElevenLabs dashboard settings** when the corresponding toggles are enabled in Security → Overrides.
 
-> **Tool Names**: The context `tools:` list uses canonical names (`transfer`) for compatibility with other providers (Deepgram, OpenAI). ElevenLabs dashboard uses `transfer_call` - the system handles this mapping via `TOOL_ALIASES`.
+> **Tool Names**: Use canonical names (`transfer`, `hangup_call`, etc.) in both the context `tools:` list and the ElevenLabs dashboard. This ensures names match across all providers (Deepgram, OpenAI, ElevenLabs).
 
 ## Dynamic Variables & Overrides
 
@@ -477,7 +477,7 @@ When the caller indicates they're done (goodbye, thanks, that's all, etc.):
 
 **Fix**:
 1. Verify tool schemas are added in ElevenLabs Agent → Tools tab
-2. Ensure tool names match exactly: `hangup_call`, `transfer_call`, `leave_voicemail`, `cancel_transfer`, `request_transcript`
+2. Ensure tool names match exactly: `hangup_call`, `transfer`, `leave_voicemail`, `cancel_transfer`, `request_transcript`
 3. Check tools are linked to your agent ("Dependent agents")
 4. Check logs for `client_tool_call` events
 
