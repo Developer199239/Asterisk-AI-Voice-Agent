@@ -1131,13 +1131,19 @@ async def rebuild_local_ai_server(request: RebuildRequest):
             )
 
         # Run docker compose build in the updater-runner container so relative binds resolve on the host correctly.
-        from api.system import _project_host_root_from_admin_ui_container, _run_updater_ephemeral
+        from api.system import (
+            _compose_files_flags_for_service,
+            _project_host_root_from_admin_ui_container,
+            _run_updater_ephemeral,
+        )
         host_root = _project_host_root_from_admin_ui_container()
         build_args_str = " ".join(build_args)
+        compose_files = _compose_files_flags_for_service("local_ai_server")
+        compose_prefix = f"{compose_files} " if compose_files else ""
         cmd = (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent build {build_args_str} local_ai_server"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent build {build_args_str} local_ai_server"
         )
         code, out = _run_updater_ephemeral(
             host_root,
