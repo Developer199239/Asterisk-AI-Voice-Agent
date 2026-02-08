@@ -245,11 +245,17 @@ const ModelsPage = () => {
     };
 
     // Handle model switch
-    const handleModelSwitch = async (modelType: 'stt' | 'tts' | 'llm', backend: string, modelPath: string) => {
+    const handleModelSwitch = async (
+        modelType: 'stt' | 'tts' | 'llm',
+        backend: string,
+        modelPath: string,
+        forceIncompatibleApplyRequest = false
+    ) => {
         return axios.post('/api/local-ai/switch', {
             model_type: modelType,
             backend: backend,
-            model_path: modelPath
+            model_path: modelPath,
+            force_incompatible_apply: forceIncompatibleApplyRequest
         });
     };
 
@@ -499,10 +505,10 @@ const ModelsPage = () => {
             for (const [type, value] of Object.entries(remainingChanges)) {
                 if (!value) continue;
                 if (type === 'llm') {
-                    await handleModelSwitch('llm', '', value);
+                    await handleModelSwitch('llm', '', value, forceIncompatibleApply);
                 } else {
                     const [backend, ...pathParts] = value.split(':');
-                    await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'));
+                    await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'), forceIncompatibleApply);
                 }
             }
 

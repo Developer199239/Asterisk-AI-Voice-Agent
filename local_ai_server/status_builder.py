@@ -143,5 +143,6 @@ def build_status_response(server) -> Dict[str, Any]:
             "runtime_mode": runtime_mode,
             "degraded": bool(server.startup_errors),
             "startup_errors": dict(server.startup_errors) if server.startup_errors else {},
+            "runtime_fallbacks": dict(getattr(server, "runtime_fallbacks", {}) or {}),
         },
     }
