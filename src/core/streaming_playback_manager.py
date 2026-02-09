@@ -1267,9 +1267,16 @@ class StreamingPlaybackManager:
         # After startup, do not couple rebuild target to min_start; aim for low_water + 1.
         target_frames = low_watermark_chunks + 1
         try:
-            max_wait = max(0.0, float(self.provider_grace_ms) / 1000.0)
+            cfg_wait = max(0.0, float(self.provider_grace_ms) / 1000.0)
         except Exception:
-            max_wait = 0.5
+            cfg_wait = 0.5
+        if cfg_wait > 0.06 and not bool(stream_info.get('warned_grace_cap', False)):
+            try:
+                logger.warning("provider_grace_ms capped", call_id=call_id, configured_ms=int(self.provider_grace_ms), cap_ms=60)
+            except Exception:
+                pass
+            stream_info['warned_grace_cap'] = True
+        max_wait = min(0.06, cfg_wait)
         if max_wait <= 0.0:
             stream_info.pop('low_water_deadline', None)
             return False
