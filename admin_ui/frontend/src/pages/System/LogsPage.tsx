@@ -326,13 +326,15 @@ const LogsPage = () => {
     const isIssueSignal = (e: LogEvent) => {
         if (e.level !== 'info') return false;
         const t = (e.msg || '').toLowerCase();
-        // Avoid high-frequency "everything is fine" spam.
-        if (t.includes('encode resample') && t.includes('no resampling needed')) return false;
+        // Exclude per-frame noise that fires every ~20ms.
+        if (t.includes('encode resample')) return false;
         if (t.includes('encode config - reading provider config')) return false;
+        if (t.includes('encoded for provider')) return false;
+        if (t.includes('continuous input') && (t.includes('forwarding frame') || t.includes('frame sent'))) return false;
+        if (t.includes('audiosocket rx') && t.includes('frame received')) return false;
         // Useful signals for narrowing issues
         const keywords = [
             'mismatch',
-            'resampling',
             'drift',
             'buffer',
             'underflow',
@@ -347,6 +349,9 @@ const LogsPage = () => {
             'reconnect',
             'fallback',
             'no active streaming',
+            'grace_ms capped',
+            'dc offset',
+            'low audio energy',
         ];
         return keywords.some(k => t.includes(k));
     };
