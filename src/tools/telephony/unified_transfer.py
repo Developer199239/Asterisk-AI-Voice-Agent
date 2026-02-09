@@ -32,10 +32,8 @@ class UnifiedTransferTool(Tool):
             name="transfer",
             description=(
                 "Transfer the caller to another destination. "
-                "Choose from configured destinations like: "
-                "'sales_agent', 'support_agent', 'sales_queue', 'support_queue', "
-                "'sales_team', 'support_team'. "
-                "The system will validate the destination exists."
+                "Use a configured destination key from Tools -> Transfer Destinations. "
+                "The system validates that the destination exists before transferring."
             ),
             category=ToolCategory.TELEPHONY,
             requires_channel=True,
@@ -45,14 +43,74 @@ class UnifiedTransferTool(Tool):
                     name="destination",
                     type="string",
                     description=(
-                        "Name of the destination to transfer to. "
-                        "Examples: 'sales_agent' for direct agent, "
-                        "'sales_queue' for ACD queue, 'sales_team' for ring group"
+                        "Configured destination key or close match "
+                        "(matched against destination key/description)."
                     ),
                     required=True
                 )
             ]
         )
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return " ".join(str(value or "").strip().lower().replace("_", " ").replace("-", " ").split())
+
+    def _resolve_destination_key(self, destination: Any, destinations: Dict[str, Any]) -> Optional[str]:
+        raw = str(destination or "").strip()
+        if not raw:
+            return None
+
+        if raw in destinations:
+            return raw
+
+        normalized = self._normalize_text(raw)
+
+        # Case-insensitive exact key match.
+        for key in destinations.keys():
+            if self._normalize_text(key) == normalized:
+                return str(key)
+
+        # Key prefix/contains matching.
+        for key in destinations.keys():
+            key_norm = self._normalize_text(key)
+            if key_norm.startswith(normalized) or normalized in key_norm:
+                return str(key)
+
+        # Description prefix/contains matching.
+        for key, cfg in destinations.items():
+            if not isinstance(cfg, dict):
+                continue
+            description_norm = self._normalize_text(cfg.get("description", ""))
+            if description_norm and (description_norm.startswith(normalized) or normalized in description_norm):
+                return str(key)
+
+        # Multi-word fallback (e.g., "live agent"): all tokens must match key or description.
+        tokens = [t for t in normalized.split() if t]
+        if tokens:
+            token_matches = []
+            for key, cfg in destinations.items():
+                if not isinstance(cfg, dict):
+                    continue
+                haystack = f"{self._normalize_text(key)} {self._normalize_text(cfg.get('description', ''))}".strip()
+                if all(token in haystack for token in tokens):
+                    token_matches.append(str(key))
+            if len(token_matches) == 1:
+                return token_matches[0]
+
+        # Generic "human transfer" fallback:
+        # If the user asks for a person/agent and exactly one extension destination exists,
+        # use that destination.
+        human_intent_tokens = {"agent", "human", "person", "representative", "rep", "operator", "live"}
+        if any(t in human_intent_tokens for t in tokens):
+            extension_keys = [
+                str(key)
+                for key, cfg in destinations.items()
+                if isinstance(cfg, dict) and str(cfg.get("type", "")).strip().lower() == "extension"
+            ]
+            if len(extension_keys) == 1:
+                return extension_keys[0]
+
+        return None
     
     async def execute(
         self,
@@ -88,50 +146,13 @@ class UnifiedTransferTool(Tool):
                 "message": "Transfer service is not available",
             }
         
-        # Fuzzy matching for common destination patterns
-        # Maps generic terms to configured destination keys
+        # Resolve exact / fuzzy destination name without hardcoded destination keys.
         if destination and destination not in destinations:
-            dest_lower = destination.lower().strip()
-            matched = None
-            
-            # Try exact match first (case-insensitive)
-            for key in destinations:
-                if key.lower() == dest_lower:
-                    matched = key
-                    break
-            
-            # Try prefix/contains matching
-            if not matched:
-                for key in destinations:
-                    key_lower = key.lower()
-                    # "sales" matches "sales_agent", "sales_team", "sales_queue"
-                    if key_lower.startswith(dest_lower) or dest_lower in key_lower:
-                        matched = key
-                        logger.info("Fuzzy matched destination", 
-                                   original=destination, matched=matched)
-                        break
-            
-            # Try common aliases
-            if not matched:
-                alias_map = {
-                    'sales': 'sales_team',
-                    'support': 'support_team', 
-                    'live agent': 'sales_agent',
-                    'live person': 'sales_agent',
-                    'agent': 'sales_agent',
-                    'human': 'sales_agent',
-                    'person': 'sales_agent',
-                    'representative': 'support_agent',
-                    'rep': 'support_agent',
-                }
-                if dest_lower in alias_map and alias_map[dest_lower] in destinations:
-                    matched = alias_map[dest_lower]
-                    logger.info("Alias matched destination",
-                               original=destination, matched=matched)
-            
+            matched = self._resolve_destination_key(destination, destinations)
             if matched:
+                logger.info("Resolved destination alias", original=destination, matched=matched)
                 destination = matched
-        
+
         # Validate destination exists
         if destination not in destinations:
             logger.error("Invalid destination", destination=destination, 
