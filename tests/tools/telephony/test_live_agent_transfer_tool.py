@@ -63,7 +63,66 @@ class TestLiveAgentTransferTool:
                 "sales_agent": {"type": "extension", "target": "2765", "description": "Sales"},
             },
         }
+        tool_context.config["tools"]["extensions"] = {
+            "internal": {
+                "2765": {"name": "Sales Agent", "aliases": ["sales"], "dial_string": "SIP/2765"},
+            }
+        }
 
         result = await tool.execute({}, tool_context)
         assert result["status"] == "failed"
         assert "Live agent destination is not configured" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_internal_live_agent_extension_and_maps_to_transfer_destination(
+        self, tool, tool_context, mock_ari_client
+    ):
+        tool_context.config["tools"]["transfer"] = {
+            "enabled": True,
+            "destinations": {
+                "support_agent": {"type": "extension", "target": "6000", "description": "Support agent"},
+            },
+        }
+        tool_context.config["tools"]["extensions"] = {
+            "internal": {
+                "6000": {
+                    "name": "Live Agent",
+                    "aliases": ["agent", "human"],
+                    "dial_string": "SIP/6000",
+                },
+            }
+        }
+
+        result = await tool.execute({}, tool_context)
+
+        assert result["status"] == "success"
+        assert result["destination"] == "6000"
+        call_args = mock_ari_client.send_command.call_args.kwargs
+        assert call_args["resource"] == f"channels/{tool_context.caller_channel_id}/continue"
+        assert call_args["params"]["extension"] == "6000"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_internal_live_agent_extension_without_transfer_destinations(
+        self, tool, tool_context, mock_ari_client
+    ):
+        tool_context.config["tools"]["transfer"] = {
+            "enabled": True,
+            "destinations": {},
+        }
+        tool_context.config["tools"]["extensions"] = {
+            "internal": {
+                "7007": {
+                    "name": "Live Agent",
+                    "aliases": ["live agent"],
+                    "dial_string": "PJSIP/7007",
+                },
+            }
+        }
+
+        result = await tool.execute({}, tool_context)
+
+        assert result["status"] == "success"
+        assert result["destination"] == "7007"
+        call_args = mock_ari_client.send_command.call_args.kwargs
+        assert call_args["resource"] == f"channels/{tool_context.caller_channel_id}/continue"
+        assert call_args["params"]["extension"] == "7007"
