@@ -39,7 +39,8 @@ This guide covers production deployment considerations, security hardening, scal
 ### Configuration Files
 
 - [ ] **`.env` file**: All required environment variables set
-- [ ] **`config/ai-agent.yaml`**: Production configuration selected
+- [ ] **`config/ai-agent.yaml`**: Production baseline configuration
+- [ ] **`config/ai-agent.local.yaml`**: Operator overrides (created by Admin UI / CLI wizard; git-ignored)
 - [ ] **Shared Storage**: `./asterisk_media/ai-generated` configured (mounted into `ai_engine` as `/mnt/asterisk_media/ai-generated`) (for Local Hybrid)
 - [ ] **Call History**: `./data` volume persisted (default DB: `./data/call_history.db`)
 - [ ] **Monitoring (optional)**: Prometheus scraping `/metrics` (aggregate metrics only)
@@ -546,6 +547,7 @@ If you need enterprise-grade secrets management:
 ```
 .env
 config/ai-agent.yaml
+config/ai-agent.local.yaml   # operator overrides (if exists)
 docker-compose.yml
 ```
 
@@ -587,6 +589,7 @@ mkdir -p "$BACKUP_PATH"
 # Backup configuration
 cp .env "$BACKUP_PATH/"
 cp config/ai-agent.yaml "$BACKUP_PATH/"
+cp config/ai-agent.local.yaml "$BACKUP_PATH/" 2>/dev/null || true
 cp docker-compose*.yml "$BACKUP_PATH/"
 
 # Backup Prometheus data
@@ -675,6 +678,7 @@ aws s3 sync /backups/ai-voice-agent/ "$BUCKET/" \
    LATEST_BACKUP="/backups/ai-voice-agent/backup_20251029_020000"
    cp "$LATEST_BACKUP/.env" .
    cp "$LATEST_BACKUP/config/ai-agent.yaml" config/
+   cp "$LATEST_BACKUP/config/ai-agent.local.yaml" config/ 2>/dev/null || true
    ```
 
 5. **Start services**:

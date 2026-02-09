@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Operator Config Override (`ai-agent.local.yaml`)**: Operator customizations are now stored in `config/ai-agent.local.yaml` (git-ignored), deep-merged on top of the base `config/ai-agent.yaml` at startup. All Admin UI saves, CLI wizard writes, and `agent setup` output target the local file, so upstream `git pull` never conflicts with operator config.
+- **Graceful Stash Pop Recovery**: `agent update` now automatically recovers from `git stash pop` merge conflicts by resetting the working tree, dropping the failed stash, and restoring operator config (`.env`, `ai-agent.yaml`, `ai-agent.local.yaml`, `users.json`, `contexts/`) from the pre-update backup.
+
 ### Planned
 
 - Additional provider integrations

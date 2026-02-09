@@ -13,6 +13,7 @@ The Asterisk AI Voice Agent v5.0 is a **production-ready, modular conversational
 ### Key Architecture Components
 
 - **Dual Transport Support** – ExternalMedia RTP (UDP) and AudioSocket (TCP). The shipped `config/ai-agent.yaml` defaults to `audio_transport: audiosocket`; ExternalMedia is a validated option (especially for pipelines). AudioSocket is currently validated with `audiosocket.format: slin`.
+- **Local Override Config** – Operator customizations live in `config/ai-agent.local.yaml` (git-ignored), deep-merged on top of the base `config/ai-agent.yaml` at startup. All Admin UI and CLI writes target the local file, so upstream `git pull` never conflicts with operator settings.
 - **Adaptive Streaming** – Downstream audio with automatic jitter buffering and file playback fallback
 - **Modular Pipelines** – Independent STT, LLM, and TTS provider selection via YAML configuration
 - **Production Monitoring** – Bring-your-own Prometheus/Grafana; metrics are intentionally low-cardinality. Use Call History for per-call debugging.
@@ -173,7 +174,7 @@ When the configuration watcher detects a change, it:
 
 ### Hot Reload Strategy
 
-Configuration changes propagate through the existing async watcher introduced in Milestone 1. When `config/ai-agent.yaml` changes:
+Configuration changes propagate through the existing async watcher introduced in Milestone 1. When `config/ai-agent.yaml` or `config/ai-agent.local.yaml` changes:
 
 1. The watcher validates the schema via Pydantic models.
 2. Streaming parameters, logging levels, and pipeline definitions reload in memory.
