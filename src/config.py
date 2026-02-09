@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List
 import structlog
 
 # Import configuration helpers (AAVA-40 refactor)
-from src.config.loaders import resolve_config_path, load_yaml_with_env_expansion
+from src.config.loaders import resolve_config_path, load_yaml_with_env_expansion, load_yaml_with_local_override
 from src.config.security import (
     inject_asterisk_credentials,
     inject_llm_config,
@@ -666,9 +666,9 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         
     Complexity: 5 (down from ~20)
     """
-    # Phase 1: Load YAML file with environment variable expansion
+    # Phase 1: Load YAML file with environment variable expansion and local overrides
     path = resolve_config_path(path)
-    config_data = load_yaml_with_env_expansion(path)
+    config_data = load_yaml_with_local_override(path)
     if isinstance(config_data, dict):
         config_data.setdefault("config_version", 6)
 

@@ -12,6 +12,7 @@ else:
     PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 
 CONFIG_PATH = os.path.join(PROJECT_ROOT, "config/ai-agent.yaml")
+LOCAL_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config/ai-agent.local.yaml")
 ENV_PATH = os.path.join(PROJECT_ROOT, ".env")
 ENV_EXAMPLE_PATH = os.path.join(PROJECT_ROOT, ".env.example")
 USERS_PATH = os.path.join(PROJECT_ROOT, "config/users.json")

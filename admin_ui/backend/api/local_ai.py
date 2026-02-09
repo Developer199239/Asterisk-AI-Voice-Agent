@@ -708,20 +708,26 @@ async def switch_model(request: SwitchModelRequest):
         return None
 
     def _read_yaml_provider_fields(provider_name: str, fields: List[str]) -> Dict[str, Any]:
-        if not os.path.exists(CONFIG_PATH):
-            return {f: None for f in fields}
+        # Read merged config (base + local override) so we see operator changes too.
         try:
-            with open(CONFIG_PATH, "r") as f:
-                cfg = yaml.safe_load(f) or {}
-            prov = (cfg.get("providers") or {}).get(provider_name) or {}
-            if not isinstance(prov, dict):
-                prov = {}
-            result: Dict[str, Any] = {}
-            for field in fields:
-                result[field] = prov.get(field) if field in prov else None
-            return result
+            from api.config import _read_merged_config_dict
+            cfg = _read_merged_config_dict()
         except Exception:
-            return {f: None for f in fields}
+            # Fallback to reading base file directly if import fails.
+            if not os.path.exists(CONFIG_PATH):
+                return {f: None for f in fields}
+            try:
+                with open(CONFIG_PATH, "r") as f:
+                    cfg = yaml.safe_load(f) or {}
+            except Exception:
+                return {f: None for f in fields}
+        prov = (cfg.get("providers") or {}).get(provider_name) or {}
+        if not isinstance(prov, dict):
+            prov = {}
+        result: Dict[str, Any] = {}
+        for field in fields:
+            result[field] = prov.get(field) if field in prov else None
+        return result
     
     # 1. Save current config for potential rollback
     previous_env = _read_env_values(env_file, [

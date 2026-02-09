@@ -21,7 +21,7 @@ import uuid
 import zipfile
 
 logger = logging.getLogger(__name__)
-from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
+from settings import ENV_PATH, CONFIG_PATH, LOCAL_CONFIG_PATH, ensure_env_file, PROJECT_ROOT
 from services.fs import upsert_env_vars, atomic_write_text
 from api.models_catalog import (
     get_full_catalog, get_models_by_language, get_available_languages,
@@ -2629,9 +2629,16 @@ async def save_setup_config(config: SetupConfig):
         # If provider already exists, just enable it and update greeting
         # If provider doesn't exist, create full config
         # Don't auto-disable other providers (user manages via Dashboard)
-        if os.path.exists(CONFIG_PATH):
+        # Read merged config (base + local override) so wizard sees operator changes.
+        try:
+            from api.config import _read_merged_config_dict
+            yaml_config = _read_merged_config_dict()
+        except Exception:
+            yaml_config = None
+        if not yaml_config and os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
                 yaml_config = yaml.safe_load(f)
+        if yaml_config is not None:
             
             yaml_config.setdefault("providers", {})
             providers = yaml_config["providers"]
@@ -2827,7 +2834,7 @@ async def save_setup_config(config: SetupConfig):
                 yaml_config.setdefault("external_media", {})["allowed_remote_hosts"] = [config.asterisk_server_ip]
 
             atomic_write_text(
-                CONFIG_PATH,
+                LOCAL_CONFIG_PATH,
                 yaml.dump(yaml_config, default_flow_style=False, sort_keys=False),
                 mode_from_existing=True,
             )

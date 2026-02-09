@@ -42,9 +42,16 @@ func LoadConfig() (*Config, error) {
 		}
 	}
 	
-	yamlPath := "config/ai-agent.yaml"
+	// Prefer local override file for reading; fall back to base
+	yamlPath := "config/ai-agent.local.yaml"
 	if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
-		yamlPath = "../config/ai-agent.yaml"
+		yamlPath = "config/ai-agent.yaml"
+		if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+			yamlPath = "../config/ai-agent.local.yaml"
+			if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+				yamlPath = "../config/ai-agent.yaml"
+			}
+		}
 	}
 	
 	cfg := &Config{
@@ -222,7 +229,7 @@ func (c *Config) SaveEnv() error {
 	return os.WriteFile(c.EnvPath, []byte(content), 0644)
 }
 
-// SaveYAML updates config/ai-agent.yaml
+// SaveYAML updates config/ai-agent.local.yaml (operator override file)
 func (c *Config) SaveYAML(template string) error {
 	// Try to find template in current and parent directory
 	templatePath := template
@@ -230,7 +237,7 @@ func (c *Config) SaveYAML(template string) error {
 		templatePath = "../" + template
 	}
 	
-	// Copy template to config/ai-agent.yaml
+	// Read template as base
 	input, err := os.ReadFile(templatePath)
 	if err != nil {
 		return fmt.Errorf("failed to read template %s: %w", templatePath, err)
@@ -256,7 +263,12 @@ func (c *Config) SaveYAML(template string) error {
 		return err
 	}
 	
-	return os.WriteFile(c.YAMLPath, output, 0644)
+	// Write to LOCAL override file so git-tracked base stays clean
+	localPath := "config/ai-agent.local.yaml"
+	if _, err := os.Stat("config"); os.IsNotExist(err) {
+		localPath = "../config/ai-agent.local.yaml"
+	}
+	return os.WriteFile(localPath, output, 0644)
 }
 
 // GetMaskedKey returns masked version of API key for display

@@ -16,7 +16,7 @@ Guides you through configuration and then runs:
   agent check
 
 Notes:
-  - Writes .env (secrets) and config/ai-agent.yaml (behavior)
+  - Writes .env (secrets) and config/ai-agent.local.yaml (operator overrides)
   - Prints the expected Stasis app name and dialplan snippet`,
 		version),
 	RunE: func(cmd *cobra.Command, args []string) error {

@@ -605,11 +605,26 @@ func (r *Runner) readEffectiveConfig() (*configSummary, Item) {
 import json, os
 import yaml
 
-path = "/app/config/ai-agent.yaml"
+def deep_merge(base, override):
+    merged = dict(base)
+    for k, v in override.items():
+        if isinstance(merged.get(k), dict) and isinstance(v, dict):
+            merged[k] = deep_merge(merged[k], v)
+        else:
+            merged[k] = v
+    return merged
+
+base_path = "/app/config/ai-agent.yaml"
+local_path = "/app/config/ai-agent.local.yaml"
 out = {"ok": False, "error": None, "summary": {}}
 try:
-    with open(path, "r") as f:
+    with open(base_path, "r") as f:
         cfg = yaml.safe_load(f) or {}
+    if os.path.isfile(local_path):
+        with open(local_path, "r") as f:
+            local = yaml.safe_load(f) or {}
+        if isinstance(local, dict):
+            cfg = deep_merge(cfg, local)
     asterisk = cfg.get("asterisk") or {}
     audiosocket = cfg.get("audiosocket") or {}
     external_media = cfg.get("external_media") or {}
