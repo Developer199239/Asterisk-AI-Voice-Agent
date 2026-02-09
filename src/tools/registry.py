@@ -25,10 +25,11 @@ class ToolRegistry:
     # Tool name aliases for provider compatibility
     # Different providers use different naming conventions for the same tools
     TOOL_ALIASES = {
-        "transfer_call": "transfer",      # ElevenLabs, some OpenAI prompts
+        "transfer": "blind_transfer",          # Legacy unified transfer name
+        "transfer_call": "blind_transfer",     # ElevenLabs, some OpenAI prompts
         "hangup": "hangup_call",          # Alternative naming
         "end_call": "hangup_call",        # Alternative naming
-        "transfer_to_queue": "transfer",  # Legacy queue transfer
+        "transfer_to_queue": "blind_transfer",  # Legacy queue transfer
     }
     
     def __new__(cls):
@@ -90,6 +91,33 @@ class ToolRegistry:
             return self._tools.get(canonical_name)
         
         return None
+
+    def canonicalize_tool_name(self, name: str) -> str:
+        """Return canonical tool name for alias-aware comparisons."""
+        raw_name = str(name or "").strip()
+        if not raw_name:
+            return ""
+        return self.TOOL_ALIASES.get(raw_name, raw_name)
+
+    def is_tool_allowed(self, requested_name: str, allowed_names: Optional[Iterable[str]]) -> bool:
+        """
+        Check tool allowlisting with alias support.
+
+        Example: `transfer` and `blind_transfer` are treated as equivalent.
+        """
+        if allowed_names is None:
+            return True
+
+        canonical_requested = self.canonicalize_tool_name(requested_name)
+        if not canonical_requested:
+            return False
+
+        canonical_allowed = {
+            self.canonicalize_tool_name(name)
+            for name in allowed_names
+            if str(name or "").strip()
+        }
+        return canonical_requested in canonical_allowed
 
     def has(self, name: str) -> bool:
         """Return True if a tool is registered under this exact name (no alias resolution)."""
@@ -379,7 +407,7 @@ After outputting a tool call, provide a brief spoken response.
 ### Important Rules:
 - When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
 - When the user asks to email the transcript, use request_transcript tool
-- When the user wants to transfer, use transfer tool
+- When the user wants to transfer, use blind_transfer tool
 - Always provide a spoken response along with tool calls
 - Only use tools when the user's intent clearly matches the tool's purpose
 """

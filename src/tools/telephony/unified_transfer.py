@@ -29,9 +29,9 @@ class UnifiedTransferTool(Tool):
     def definition(self) -> ToolDefinition:
         """Return tool definition."""
         return ToolDefinition(
-            name="transfer",
+            name="blind_transfer",
             description=(
-                "Transfer the caller to another destination. "
+                "Blind transfer the caller to another destination. "
                 "Use a configured destination key from Tools -> Transfer Destinations. "
                 "The system validates that the destination exists before transferring."
             ),

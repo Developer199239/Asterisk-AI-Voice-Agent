@@ -234,7 +234,10 @@ const ContextsPage = () => {
     };
 
     const handleAddContext = () => {
-        const defaultTools = ['transfer', 'hangup_call'].filter((t) => availableTools.includes(t));
+        const transferToolName = availableTools.includes('blind_transfer')
+            ? 'blind_transfer'
+            : (availableTools.includes('transfer') ? 'transfer' : '');
+        const defaultTools = [transferToolName, 'hangup_call'].filter((t) => !!t && availableTools.includes(t));
         const preferredDefaultProfile = 'telephony_ulaw_8k';
         const newContextProfile = (availableProfiles && availableProfiles.includes(preferredDefaultProfile))
             ? preferredDefaultProfile

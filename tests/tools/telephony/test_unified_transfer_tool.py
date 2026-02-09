@@ -14,7 +14,7 @@ class TestUnifiedTransferTool:
 
     def test_definition_uses_generic_destination_language(self, tool):
         definition = tool.definition
-        assert definition.name == "transfer"
+        assert definition.name == "blind_transfer"
         assert "support_agent" not in definition.description
         assert "sales_agent" not in definition.description
 

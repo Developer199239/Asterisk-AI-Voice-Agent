@@ -15,6 +15,7 @@ const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => 
     const [isNewContext, setIsNewContext] = useState(false);
 
     const availableTools = [
+        'blind_transfer',
         'transfer',
         'attended_transfer',
         'cancel_transfer',
@@ -34,6 +35,7 @@ const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => 
     ];
 
     const handleAddContext = () => {
+        const defaultTransferTool = availableTools.includes('blind_transfer') ? 'blind_transfer' : 'transfer';
         setEditingContext('new_context');
         setContextForm({
             name: '',
@@ -41,7 +43,7 @@ const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => 
             prompt: 'You are a helpful voice assistant.',
             profile: 'telephony_ulaw_8k',
             provider: '',
-            tools: ['transfer', 'hangup_call']
+            tools: [defaultTransferTool, 'hangup_call']
         });
         setIsNewContext(true);
     };
