@@ -19,6 +19,7 @@ const ContextsConfig: React.FC<ContextsConfigProps> = ({ config, onChange }) => 
         'transfer',
         'attended_transfer',
         'cancel_transfer',
+        'live_agent_transfer',
         'hangup_call',
         'leave_voicemail',
         'send_email_summary',

@@ -168,7 +168,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 
     const handleAddDestination = () => {
         setEditingDestination('new_destination');
-        setDestinationForm({ key: '', type: 'extension', target: '', description: '', attended_allowed: false });
+        setDestinationForm({ key: '', type: 'extension', target: '', description: '', attended_allowed: false, live_agent: false });
     };
 
     const handleSaveDestination = () => {
@@ -269,6 +269,18 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                 tooltip="Channel technology for extension transfers (SIP, PJSIP, IAX2, etc.). Default: SIP"
                                 placeholder="SIP"
                             />
+                            <FormSelect
+                                label="Live Agent Destination Key"
+                                value={config.transfer?.live_agent_destination_key || ''}
+                                onChange={(e) => updateNestedConfig('transfer', 'live_agent_destination_key', e.target.value)}
+                                options={[
+                                    { value: '', label: 'Not set (falls back to destination key: live_agent)' },
+                                    ...Object.keys(config.transfer?.destinations || {})
+                                        .sort()
+                                        .map((key) => ({ value: key, label: key })),
+                                ]}
+                                tooltip="Used by the live_agent_transfer tool. Select which transfer destination key should be used for live-agent handoff."
+                            />
                             <div className="flex justify-between items-center">
                                 <FormLabel>Destinations</FormLabel>
                                 <button
@@ -287,6 +299,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                             <div className="text-xs text-muted-foreground">
                                                 {dest.type} • {dest.target} • {dest.description}
                                                 {dest.type === 'extension' && dest.attended_allowed ? ' • attended' : ''}
+                                                {dest.type === 'extension' && dest.live_agent ? ' • live-agent' : ''}
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-1">
@@ -1085,6 +1098,14 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                             description="Enable warm transfer for this destination (agent announcement + DTMF accept/decline)."
                             checked={destinationForm.attended_allowed ?? false}
                             onChange={(e) => setDestinationForm({ ...destinationForm, attended_allowed: e.target.checked })}
+                        />
+                    )}
+                    {destinationForm.type === 'extension' && (
+                        <FormSwitch
+                            label="Use As Live Agent Destination"
+                            description="Marks this destination as the live-agent target fallback when no explicit live_agent_destination_key is set."
+                            checked={destinationForm.live_agent ?? false}
+                            onChange={(e) => setDestinationForm({ ...destinationForm, live_agent: e.target.checked })}
                         />
                     )}
                     <FormInput

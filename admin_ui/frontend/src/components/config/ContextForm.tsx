@@ -69,6 +69,7 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         'transfer',
         'attended_transfer',
         'cancel_transfer',
+        'live_agent_transfer',
         'hangup_call',
         'leave_voicemail',
         'send_email_summary',

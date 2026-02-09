@@ -30,6 +30,8 @@ class ToolRegistry:
         "hangup": "hangup_call",          # Alternative naming
         "end_call": "hangup_call",        # Alternative naming
         "transfer_to_queue": "blind_transfer",  # Legacy queue transfer
+        "live_agent": "live_agent_transfer",  # Short alias used by some prompts
+        "transfer_to_live_agent": "live_agent_transfer",
     }
     
     def __new__(cls):
@@ -407,7 +409,8 @@ After outputting a tool call, provide a brief spoken response.
 ### Important Rules:
 - When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
 - When the user asks to email the transcript, use request_transcript tool
-- When the user wants to transfer, use blind_transfer tool
+- When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer
+- When the user wants to transfer to a specific destination, use blind_transfer
 - Always provide a spoken response along with tool calls
 - Only use tools when the user's intent clearly matches the tool's purpose
 """
@@ -460,6 +463,12 @@ After outputting a tool call, provide a brief spoken response.
             self.register(CheckExtensionStatusTool)
         except ImportError as e:
             logger.warning(f"Could not import CheckExtensionStatusTool: {e}")
+
+        try:
+            from src.tools.telephony.live_agent_transfer import LiveAgentTransferTool
+            self.register(LiveAgentTransferTool)
+        except ImportError as e:
+            logger.warning(f"Could not import LiveAgentTransferTool: {e}")
         
         # Business tools
         try:
