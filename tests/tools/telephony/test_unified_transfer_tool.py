@@ -64,6 +64,28 @@ class TestUnifiedTransferTool:
         assert result["destination"] == "6010"
 
     @pytest.mark.asyncio
+    async def test_resolves_destination_by_exact_target_number(self, tool, tool_context, mock_ari_client):
+        tool_context.config["tools"]["transfer"] = {
+            "destinations": {
+                "support_agent": {
+                    "type": "extension",
+                    "target": "6000",
+                    "description": "Support Agent",
+                }
+            }
+        }
+
+        result = await tool.execute({"destination": "6000"}, tool_context)
+
+        assert result["status"] == "success"
+        assert result["type"] == "extension"
+        assert result["destination"] == "6000"
+
+        call_args = mock_ari_client.send_command.call_args.kwargs
+        assert call_args["resource"] == f"channels/{tool_context.caller_channel_id}/continue"
+        assert call_args["params"]["extension"] == "6000"
+
+    @pytest.mark.asyncio
     async def test_human_intent_without_extension_destination_fails(self, tool, tool_context):
         tool_context.config["tools"]["transfer"] = {
             "destinations": {
