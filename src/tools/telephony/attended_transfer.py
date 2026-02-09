@@ -37,7 +37,7 @@ class AttendedTransferTool(Tool):
                     type="string",
                     description=(
                         "Name of the configured destination to dial (must be an extension destination with attended transfer allowed). "
-                        "Example: 'support_agent'."
+                        "Use a destination key configured in Tools -> Transfer Destinations."
                     ),
                     required=True,
                 )

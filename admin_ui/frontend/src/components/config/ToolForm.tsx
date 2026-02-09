@@ -1066,7 +1066,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                         label="Key (Name)"
                         value={destinationForm.key || ''}
                         onChange={(e) => setDestinationForm({ ...destinationForm, key: e.target.value })}
-                        placeholder="e.g., sales_agent"
+                        placeholder="e.g., frontdesk_primary"
                         disabled={editingDestination !== 'new_destination'}
                     />
                     <FormSelect
