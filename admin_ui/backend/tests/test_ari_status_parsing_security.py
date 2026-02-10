@@ -4,7 +4,7 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from api import system  # noqa: E402
+from api import system
 
 
 def test_extract_endpoint_rejects_untrusted_tech() -> None:
@@ -35,6 +35,14 @@ def test_extract_device_state_id_requires_allowlisted_tech_and_numeric_extension
             extension_key="2765",
         )
         == "PJSIP/2765"
+    )
+    assert (
+        system._extract_device_state_id(
+            dial_string="",
+            device_state_tech="pjsip",
+            extension_key="0012",
+        )
+        == "PJSIP/0012"
     )
     assert (
         system._extract_device_state_id(

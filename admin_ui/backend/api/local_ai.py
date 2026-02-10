@@ -753,7 +753,7 @@ async def switch_model(request: SwitchModelRequest):
             prov = {}
         result: Dict[str, Any] = {}
         for field in fields:
-            result[field] = prov.get(field) if field in prov else None
+            result[field] = prov.get(field)
         return result
     
     # 1. Save current config for potential rollback

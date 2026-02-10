@@ -358,7 +358,7 @@ contexts:
 
 **Context fields override ElevenLabs dashboard settings** when the corresponding toggles are enabled in Security → Overrides.
 
-> **Tool Names**: Use canonical names (`transfer`, `hangup_call`, etc.) in both the context `tools:` list and the ElevenLabs dashboard. This ensures names match across all providers (Deepgram, OpenAI, ElevenLabs).
+> **Tool Names**: Use standard names (`transfer`, `hangup_call`, etc.) in both the context `tools:` list and the ElevenLabs dashboard. Note: `transfer` is an alias of canonical `blind_transfer`.
 
 ## Dynamic Variables & Overrides
 

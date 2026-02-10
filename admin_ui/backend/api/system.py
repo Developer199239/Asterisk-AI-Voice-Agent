@@ -2932,21 +2932,12 @@ def _extract_device_state_id(dial_string: str, device_state_tech: str, extension
         m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
         if m:
             tech = str(m.group(1)).upper()
-            try:
-                num = str(int(str(m.group(2))))
-            except Exception:
-                num = ""
-            if not num:
-                return ""
+            num = str(m.group(2))
             return f"{tech}/{num}"
     tech = _normalize_ari_tech(device_state_tech)
     key = (extension_key or "").strip()
     if tech and key.isdigit():
-        try:
-            num = str(int(key))
-        except Exception:
-            return ""
-        return f"{tech}/{num}"
+        return f"{tech}/{key}"
     return ""
 
 
@@ -2956,19 +2947,12 @@ def _extract_endpoint(dial_string: str, device_state_tech: str, extension_key: s
         m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
         if m:
             tech = str(m.group(1)).upper()
-            try:
-                num = str(int(str(m.group(2))))
-            except Exception:
-                return ("", "")
+            num = str(m.group(2))
             return (tech, num)
     tech = _normalize_ari_tech(device_state_tech)
     key = (extension_key or "").strip()
     if tech and key.isdigit():
-        try:
-            num = str(int(key))
-        except Exception:
-            return ("", "")
-        return (tech, num)
+        return (tech, key)
     return ("", "")
 
 

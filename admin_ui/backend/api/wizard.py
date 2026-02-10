@@ -2734,10 +2734,12 @@ async def save_setup_config(config: SetupConfig):
         # Don't auto-disable other providers (user manages via Dashboard)
         # Read merged config (base + local override) so wizard sees operator changes.
         try:
-            from api.config import _read_merged_config_dict
+            from api.config import _read_merged_config_dict, _read_base_config_dict, _compute_local_override
             yaml_config = _read_merged_config_dict()
+            base_config = _read_base_config_dict()
         except Exception:
             yaml_config = None
+            base_config = None
         if not yaml_config and os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
                 yaml_config = yaml.safe_load(f)
@@ -2939,9 +2941,16 @@ async def save_setup_config(config: SetupConfig):
             if config.asterisk_server_ip:
                 yaml_config.setdefault("external_media", {})["allowed_remote_hosts"] = [config.asterisk_server_ip]
 
+            local_override = None
+            try:
+                if isinstance(base_config, dict):
+                    local_override = _compute_local_override(base_config, yaml_config)
+            except Exception:
+                local_override = None
+
             atomic_write_text(
                 LOCAL_CONFIG_PATH,
-                yaml.dump(yaml_config, default_flow_style=False, sort_keys=False),
+                yaml.dump(local_override if isinstance(local_override, dict) else yaml_config, default_flow_style=False, sort_keys=False),
                 mode_from_existing=True,
             )
         

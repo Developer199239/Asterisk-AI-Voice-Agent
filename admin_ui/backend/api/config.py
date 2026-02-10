@@ -30,9 +30,11 @@ def _is_prefix(key: str, prefixes: tuple[str, ...]) -> bool:
 
 def _ai_engine_env_key(key: str) -> bool:
     return (
-        # Track only .env-owned health settings. HEALTH_BIND_HOST is compose-injected and
-        # should not trigger perpetual "pending restart" drift in Env UI.
+        # Track .env-owned health settings that require ai_engine recreate when changed.
+        # Keep HEALTH_BIND_HOST excluded because compose can inject it even when unset,
+        # which otherwise causes perpetual drift in Env UI.
         _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_CHECK_"))
+        or key in ("HEALTH_API_TOKEN", "HEALTH_BIND_PORT")
         or key in (
             "OPENAI_API_KEY",
             "GROQ_API_KEY",
@@ -1605,11 +1607,12 @@ def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bo
     base stays clean.
     """
     try:
-        config = _read_merged_config_dict()
-        if not config:
+        base_config = _read_base_config_dict()
+        merged_config = _read_merged_config_dict()
+        if not merged_config:
             return False
 
-        providers = config.get('providers')
+        providers = merged_config.get('providers')
         if not isinstance(providers, dict):
             providers = {}
         provider_block = providers.get(provider_name)
@@ -1622,12 +1625,17 @@ def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bo
             provider_block[field] = value
 
         providers[provider_name] = provider_block
-        config['providers'] = providers
+        merged_config['providers'] = providers
 
-        content = yaml.dump(config, default_flow_style=False, sort_keys=False)
+        # Validate the fully-merged config, then persist only minimal local override
+        # so base defaults can continue to evolve across releases.
+        merged_content = yaml.dump(merged_config, default_flow_style=False, sort_keys=False)
 
         # Validate before writing
-        _validate_ai_agent_config(content)
+        _validate_ai_agent_config(merged_content)
+
+        local_override = _compute_local_override(base_config, merged_config)
+        content = yaml.dump(local_override, default_flow_style=False, sort_keys=False)
 
         # Write to LOCAL override file
         _write_local_config(content)

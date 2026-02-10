@@ -358,7 +358,7 @@ docker logs --since 2m ai_engine 2>&1 | grep -i "stasis\|greeting\|streaming"
 
 ### 7.2 Outbound Test
 
-1. Open the **Admin UI** (default: `https://<server>:8443`)
+1. Open the **Admin UI** (default: `http://<server>:3003`)
 2. Navigate to **Call Scheduling**
 3. Create a new campaign:
    - Set a campaign name

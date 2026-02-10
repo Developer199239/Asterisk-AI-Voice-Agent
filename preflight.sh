@@ -1499,6 +1499,16 @@ check_env() {
 # ============================================================================
 # Asterisk Detection
 # ============================================================================
+_json_escape() {
+    local s="${1-}"
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\t'/\\t}
+    printf '%s' "$s"
+}
+
 check_asterisk() {
     ASTERISK_DIR=""
     ASTERISK_FOUND=false
@@ -1984,17 +1994,28 @@ check_asterisk_config() {
     fi
 
     # --- Build JSON checks object ---
+    local ari_enabled_detail_e ari_user_detail_e http_enabled_detail_e dialplan_detail_e
+    local mod_audiosocket_detail_e mod_res_ari_detail_e mod_res_stasis_detail_e mod_chan_pjsip_detail_e
+    ari_enabled_detail_e=$(_json_escape "$ari_enabled_detail")
+    ari_user_detail_e=$(_json_escape "$ari_user_detail")
+    http_enabled_detail_e=$(_json_escape "$http_enabled_detail")
+    dialplan_detail_e=$(_json_escape "$dialplan_detail")
+    mod_audiosocket_detail_e=$(_json_escape "$mod_audiosocket_detail")
+    mod_res_ari_detail_e=$(_json_escape "$mod_res_ari_detail")
+    mod_res_stasis_detail_e=$(_json_escape "$mod_res_stasis_detail")
+    mod_chan_pjsip_detail_e=$(_json_escape "$mod_chan_pjsip_detail")
+
     local CHECKS
     CHECKS=$(cat <<JSONEOF
 {
-    "ari_enabled": { "ok": $ari_enabled_ok, "detail": "$ari_enabled_detail" },
-    "ari_user": { "ok": $ari_user_ok, "detail": "$ari_user_detail" },
-    "http_enabled": { "ok": $http_enabled_ok, "detail": "$http_enabled_detail" },
-    "dialplan_context": { "ok": $dialplan_ok, "detail": "$dialplan_detail" },
-    "module_app_audiosocket": { "ok": $mod_audiosocket_ok, "detail": "$mod_audiosocket_detail" },
-    "module_res_ari": { "ok": $mod_res_ari_ok, "detail": "$mod_res_ari_detail" },
-    "module_res_stasis": { "ok": $mod_res_stasis_ok, "detail": "$mod_res_stasis_detail" },
-    "module_chan_pjsip": { "ok": $mod_chan_pjsip_ok, "detail": "$mod_chan_pjsip_detail" }
+    "ari_enabled": { "ok": $ari_enabled_ok, "detail": "$ari_enabled_detail_e" },
+    "ari_user": { "ok": $ari_user_ok, "detail": "$ari_user_detail_e" },
+    "http_enabled": { "ok": $http_enabled_ok, "detail": "$http_enabled_detail_e" },
+    "dialplan_context": { "ok": $dialplan_ok, "detail": "$dialplan_detail_e" },
+    "module_app_audiosocket": { "ok": $mod_audiosocket_ok, "detail": "$mod_audiosocket_detail_e" },
+    "module_res_ari": { "ok": $mod_res_ari_ok, "detail": "$mod_res_ari_detail_e" },
+    "module_res_stasis": { "ok": $mod_res_stasis_ok, "detail": "$mod_res_stasis_detail_e" },
+    "module_chan_pjsip": { "ok": $mod_chan_pjsip_ok, "detail": "$mod_chan_pjsip_detail_e" }
 }
 JSONEOF
     )
@@ -2017,18 +2038,23 @@ _write_asterisk_manifest() {
     local MANIFEST_FILE="$MANIFEST_DIR/asterisk_status.json"
     local TIMESTAMP
     TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")"
+    local timestamp_e ast_version_e config_dir_e fpbx_version_e
+    timestamp_e=$(_json_escape "$TIMESTAMP")
+    ast_version_e=$(_json_escape "$ast_version")
+    config_dir_e=$(_json_escape "$config_dir")
+    fpbx_version_e=$(_json_escape "$fpbx_version")
 
     mkdir -p "$MANIFEST_DIR" 2>/dev/null || true
 
     cat > "$MANIFEST_FILE" <<MANIFESTEOF
 {
-    "timestamp": "$TIMESTAMP",
+    "timestamp": "$timestamp_e",
     "asterisk_found": $ast_found,
-    "asterisk_version": "$ast_version",
-    "config_dir": "$config_dir",
+    "asterisk_version": "$ast_version_e",
+    "config_dir": "$config_dir_e",
     "freepbx": {
         "detected": $fpbx_detected,
-        "version": "$fpbx_version"
+        "version": "$fpbx_version_e"
     },
     "checks": $checks_json
 }

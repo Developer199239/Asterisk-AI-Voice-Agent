@@ -251,10 +251,10 @@ Tools must be added to the ElevenLabs dashboard as "Client Tools":
 }
 ```
 
-### transfer
+### blind_transfer
 ```json
 {
-  "name": "transfer",
+  "name": "blind_transfer",
   "description": "Transfer call to destination",
   "parameters": {
     "type": "object",

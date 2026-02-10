@@ -66,7 +66,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
             if (digitsOnly) return digitsOnly[1];
 
             // Common dial-string formats: PJSIP/2765, SIP/6000, Local/2765@from-internal
-            const m = s.match(/(?:^|[^A-Za-z0-9])(?:PJSIP|SIP|IAX2|DAHDI|LOCAL|Local)\/(\d+)/);
+            const m = s.match(/(?:^|[^A-Za-z0-9])(?:PJSIP|SIP|IAX2|DAHDI|LOCAL)\/(\d+)/i);
             return m ? (m[1] || '') : '';
         };
 
@@ -135,8 +135,9 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
         const checkLiveAgentStatus = async (rowId: string, key: string, ext: any) => {
             const dialString = String(ext?.dial_string || '');
             const tech = String(ext?.device_state_tech || 'auto');
-            if (!dialString.trim() && !String(key || '').trim()) {
-                toast.error('Set a dial string (e.g. PJSIP/2765) before checking status.');
+            const numericKey = isNumericKey(key) ? String(key).trim() : extractNumericExtensionKeyFromDialString(dialString);
+            if (!numericKey) {
+                toast.error('Set a numeric extension or dial string (e.g. PJSIP/2765) before checking status.');
                 return;
             }
 
@@ -147,7 +148,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 
             try {
                 const res = await axios.get('/api/system/ari/extension-status', {
-                    params: { key, device_state_tech: tech, dial_string: dialString },
+                    params: { key: numericKey, device_state_tech: tech, dial_string: dialString },
                 });
                 const data = res?.data || {};
                 setInternalExtStatusByRowId((prev) => ({

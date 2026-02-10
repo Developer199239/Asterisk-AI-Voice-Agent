@@ -142,7 +142,8 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
         return "call", True
     if "cleanup after tts" in text:
         return "call", True
-    if "hangupreay" in text or "hangupready" in text:
+    # Keep legacy misspelling for backward compatibility with old log messages.
+    if "hangupready" in text or "hangupreay" in text:
         return "call", True
     if "rca_call_end" in text:
         return "call", True
@@ -170,9 +171,6 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
         return "provider", True
     if "provider session started" in text:
         return "provider", True
-    if "streaming playback started" in text:
-        return "provider", True
-
     # Transport milestones
     if "rtp server started for externalmedia transport" in text or "externalmedia channel created" in text:
         return "transport", True

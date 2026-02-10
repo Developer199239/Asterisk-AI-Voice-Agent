@@ -1,7 +1,7 @@
 # ViciDial Outbound Dialer Integration
 
 **Branch**: `vicidial-integration` (from `main`)
-**Customer Server**: `root@reliable365.smartaicalls.com`
+**Customer Server**: `root@<customer-server>`
 **Date Started**: Feb 9, 2026
 
 ---
@@ -15,7 +15,7 @@ AAVA outbound dialer was built and tested exclusively with FreePBX. A community 
 3. ViciDial uses `SIP/` (chan_sip) not `PJSIP/` for endpoints
 4. FreePBX-specific vars (`AMPUSER`, `FROMEXTEN`) are irrelevant on ViciDial
 
-## Server Investigation (reliable365.smartaicalls.com)
+## Server Investigation (<customer-server>)
 
 ### Environment
 - **Asterisk**: 18.26.4-vici (SIP via chan_sip)
@@ -30,9 +30,9 @@ AAVA outbound dialer was built and tested exclusively with FreePBX. A community 
 - `ext_context` = `default` (from `asterisk.servers` table)
 - `dial_prefix` = `911` (from `vicidial_campaigns.dial_prefix`)
 - Carrier routes in `[vicidial-auto-external]`:
-  - `_911.` → `Dial(SIP/peeredge/723${EXTEN:3})` (INSTACALL CC API)
-  - `_912.` → `Dial(SIP/peeredge/723${EXTEN:3})` (INSTACALL static)
-- Trunk: `SIP/peeredge` (chan_sip peer to 38.65.82.198)
+  - `_911.` → `Dial(SIP/<carrier-peer>/<normalized-prefix>${EXTEN:3})` (carrier profile A)
+  - `_912.` → `Dial(SIP/<carrier-peer>/<normalized-prefix>${EXTEN:3})` (carrier profile B)
+- Trunk: `SIP/<carrier-peer>` (chan_sip peer to `<carrier-ip>`)
 
 ### Key Differences: FreePBX vs ViciDial
 
@@ -98,4 +98,4 @@ AAVA_OUTBOUND_CHANNEL_TECH=sip
 - [ ] Verify FreePBX regression (defaults unchanged)
 
 ### Test Results
-*(To be filled during testing)*
+Validation status at archive time: pending follow-up QA on customer deployment.

@@ -9492,14 +9492,16 @@ class Engine:
                                             logger.error("ARI hangup failed", error=str(e))
                                         return
 
-                                    # Handle Terminal Transfer
-                                    if tool_registry.canonicalize_tool_name(name) == "blind_transfer" and result.get("status") == "success":
-                                        logger.info("Transfer successful, ending turn loop", tool=name)
+                                    canonical_tool = tool_registry.canonicalize_tool_name(name)
+
+                                    # Handle terminal transfers (blind + live-agent handoff).
+                                    if canonical_tool in ("blind_transfer", "live_agent_transfer") and result.get("status") == "success":
+                                        logger.info("Transfer successful, ending turn loop", tool=name, canonical_tool=canonical_tool)
                                         return
                                     
                                     # Handle non-terminal tools (e.g., request_transcript)
                                     # Feed result back to LLM for continuation
-                                    if not result.get("will_hangup") and tool_registry.canonicalize_tool_name(name) != "blind_transfer":
+                                    if not result.get("will_hangup") and canonical_tool not in ("blind_transfer", "live_agent_transfer"):
                                         tool_result_msg = result.get("message", f"Tool {name} executed successfully.")
                                         # Add tool result to conversation history
                                         conversation_history.append({

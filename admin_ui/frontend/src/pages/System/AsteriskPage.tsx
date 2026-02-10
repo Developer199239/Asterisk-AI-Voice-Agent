@@ -67,9 +67,12 @@ const CONFIG_CHECK_LABELS: Record<string, { label: string; fixHint: string }> = 
 const CopyButton = ({ text }: { text: string }) => {
     const [copied, setCopied] = useState(false);
     const handleCopy = () => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        navigator.clipboard.writeText(text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }).catch(() => {
+            // Clipboard may be unavailable in insecure contexts.
+        });
     };
     return (
         <button
@@ -262,8 +265,8 @@ const AsteriskPage = () => {
                         </div>
                     ) : (
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Checking modules...
+                            <AlertCircle className="w-4 h-4" />
+                            No module data returned from Asterisk
                         </div>
                     )}
                 </ConfigCard>
