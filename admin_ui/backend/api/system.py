@@ -3090,46 +3090,65 @@ async def ari_extension_status(key: str = "", device_state_tech: str = "auto", d
 
     async with httpx.AsyncClient(timeout=8.0, verify=verify) as client:
         if device_state_id:
-            # device_state_id is normalized to ALLOWED_TECH + numeric extension only.
-            url = f"{base}/deviceStates/{device_state_id.replace('/', '%2F')}"
             try:
-                resp = await client.get(url, auth=(settings["username"], settings["password"]))
+                # Keep URL constant to avoid request-derived path construction.
+                resp = await client.get(f"{base}/deviceStates", auth=(settings["username"], settings["password"]))
                 if resp.status_code == 200:
-                    data = resp.json() or {}
-                    state = str(data.get("state") or "")
-                    return AriExtensionStatusResponse(
-                        success=True,
-                        source="device_state",
-                        status=_classify_device_state(state),
-                        state=state,
-                        device_state_id=device_state_id,
-                        endpoint_tech=endpoint_tech,
-                        endpoint_resource=endpoint_resource,
-                    )
+                    data = resp.json() or []
+                    if isinstance(data, list):
+                        match = next(
+                            (
+                                item
+                                for item in data
+                                if str((item or {}).get("name") or "") == device_state_id
+                            ),
+                            None,
+                        )
+                        if isinstance(match, dict):
+                            state = str(match.get("state") or "")
+                            return AriExtensionStatusResponse(
+                                success=True,
+                                source="device_state",
+                                status=_classify_device_state(state),
+                                state=state,
+                                device_state_id=device_state_id,
+                                endpoint_tech=endpoint_tech,
+                                endpoint_resource=endpoint_resource,
+                            )
             except Exception:
                 logger.debug("ARI device state query failed", exc_info=True)
 
         if endpoint_tech and endpoint_resource:
-            # endpoint_tech/resource are normalized to allowlisted tech + numeric extension.
-            url = f"{base}/endpoints/{endpoint_tech}/{endpoint_resource}"
             try:
-                resp = await client.get(url, auth=(settings["username"], settings["password"]))
+                # Keep URL constant to avoid request-derived path construction.
+                resp = await client.get(f"{base}/endpoints", auth=(settings["username"], settings["password"]))
                 if resp.status_code == 200:
-                    data = resp.json() or {}
-                    state = str(data.get("state") or "")
-                    # Endpoint state is not "availability"; be conservative.
-                    status = "unknown"
-                    if state.strip().lower() in ("online", "reachable", "registered"):
-                        status = "available"
-                    return AriExtensionStatusResponse(
-                        success=True,
-                        source="endpoint",
-                        status=status,
-                        state=state,
-                        device_state_id=device_state_id,
-                        endpoint_tech=endpoint_tech,
-                        endpoint_resource=endpoint_resource,
-                    )
+                    data = resp.json() or []
+                    if isinstance(data, list):
+                        match = next(
+                            (
+                                item
+                                for item in data
+                                if str((item or {}).get("technology") or "").upper() == endpoint_tech
+                                and str((item or {}).get("resource") or "") == endpoint_resource
+                            ),
+                            None,
+                        )
+                        if isinstance(match, dict):
+                            state = str(match.get("state") or "")
+                            # Endpoint state is not "availability"; be conservative.
+                            status = "unknown"
+                            if state.strip().lower() in ("online", "reachable", "registered"):
+                                status = "available"
+                            return AriExtensionStatusResponse(
+                                success=True,
+                                source="endpoint",
+                                status=status,
+                                state=state,
+                                device_state_id=device_state_id,
+                                endpoint_tech=endpoint_tech,
+                                endpoint_resource=endpoint_resource,
+                            )
             except Exception:
                 logger.debug("ARI endpoint query failed", exc_info=True)
 
