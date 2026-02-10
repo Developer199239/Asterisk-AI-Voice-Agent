@@ -7,15 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Operator Config Override (`ai-agent.local.yaml`)**: Operator customizations are now stored in `config/ai-agent.local.yaml` (git-ignored), deep-merged on top of the base `config/ai-agent.yaml` at startup. All Admin UI saves, CLI wizard writes, and `agent setup` output target the local file, so upstream `git pull` never conflicts with operator config.
-- **Graceful Stash Pop Recovery**: `agent update` now automatically recovers from `git stash pop` merge conflicts by resetting the working tree, dropping the failed stash, and restoring operator config (`.env`, `ai-agent.yaml`, `ai-agent.local.yaml`, `users.json`, `contexts/`) from the pre-update backup.
-
 ### Planned
 
 - Additional provider integrations
 - Enhanced monitoring features
+
+## [6.1.1] - 2026-02-09
+
+### Added
+
+- **Operator Config Override (`ai-agent.local.yaml`)**: Operator customizations are now stored in `config/ai-agent.local.yaml` (git-ignored), deep-merged on top of the base `config/ai-agent.yaml` at startup. All Admin UI saves, CLI wizard writes, and `agent setup` output target the local file, so upstream `git pull` never conflicts with operator config. Local overrides can delete base keys by setting them to `null`.
+- **Graceful Stash Pop Recovery**: `agent update` now automatically recovers from `git stash pop` merge conflicts by resetting the working tree, dropping the failed stash, and restoring operator config (`.env`, `ai-agent.yaml`, `ai-agent.local.yaml`, `users.json`, `contexts/`) from the pre-update backup.
+- **Live Agent Transfer Tool**: Explicit `live_agent_transfer` tool with ARI-based extension status checks, auto-derived internal extension keys, and fallback routing to configured live-agent destinations.
+- **ARI Extension Status API**: Admin UI endpoint to query Asterisk device/endpoint state for live agent availability before transferring.
+- **ViciDial Outbound Dialer Compatibility**: Configurable `AAVA_OUTBOUND_DIAL_CONTEXT`, `AAVA_OUTBOUND_DIAL_PREFIX`, `AAVA_OUTBOUND_CHANNEL_TECH`, and `AAVA_OUTBOUND_PBX_TYPE` (`freepbx`/`vicidial`/`generic`) for outbound campaign origination.
+- **GPU Host/Runtime Indicators**: Runtime GPU probe details in local AI server status with CUDA guard for STT/TTS backend selection and CPU fallback when GPU is unavailable.
+- **GPU-Aware Compatibility Checks**: Force rebuild flow for incompatible runtime/device combinations with `force_incompatible_apply` flag for intentional overrides.
+- **Local-Hybrid Wizard Persistence**: Setup wizard correctly persists `local_hybrid` pipeline, local STT/TTS backend selections, and model mappings through env and YAML config.
+
+### Changed
+
+- **Tool Name Canonicalization**: `transfer` is now an alias for `blind_transfer`. `live_agent` and `transfer_to_live_agent` are aliases for `live_agent_transfer`. Tool allowlisting uses `canonicalize_tool_name()` for alias-aware matching across contexts.
+- **Admin UI Live Agent Section**: Status pills with real-time ARI checks, rebalanced row columns, destination override hidden behind Advanced toggle, internal extensions labeled as live agents.
+- **Admin UI Docker Compose GPU Overlay**: `start`/`recreate`/`rebuild` actions for `local_ai_server` now include `docker-compose.gpu.yml` when `GPU_AVAILABLE=true`.
+
+### Fixed
+
+- **`blind_transfer` Destination Resolution**: Fixed numeric target resolution and cross-provider naming (`transfer` vs `blind_transfer`) in tool allowlists.
+- **`live_agent_transfer` Fallback Routing**: Prevents mapping to non-live-agent destinations; falls back to explicit live-agent config or internal extensions.
+- **Streaming `provider_grace_ms` Cap**: Reverted then re-fixed the 60ms hardcoded cap on `provider_grace_ms` that degraded streaming latency.
+- **`check_extension_status` Opt-In**: Made the extension status tool opt-in; removed hardcoded transfer key examples from tool registry.
+- **Admin UI Log Troubleshooting**: Exclude per-frame audio noise from log views; add milestone tracking markers.
+- **Admin UI System API Indentation**: Fixed YAML indentation in system config API responses.
+- **Environment Drift Detection**: Ignore compose-injected `HEALTH_BIND_HOST` (only track `HEALTH_CHECK_*` prefix) to prevent perpetual "pending restart" drift in Env UI.
+- **Docker Image Metadata**: Handle missing Docker image metadata in containers API (`ImageNotFound` after prune/rebuild) without failing the endpoint.
+- **GPU Compose Overlay Preservation**: Preserve GPU compose overlay for `local_ai_server` UI actions (start, recreate, rebuild) so GPU device requests are not silently dropped.
+- **EnvPage GPU-Aware CUDA Options**: CUDA device option for Faster-Whisper and MeloTTS only shown when `GPU_AVAILABLE=true`.
+
+### Documentation
+
+- ViciDial Integration Guide (`docs/Vicidial-Setup.md`)
+- Fixed `transfer_call` references to canonical `transfer` / `blind_transfer` in ElevenLabs milestone docs
+- Updated 9 docs for `ai-agent.local.yaml` config override system and stash pop recovery procedures
+
+### Migration from v6.0.0
+
+1. **No breaking changes.** All new features are additive or opt-in.
+2. Existing `config/ai-agent.yaml` continues to work unchanged. The new `ai-agent.local.yaml` is optional.
+3. **Docker rebuild required**: Run `docker compose up -d --build --force-recreate` for all containers.
+4. **ViciDial users**: Set `AAVA_OUTBOUND_PBX_TYPE=vicidial` in `.env` and configure dial context/prefix as needed.
 
 ## [6.0.0] - 2026-02-07
 
