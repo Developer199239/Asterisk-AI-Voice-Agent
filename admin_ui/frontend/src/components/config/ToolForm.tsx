@@ -689,7 +689,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                         title="Agent Name"
                                     />
                                 </div>
-	                                <div className="md:col-span-3">
+	                                <div className="md:col-span-2">
 	                                    <input
 	                                        className="w-full border rounded px-2 py-1 text-sm"
 	                                        placeholder="Dial String"
@@ -765,7 +765,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                                        title="Description"
 	                                    />
 	                                </div>
-	                                <div className="md:col-span-2 flex justify-end items-center gap-3 min-w-0 overflow-hidden">
+	                                <div className="md:col-span-3 flex justify-end items-center gap-3 min-w-0 overflow-hidden">
                                         <button
                                             type="button"
                                             className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-medium border ${pillClass} hover:bg-accent/40 transition-colors min-w-0 max-w-[150px] overflow-hidden`}
