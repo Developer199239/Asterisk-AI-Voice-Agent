@@ -33,3 +33,10 @@ def test_google_live_model_normalization_rejects_non_live_model_values():
         GoogleLiveProvider._normalize_model_name("models/gemini-1.5-pro-latest")
         == "gemini-2.5-flash-native-audio-preview-12-2025"
     )
+
+
+def test_google_live_model_normalization_keeps_non_native_audio_live_models():
+    assert (
+        GoogleLiveProvider._normalize_model_name("gemini-2.0-flash-live-001")
+        == "gemini-2.0-flash-live-001"
+    )

@@ -13,7 +13,7 @@ import tempfile
 import yaml
 from pathlib import Path
 
-from src.config.loaders import resolve_config_path, load_yaml_with_env_expansion
+from src.config.loaders import resolve_config_path, load_yaml_with_env_expansion, deep_merge_dicts
 
 
 class TestResolveConfigPath:
@@ -178,3 +178,19 @@ version: 1.0
         assert result['app_name'] == 'test'
         assert result['version'] == 1.0
         assert len(result) == 2  # Only 2 keys, no comments
+
+
+class TestDeepMergeDicts:
+    def test_merge_preserves_base_keys(self):
+        base = {"a": 1, "nested": {"x": 1, "y": 2}}
+        override = {"nested": {"x": 9}}
+        merged = deep_merge_dicts(base, override)
+        assert merged["a"] == 1
+        assert merged["nested"]["x"] == 9
+        assert merged["nested"]["y"] == 2
+
+    def test_merge_deletes_keys_with_none_tombstone(self):
+        base = {"tools": {"transfer": {"destinations": {"support_queue": {"type": "queue", "target": "301"}}}}}
+        override = {"tools": {"transfer": {"destinations": {"support_queue": None}}}}
+        merged = deep_merge_dicts(base, override)
+        assert "support_queue" not in merged["tools"]["transfer"]["destinations"]

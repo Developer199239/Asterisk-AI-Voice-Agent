@@ -418,6 +418,10 @@ run_rollback() {
       mkdir -p "${PROJECT_ROOT}/config"
       cp -f "${PROJECT_ROOT}/${backup_rel}/config/ai-agent.yaml" "${PROJECT_ROOT}/config/ai-agent.yaml"
     fi
+    if [ -f "${PROJECT_ROOT}/${backup_rel}/config/ai-agent.local.yaml" ]; then
+      mkdir -p "${PROJECT_ROOT}/config"
+      cp -f "${PROJECT_ROOT}/${backup_rel}/config/ai-agent.local.yaml" "${PROJECT_ROOT}/config/ai-agent.local.yaml"
+    fi
     if [ -f "${PROJECT_ROOT}/${backup_rel}/config/users.json" ]; then
       mkdir -p "${PROJECT_ROOT}/config"
       cp -f "${PROJECT_ROOT}/${backup_rel}/config/users.json" "${PROJECT_ROOT}/config/users.json"

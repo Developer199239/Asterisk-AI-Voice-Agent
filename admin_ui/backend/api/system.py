@@ -76,6 +76,44 @@ def _dotenv_value(key: str) -> Optional[str]:
         return None
 
 
+def _is_truthy_env(value: Optional[str]) -> bool:
+    raw = (value or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _compose_files_flags_for_service(service_name: str) -> str:
+    """
+    Return compose file flags for service operations.
+
+    local_ai_server must include docker-compose.gpu.yml when GPU_AVAILABLE=true,
+    otherwise UI-triggered recreate/start can silently drop GPU device requests.
+    """
+    # Normalize legacy service names.
+    svc = {
+        "local-ai-server": "local_ai_server",
+        "ai-engine": "ai_engine",
+        "admin-ui": "admin_ui",
+    }.get(service_name, service_name)
+
+    if svc != "local_ai_server":
+        return ""
+
+    if not _is_truthy_env(_dotenv_value("GPU_AVAILABLE")):
+        return ""
+
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    gpu_compose = os.path.join(project_root, "docker-compose.gpu.yml")
+    if not os.path.exists(gpu_compose):
+        logger.warning(
+            "GPU_AVAILABLE=true but %s not found; falling back to base compose for %s",
+            _sanitize_for_log(gpu_compose),
+            _sanitize_for_log(svc),
+        )
+        return ""
+
+    return "-f docker-compose.yml -f docker-compose.gpu.yml"
+
+
 def _sanitize_for_log(value: str) -> str:
     """Best-effort: prevent log injection via control characters."""
     try:
@@ -142,6 +180,41 @@ class ContainerInfo(BaseModel):
     status: str
     state: str
 
+
+def _safe_container_image_name(container) -> str:
+    """
+    Resolve a human-readable image name without failing the whole containers endpoint.
+
+    Docker can return ImageNotFound for stale image IDs after prune/rebuild windows.
+    """
+    try:
+        image = container.image
+        tags = getattr(image, "tags", None) or []
+        if tags:
+            return tags[0]
+        short_id = getattr(image, "short_id", "")
+        if short_id:
+            return short_id
+    except docker.errors.ImageNotFound:
+        pass
+    except Exception as e:
+        logger.debug("Error resolving image object for container %s: %s", getattr(container, "name", "<unknown>"), e)
+
+    try:
+        config_image = str((container.attrs.get("Config", {}) or {}).get("Image") or "").strip()
+        if config_image:
+            return f"{config_image} (missing locally)"
+        image_id = str(container.attrs.get("Image") or "").strip()
+        if image_id:
+            if image_id.startswith("sha256:") and len(image_id) > 19:
+                return f"{image_id[:19]}... (missing locally)"
+            return f"{image_id} (missing locally)"
+    except Exception:
+        pass
+
+    return "unknown (image unavailable)"
+
+
 @router.get("/containers")
 async def get_containers():
     try:
@@ -152,7 +225,7 @@ async def get_containers():
         result = []
         for c in containers:
             # Get image name
-            image_name = c.image.tags[0] if c.image.tags else c.image.short_id
+            image_name = _safe_container_image_name(c)
             
             # Calculate uptime from StartedAt
             uptime = None
@@ -214,7 +287,7 @@ async def get_containers():
                 "name": c.name,
                 "image": image_name,
                 "status": c.status,
-                "state": c.attrs['State']['Status'],
+                "state": c.attrs.get("State", {}).get("Status", c.status),
                 "uptime": uptime,
                 "started_at": started_at,
                 "ports": ports,
@@ -271,10 +344,12 @@ async def start_container(container_id: str):
 
     def _compose_up_cmd(svc: str, *, build: bool) -> str:
         flag = "--build" if build else "--no-build"
+        compose_files = _compose_files_flags_for_service(svc)
+        compose_prefix = f"{compose_files} " if compose_files else ""
         return (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent up -d {flag} {svc}"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d {flag} {svc}"
         )
 
     try:
@@ -502,10 +577,12 @@ async def _start_via_compose(container_id: str, service_map: dict):
         host_root = _project_host_root_from_admin_ui_container()
         build_flag = "--build" if service_name == "local_ai_server" else "--no-build"
         timeout_sec = 1800 if service_name == "local_ai_server" else 300
+        compose_files = _compose_files_flags_for_service(service_name)
+        compose_prefix = f"{compose_files} " if compose_files else ""
         cmd = (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent up -d {build_flag} {service_name}"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d {build_flag} {service_name}"
         )
 
         code, out = _run_updater_ephemeral(
@@ -586,10 +663,12 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
             logger.warning("Error stopping container %s", safe_container_name, exc_info=True)
         
         # Run compose in updater-runner so relative binds resolve on the host correctly.
+        compose_files = _compose_files_flags_for_service(service_name)
+        compose_prefix = f"{compose_files} " if compose_files else ""
         cmd = (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent up -d --force-recreate --no-build {service_name}"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d --force-recreate --no-build {service_name}"
         )
         timeout_sec = 600 if service_name == "local_ai_server" else 300
         code, out = _run_updater_ephemeral(
@@ -1711,19 +1790,55 @@ _PLATFORMS_CACHE = None
 _PLATFORMS_CACHE_MTIME = None
 
 
+def _parse_semver(value: str) -> Optional[tuple[int, int, int]]:
+    """Extract first semantic version tuple from a string (vX.Y.Z or X.Y.Z)."""
+    m = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", value or "")
+    if not m:
+        return None
+    try:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
+def _detect_latest_changelog_version(project_root: str) -> Optional[str]:
+    """
+    Parse the first released Keep-a-Changelog heading from CHANGELOG.md.
+
+    Expected format: `## [X.Y.Z] - YYYY-MM-DD`
+    """
+    try:
+        changelog_path = os.path.join(project_root, "CHANGELOG.md")
+        if not os.path.exists(changelog_path):
+            return None
+        with open(changelog_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                m = re.match(r"^## \[(\d+\.\d+\.\d+)\]\s*-\s*\d{4}-\d{2}-\d{2}$", line)
+                if m:
+                    return f"v{m.group(1)}"
+    except Exception:
+        return None
+    return None
+
+
 def _detect_project_version(project_root: str) -> dict:
     """
     Best-effort project version detection for Admin UI.
 
     Preference order:
       1) AAVA_PROJECT_VERSION env var (operator override)
-      2) git describe (when repo checkout is present)
-      3) Parse README.md for a `vX.Y.Z` token
-      4) unknown
+      2) CHANGELOG.md latest release heading (`## [X.Y.Z] - YYYY-MM-DD`)
+      3) git describe (when repo checkout is present)
+      4) Parse README.md for a `vX.Y.Z` token
+      5) unknown
     """
     override = (os.getenv("AAVA_PROJECT_VERSION") or "").strip()
     if override:
         return {"version": override, "source": "env"}
+
+    changelog_version = _detect_latest_changelog_version(project_root)
+    git_version = None
 
     try:
         # Use -c safe.directory to avoid "dubious ownership" failures on some hosts.
@@ -1746,9 +1861,24 @@ def _detect_project_version(project_root: str) -> dict:
         if proc.returncode == 0:
             version = (proc.stdout or "").strip()
             if version:
-                return {"version": version, "source": "git"}
+                git_version = version
     except Exception:
         pass
+
+    if changelog_version:
+        changelog_semver = _parse_semver(changelog_version)
+        git_semver = _parse_semver(git_version or "")
+
+        # Prefer CHANGELOG when git describe is commit-distance/dirty output
+        # or when changelog clearly indicates a newer release series.
+        if not git_version or "-" in git_version:
+            if not git_semver or (changelog_semver and changelog_semver >= git_semver):
+                return {"version": changelog_version, "source": "changelog"}
+        if changelog_semver and git_semver and changelog_semver > git_semver:
+            return {"version": changelog_version, "source": "changelog"}
+
+    if git_version:
+        return {"version": git_version, "source": "git"}
 
     try:
         readme_path = os.path.join(project_root, "README.md")
@@ -2732,6 +2862,114 @@ class AriTestRequest(BaseModel):
     ssl_verify: bool = True  # Set to False for self-signed certs
 
 
+class AriExtensionStatusResponse(BaseModel):
+    success: bool
+    source: str = "unknown"  # device_state | endpoint | error
+    status: str = "unknown"  # available | busy | unknown
+    state: str = ""
+    device_state_id: str = ""
+    endpoint_tech: str = ""
+    endpoint_resource: str = ""
+    error: str = ""
+
+
+_ALLOWED_ARI_TECHS = {"PJSIP", "SIP", "IAX2", "DAHDI", "LOCAL"}
+
+
+def _normalize_ari_tech(value: str) -> str:
+    tech = (value or "").strip().upper()
+    if not tech or tech == "AUTO":
+        return ""
+    if tech not in _ALLOWED_ARI_TECHS:
+        return ""
+    return tech
+
+
+def _ari_env_settings() -> dict:
+    """
+    Resolve ARI connection settings.
+
+    Prefer container environment variables (what the container actually runs with),
+    but fall back to `.env` for friendliness in dev setups.
+    """
+    host = (os.environ.get("ASTERISK_HOST") or _dotenv_value("ASTERISK_HOST") or "127.0.0.1").strip()
+    scheme = (os.environ.get("ASTERISK_ARI_SCHEME") or _dotenv_value("ASTERISK_ARI_SCHEME") or "http").strip()
+    port_raw = (os.environ.get("ASTERISK_ARI_PORT") or _dotenv_value("ASTERISK_ARI_PORT") or "8088").strip()
+    user = (
+        os.environ.get("ASTERISK_ARI_USERNAME")
+        or os.environ.get("ARI_USERNAME")
+        or _dotenv_value("ASTERISK_ARI_USERNAME")
+        or _dotenv_value("ARI_USERNAME")
+        or ""
+    ).strip()
+    password = (
+        os.environ.get("ASTERISK_ARI_PASSWORD")
+        or os.environ.get("ARI_PASSWORD")
+        or _dotenv_value("ASTERISK_ARI_PASSWORD")
+        or _dotenv_value("ARI_PASSWORD")
+        or ""
+    ).strip()
+    ssl_verify_raw = (os.environ.get("ASTERISK_ARI_SSL_VERIFY") or _dotenv_value("ASTERISK_ARI_SSL_VERIFY") or "true").strip().lower()
+    ssl_verify = ssl_verify_raw not in ("0", "false", "no", "off")
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 8088
+
+    return {
+        "host": host,
+        "scheme": scheme,
+        "port": port,
+        "username": user,
+        "password": password,
+        "ssl_verify": ssl_verify,
+    }
+
+
+def _extract_device_state_id(dial_string: str, device_state_tech: str, extension_key: str) -> str:
+    s = (dial_string or "").strip()
+    if s:
+        m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
+        if m:
+            tech = str(m.group(1)).upper()
+            num = str(m.group(2))
+            return f"{tech}/{num}"
+    tech = _normalize_ari_tech(device_state_tech)
+    key = (extension_key or "").strip()
+    if tech and key.isdigit():
+        return f"{tech}/{key}"
+    return ""
+
+
+def _extract_endpoint(dial_string: str, device_state_tech: str, extension_key: str) -> tuple[str, str]:
+    s = (dial_string or "").strip()
+    if s:
+        m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
+        if m:
+            tech = str(m.group(1)).upper()
+            num = str(m.group(2))
+            return (tech, num)
+    tech = _normalize_ari_tech(device_state_tech)
+    key = (extension_key or "").strip()
+    if tech and key.isdigit():
+        return (tech, key)
+    return ("", "")
+
+
+def _classify_device_state(state: str) -> str:
+    s = (state or "").strip().upper()
+    if s in ("NOT_INUSE",):
+        return "available"
+    if s in ("INUSE", "BUSY", "RINGING", "RINGINUSE", "ONHOLD"):
+        return "busy"
+    if not s:
+        return "unknown"
+    if s in ("UNAVAILABLE", "UNKNOWN", "INVALID"):
+        return "unknown"
+    # Be conservative for unrecognized states.
+    return "unknown"
+
+
 @router.post("/test-ari")
 async def test_ari_connection(request: AriTestRequest):
     """Test connection to Asterisk ARI endpoint"""
@@ -2805,6 +3043,108 @@ async def test_ari_connection(request: AriTestRequest):
             "success": False,
             "error": "Connection failed - check host/port/scheme and credentials."
         }
+
+
+@router.get("/ari/extension-status", response_model=AriExtensionStatusResponse)
+async def ari_extension_status(key: str = "", device_state_tech: str = "auto", dial_string: str = ""):
+    """
+    Low-complexity helper for the Admin UI:
+    check the current ARI device state (preferred) or endpoint state (fallback)
+    for a configured internal extension.
+    """
+    import httpx
+    extension_key = (key or "").strip()
+    settings = _ari_env_settings()
+    if not settings.get("username") or not settings.get("password"):
+        return AriExtensionStatusResponse(success=False, source="error", status="unknown", error="Missing ARI credentials in environment (.env).")
+
+    device_state_id = _extract_device_state_id(dial_string, device_state_tech, extension_key)
+    endpoint_tech, endpoint_resource = _extract_endpoint(dial_string, device_state_tech, extension_key)
+
+    if not device_state_id and not (endpoint_tech and endpoint_resource):
+        return AriExtensionStatusResponse(
+            success=False,
+            source="error",
+            status="unknown",
+            error="Unable to derive device state id from dial string or tech/key.",
+        )
+
+    verify = settings["ssl_verify"] if settings["scheme"] == "https" else True
+    base = f"{settings['scheme']}://{settings['host']}:{settings['port']}/ari"
+
+    async with httpx.AsyncClient(timeout=8.0, verify=verify) as client:
+        if device_state_id:
+            try:
+                # Keep URL constant to avoid request-derived path construction.
+                resp = await client.get(f"{base}/deviceStates", auth=(settings["username"], settings["password"]))
+                if resp.status_code == 200:
+                    data = resp.json() or []
+                    if isinstance(data, list):
+                        match = next(
+                            (
+                                item
+                                for item in data
+                                if str((item or {}).get("name") or "") == device_state_id
+                            ),
+                            None,
+                        )
+                        if isinstance(match, dict):
+                            state = str(match.get("state") or "")
+                            return AriExtensionStatusResponse(
+                                success=True,
+                                source="device_state",
+                                status=_classify_device_state(state),
+                                state=state,
+                                device_state_id=device_state_id,
+                                endpoint_tech=endpoint_tech,
+                                endpoint_resource=endpoint_resource,
+                            )
+            except Exception:
+                logger.debug("ARI device state query failed", exc_info=True)
+
+        if endpoint_tech and endpoint_resource:
+            try:
+                # Keep URL constant to avoid request-derived path construction.
+                resp = await client.get(f"{base}/endpoints", auth=(settings["username"], settings["password"]))
+                if resp.status_code == 200:
+                    data = resp.json() or []
+                    if isinstance(data, list):
+                        match = next(
+                            (
+                                item
+                                for item in data
+                                if str((item or {}).get("technology") or "").upper() == endpoint_tech
+                                and str((item or {}).get("resource") or "") == endpoint_resource
+                            ),
+                            None,
+                        )
+                        if isinstance(match, dict):
+                            state = str(match.get("state") or "")
+                            # Endpoint state is not "availability"; be conservative.
+                            status = "unknown"
+                            if state.strip().lower() in ("online", "reachable", "registered"):
+                                status = "available"
+                            return AriExtensionStatusResponse(
+                                success=True,
+                                source="endpoint",
+                                status=status,
+                                state=state,
+                                device_state_id=device_state_id,
+                                endpoint_tech=endpoint_tech,
+                                endpoint_resource=endpoint_resource,
+                            )
+            except Exception:
+                logger.debug("ARI endpoint query failed", exc_info=True)
+
+    return AriExtensionStatusResponse(
+        success=False,
+        source="error",
+        status="unknown",
+        device_state_id=device_state_id,
+        endpoint_tech=endpoint_tech,
+        endpoint_resource=endpoint_resource,
+        error="Unable to retrieve device state or endpoint state from ARI.",
+    )
 
 
 # =============================================================================
@@ -4080,3 +4420,153 @@ async def updates_job(job_id: str):
         tail = _tail_text_file(log_path, max_lines=250)
 
     return UpdateJobResponse(job=job, log_tail=tail)
+
+
+# ============================================================================
+# Asterisk Config Discovery (AAVA: Asterisk Setup Page)
+# ============================================================================
+
+_REQUIRED_MODULES = [
+    "app_audiosocket",
+    "res_ari",
+    "res_stasis",
+    "chan_pjsip",
+    "res_http_websocket",
+]
+
+
+def _resolve_app_name() -> str:
+    """Resolve the ARI app name from YAML config, env, or default."""
+    try:
+        project_root = os.getenv("PROJECT_ROOT", "/app/project")
+        base_path = os.path.join(project_root, "config", "ai-agent.yaml")
+        local_path = os.path.join(project_root, "config", "ai-agent.local.yaml")
+
+        merged_cfg: dict = {}
+        if os.path.exists(base_path):
+            with open(base_path, "r") as f:
+                base_cfg = yaml.safe_load(f) or {}
+            if isinstance(base_cfg, dict):
+                merged_cfg = dict(base_cfg)
+
+        if os.path.exists(local_path):
+            with open(local_path, "r") as f:
+                local_cfg = yaml.safe_load(f) or {}
+            if isinstance(local_cfg, dict):
+                merged_cfg = _deep_merge_dict(merged_cfg, local_cfg)
+
+        ast_cfg = merged_cfg.get("asterisk") or {}
+        if isinstance(ast_cfg, dict) and ast_cfg.get("app_name"):
+            return str(ast_cfg["app_name"]).strip()
+    except Exception:
+        pass
+    return (
+        os.environ.get("ASTERISK_APP_NAME")
+        or os.environ.get("ASTERISK_ARI_APP")
+        or _dotenv_value("ASTERISK_APP_NAME")
+        or _dotenv_value("ASTERISK_ARI_APP")
+        or "asterisk-ai-voice-agent"
+    )
+
+
+@router.get("/asterisk-status")
+async def asterisk_status():
+    """
+    Combined Asterisk config status for the Admin UI Asterisk Setup page.
+
+    Returns:
+      - mode: "local" or "remote" based on ASTERISK_HOST
+      - manifest: contents of data/asterisk_status.json (from preflight.sh) or null
+      - live: real-time ARI checks (info, modules, app registration)
+    """
+    import httpx
+    import json as _json
+
+    settings = _ari_env_settings()
+    host = settings["host"]
+
+    # Determine mode
+    mode = "local" if host in ("127.0.0.1", "localhost", "", "::1") else "remote"
+
+    # --- Read preflight manifest ---
+    manifest = None
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    manifest_path = os.path.join(project_root, "data", "asterisk_status.json")
+    try:
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r") as f:
+                manifest = _json.load(f)
+    except Exception as e:
+        logger.debug("Could not read asterisk manifest: %s", e)
+
+    # --- Live ARI checks ---
+    live = {
+        "ari_reachable": False,
+        "asterisk_version": None,
+        "uptime": None,
+        "last_reload": None,
+        "app_registered": False,
+        "app_name": _resolve_app_name(),
+        "modules": {},
+    }
+
+    if not settings.get("username") or not settings.get("password"):
+        return {"mode": mode, "manifest": manifest, "live": live}
+
+    base_url = f"{settings['scheme']}://{host}:{settings['port']}"
+    verify = settings["ssl_verify"] if settings["scheme"] == "https" else True
+    auth = (settings["username"], settings["password"])
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0, verify=verify) as client:
+            # 1. Asterisk info
+            try:
+                resp = await client.get(f"{base_url}/ari/asterisk/info", auth=auth)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    live["ari_reachable"] = True
+                    live["asterisk_version"] = (data.get("system") or {}).get("version")
+                    live["uptime"] = (data.get("status") or {}).get("startup_time")
+                    live["last_reload"] = (data.get("status") or {}).get("last_reload_time")
+            except Exception:
+                pass
+
+            if not live["ari_reachable"]:
+                return {"mode": mode, "manifest": manifest, "live": live}
+
+            # 2. Modules check
+            try:
+                resp = await client.get(f"{base_url}/ari/asterisk/modules", auth=auth)
+                if resp.status_code == 200:
+                    all_modules = resp.json()
+                    for req_mod in _REQUIRED_MODULES:
+                        matched = None
+                        for m in all_modules:
+                            name = m.get("name", "")
+                            if req_mod in name:
+                                matched = m
+                                break
+                        if matched:
+                            live["modules"][req_mod] = matched.get("status", "Unknown")
+                        else:
+                            live["modules"][req_mod] = "Not Found"
+            except Exception:
+                pass
+
+            # 3. App registration check
+            try:
+                resp = await client.get(f"{base_url}/ari/applications", auth=auth)
+                if resp.status_code == 200:
+                    apps = resp.json()
+                    app_name = live["app_name"]
+                    for app in apps:
+                        if app.get("name") == app_name:
+                            live["app_registered"] = True
+                            break
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.debug("Live ARI checks failed: %s", e)
+
+    return {"mode": mode, "manifest": manifest, "live": live}

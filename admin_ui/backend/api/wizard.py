@@ -1,5 +1,6 @@
 import docker
 import logging
+import copy
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
@@ -21,7 +22,7 @@ import uuid
 import zipfile
 
 logger = logging.getLogger(__name__)
-from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
+from settings import ENV_PATH, CONFIG_PATH, LOCAL_CONFIG_PATH, ensure_env_file, PROJECT_ROOT
 from services.fs import upsert_env_vars, atomic_write_text
 from api.models_catalog import (
     get_full_catalog, get_models_by_language, get_available_languages,
@@ -113,6 +114,36 @@ def _disk_preflight(path: str, *, required_bytes: int = 0) -> Tuple[bool, Option
     if free < DISK_WARNING_BYTES:
         return True, f"Low disk space: only {_format_bytes(free)} free (path={path})."
     return True, None
+
+
+def _compute_local_override_fallback(base: Any, merged: Any) -> Any:
+    """
+    Compute a minimal override tree using simple deep-diff semantics.
+
+    `None` in the merged tree acts as a tombstone and is preserved as-is.
+    """
+    if isinstance(base, dict) and isinstance(merged, dict):
+        out: Dict[str, Any] = {}
+
+        for key, merged_val in merged.items():
+            if key not in base:
+                out[key] = merged_val
+                continue
+            child = _compute_local_override_fallback(base[key], merged_val)
+            if child is not _NO_OVERRIDE:
+                out[key] = child
+
+        for key in base.keys() - merged.keys():
+            out[key] = None
+
+        return out
+
+    if base == merged:
+        return _NO_OVERRIDE
+    return merged
+
+
+_NO_OVERRIDE = object()
 
 
 def _detect_host_project_path_via_docker() -> Optional[str]:
@@ -643,6 +674,15 @@ async def load_existing_config():
             "google_key": env_values.get("GOOGLE_API_KEY", ""),
             "elevenlabs_key": env_values.get("ELEVENLABS_API_KEY", ""),
             "elevenlabs_agent_id": env_values.get("ELEVENLABS_AGENT_ID", ""),
+            "local_stt_backend": env_values.get("LOCAL_STT_BACKEND", "vosk"),
+            "local_tts_backend": env_values.get("LOCAL_TTS_BACKEND", "piper"),
+            "kroko_embedded": _parse_optional_bool(env_values.get("KROKO_EMBEDDED")) is True,
+            "kroko_api_key": env_values.get("KROKO_API_KEY", ""),
+            "kokoro_mode": (env_values.get("KOKORO_MODE", "local") or "local").strip().lower(),
+            "kokoro_voice": env_values.get("KOKORO_VOICE", "af_heart"),
+            "kokoro_api_base_url": env_values.get("KOKORO_API_BASE_URL", ""),
+            "kokoro_api_key": env_values.get("KOKORO_API_KEY", ""),
+            "local_llm_model": "",
         }
     
     # Load AI config from YAML if it exists
@@ -676,9 +716,13 @@ async def load_existing_config():
             if greeting:
                 config["greeting"] = greeting
             
-            # Try to detect provider from config
-            if default_ctx.get("provider"):
+            active_pipeline = (yaml_config.get("active_pipeline") or "").strip()
+            if active_pipeline == "local_hybrid":
+                config["provider"] = "local_hybrid"
+            elif default_ctx.get("provider"):
                 config["provider"] = default_ctx.get("provider")
+            elif yaml_config.get("default_provider"):
+                config["provider"] = yaml_config.get("default_provider")
         except:
             pass
     
@@ -1405,7 +1449,9 @@ class ModelSelection(BaseModel):
     tts: str  # backend name (e.g., "piper")
     language: Optional[str] = "en-US"
     kroko_embedded: Optional[bool] = False
+    kroko_api_key: Optional[str] = None
     kokoro_mode: Optional[str] = "local"
+    kokoro_voice: Optional[str] = "af_heart"
     kokoro_api_base_url: Optional[str] = None
     kokoro_api_key: Optional[str] = None
     # Local Hybrid support: download/apply only STT/TTS (skip LLM model download/config)
@@ -1769,24 +1815,38 @@ async def download_selected_models(selection: ModelSelection):
             if (stt_model.get("backend") or selection.stt) == "kroko":
                 env_updates.append(f"KROKO_EMBEDDED={'1' if selection.kroko_embedded else '0'}")
                 env_updates.append(f"KROKO_LANGUAGE={selection.language or 'en-US'}")
+                if not selection.kroko_embedded and selection.kroko_api_key:
+                    env_updates.append(f"KROKO_API_KEY={selection.kroko_api_key}")
             
             # Set model paths
-            if stt_model.get("model_path") and stt_model.get("download_url"):
-                stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
-                if stt_model.get("backend") == "sherpa":
+            if stt_model.get("model_path"):
+                stt_backend = (stt_model.get("backend") or selection.stt or "").lower()
+                if stt_backend == "sherpa":
+                    stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
                     env_updates.append(f"SHERPA_MODEL_PATH={stt_path}")
+                elif stt_backend == "kroko":
+                    if selection.kroko_embedded:
+                        stt_path = os.path.join("/app/models/kroko", stt_model["model_path"])
+                        env_updates.append(f"KROKO_MODEL_PATH={stt_path}")
+                elif stt_backend == "faster_whisper":
+                    env_updates.append(f"FASTER_WHISPER_MODEL={stt_model['model_path']}")
                 else:
+                    stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
                     env_updates.append(f"LOCAL_STT_MODEL_PATH={stt_path}")
             
             if not skip_llm_download and llm_model and llm_model.get("model_path") and llm_model.get("download_url"):
                 llm_path = os.path.join("/app/models/llm", llm_model["model_path"])
                 env_updates.append(f"LOCAL_LLM_MODEL_PATH={llm_path}")
             
-            if tts_model.get("model_path") and tts_model.get("download_url"):
-                tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
-                if tts_model.get("backend") == "kokoro":
+            if tts_model.get("model_path"):
+                tts_backend = (tts_model.get("backend") or selection.tts or "").lower()
+                if tts_backend == "kokoro":
+                    tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
                     env_updates.append(f"KOKORO_MODEL_PATH={tts_path}")
-                else:
+                elif tts_backend == "melotts":
+                    env_updates.append(f"MELOTTS_VOICE={tts_model['model_path']}")
+                elif tts_model.get("download_url"):
+                    tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
                     env_updates.append(f"LOCAL_TTS_MODEL_PATH={tts_path}")
 
             # Kokoro mode: local vs api/hf (no local files required)
@@ -1795,7 +1855,7 @@ async def download_selected_models(selection: ModelSelection):
                 if mode not in ("local", "api", "hf"):
                     mode = "local"
                 env_updates.append(f"KOKORO_MODE={mode}")
-                env_updates.append("KOKORO_VOICE=af_heart")
+                env_updates.append(f"KOKORO_VOICE={selection.kokoro_voice or 'af_heart'}")
                 if mode == "api":
                     if selection.kokoro_api_base_url:
                         env_updates.append(f"KOKORO_API_BASE_URL={selection.kokoro_api_base_url}")
@@ -1900,7 +1960,7 @@ async def check_models_status():
     kroko_dir = os.path.join(models_dir, "kroko")
     if os.path.exists(kroko_dir):
         for item in os.listdir(kroko_dir):
-            if item.endswith(".onnx"):
+            if item.endswith(".onnx") or item.endswith(".data"):
                 stt_backends["kroko"].append(item)
     
     # Scan LLM models
@@ -2553,6 +2613,19 @@ class SetupConfig(BaseModel):
     ai_name: str
     ai_role: str
     hybrid_llm_provider: Optional[str] = None
+    local_stt_backend: Optional[str] = None
+    local_stt_model: Optional[str] = None
+    kroko_embedded: Optional[bool] = False
+    kroko_api_key: Optional[str] = None
+    local_tts_backend: Optional[str] = None
+    local_tts_model: Optional[str] = None
+    kokoro_mode: Optional[str] = "local"
+    kokoro_voice: Optional[str] = "af_heart"
+    kokoro_api_key: Optional[str] = None
+    kokoro_api_base_url: Optional[str] = None
+    local_llm_model: Optional[str] = None
+    local_llm_custom_url: Optional[str] = None
+    local_llm_custom_filename: Optional[str] = None
 
 # ... (keep existing endpoints) ...
 
@@ -2623,15 +2696,89 @@ async def save_setup_config(config: SetupConfig):
         if config.cartesia_key:
             env_updates["CARTESIA_API_KEY"] = config.cartesia_key
 
+        if config.provider in ("local", "local_hybrid"):
+            catalog = get_full_catalog()
+            stt_by_id = {m.get("id"): m for m in catalog.get("stt", []) if m.get("id")}
+            tts_by_id = {m.get("id"): m for m in catalog.get("tts", []) if m.get("id")}
+            llm_by_id = {m.get("id"): m for m in catalog.get("llm", []) if m.get("id")}
+
+            stt_model = stt_by_id.get(config.local_stt_model or "")
+            tts_model = tts_by_id.get(config.local_tts_model or "")
+            llm_model = llm_by_id.get(config.local_llm_model or "")
+
+            stt_backend = (config.local_stt_backend or (stt_model or {}).get("backend") or "").strip().lower()
+            tts_backend = (config.local_tts_backend or (tts_model or {}).get("backend") or "").strip().lower()
+
+            if stt_backend:
+                env_updates["LOCAL_STT_BACKEND"] = stt_backend
+            if tts_backend:
+                env_updates["LOCAL_TTS_BACKEND"] = tts_backend
+            env_updates["LOCAL_AI_MODE"] = "minimal" if config.provider == "local_hybrid" else "full"
+
+            stt_model_path = (stt_model or {}).get("model_path")
+            if stt_backend == "sherpa" and stt_model_path:
+                env_updates["SHERPA_MODEL_PATH"] = os.path.join("/app/models/stt", stt_model_path)
+            elif stt_backend == "kroko":
+                env_updates["KROKO_EMBEDDED"] = "1" if config.kroko_embedded else "0"
+                if config.kroko_api_key:
+                    env_updates["KROKO_API_KEY"] = config.kroko_api_key
+                if config.kroko_embedded and stt_model_path:
+                    env_updates["KROKO_MODEL_PATH"] = os.path.join("/app/models/kroko", stt_model_path)
+            elif stt_backend == "faster_whisper" and stt_model_path:
+                env_updates["FASTER_WHISPER_MODEL"] = stt_model_path
+            elif stt_model_path:
+                env_updates["LOCAL_STT_MODEL_PATH"] = os.path.join("/app/models/stt", stt_model_path)
+
+            tts_model_path = (tts_model or {}).get("model_path")
+            if tts_backend == "kokoro":
+                mode = (config.kokoro_mode or "local").strip().lower()
+                if mode not in ("local", "api", "hf"):
+                    mode = "local"
+                env_updates["KOKORO_MODE"] = mode
+                env_updates["KOKORO_VOICE"] = (config.kokoro_voice or "af_heart").strip()
+                if tts_model_path:
+                    env_updates["KOKORO_MODEL_PATH"] = os.path.join("/app/models/tts", tts_model_path)
+                if mode == "api":
+                    if config.kokoro_api_base_url:
+                        env_updates["KOKORO_API_BASE_URL"] = config.kokoro_api_base_url
+                    if config.kokoro_api_key:
+                        env_updates["KOKORO_API_KEY"] = config.kokoro_api_key
+            elif tts_backend == "melotts":
+                if tts_model_path:
+                    env_updates["MELOTTS_VOICE"] = tts_model_path
+            elif tts_model_path:
+                env_updates["LOCAL_TTS_MODEL_PATH"] = os.path.join("/app/models/tts", tts_model_path)
+
+            if config.provider == "local":
+                if config.local_llm_model == "custom_gguf_url":
+                    custom_name = (config.local_llm_custom_filename or "").strip()
+                    if custom_name:
+                        env_updates["LOCAL_LLM_MODEL_PATH"] = os.path.join("/app/models/llm", custom_name)
+                elif llm_model and llm_model.get("model_path"):
+                    env_updates["LOCAL_LLM_MODEL_PATH"] = os.path.join("/app/models/llm", llm_model["model_path"])
+
         upsert_env_vars(ENV_PATH, env_updates, header="Setup Wizard")
 
         # 2. Update ai-agent.yaml - APPEND MODE
         # If provider already exists, just enable it and update greeting
         # If provider doesn't exist, create full config
         # Don't auto-disable other providers (user manages via Dashboard)
-        if os.path.exists(CONFIG_PATH):
+        # Read merged config (base + local override) so wizard sees operator changes.
+        compute_local_override_fn = None
+        try:
+            from api.config import _read_merged_config_dict, _read_base_config_dict, _compute_local_override
+            yaml_config = _read_merged_config_dict()
+            base_config = _read_base_config_dict()
+            compute_local_override_fn = _compute_local_override
+        except Exception as exc:
+            logger.warning("Wizard config helper import failed; using fallback override diff: %s", exc)
+            yaml_config = None
+            base_config = None
+        if not yaml_config and os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
                 yaml_config = yaml.safe_load(f)
+        if yaml_config is not None:
+            pre_edit_config = copy.deepcopy(yaml_config) if isinstance(yaml_config, dict) else {}
             
             yaml_config.setdefault("providers", {})
             providers = yaml_config["providers"]
@@ -2809,12 +2956,15 @@ async def save_setup_config(config: SetupConfig):
                 }
 
             # C6 Fix: Create default context
-            yaml_config.setdefault("contexts", {})["default"] = {
+            default_context = {
                 "greeting": config.greeting,
                 "prompt": f"You are {config.ai_name}, a {config.ai_role}. Be helpful and concise.",
                 "provider": config.provider if config.provider != "local_hybrid" else "local",
                 "profile": "telephony_ulaw_8k"
             }
+            if config.provider == "local_hybrid":
+                default_context["pipeline"] = "local_hybrid"
+            yaml_config.setdefault("contexts", {})["default"] = default_context
 
             # Canonical: ARI application name is YAML-owned (asterisk.app_name).
             asterisk_block = yaml_config.get("asterisk")
@@ -2826,9 +2976,35 @@ async def save_setup_config(config: SetupConfig):
             if config.asterisk_server_ip:
                 yaml_config.setdefault("external_media", {})["allowed_remote_hosts"] = [config.asterisk_server_ip]
 
+            local_override = None
+            if compute_local_override_fn and isinstance(base_config, dict):
+                try:
+                    local_override = compute_local_override_fn(base_config, yaml_config)
+                except Exception as exc:
+                    logger.warning(
+                        "Wizard override diff failed for %s (base_config_present=%s): %s",
+                        LOCAL_CONFIG_PATH,
+                        isinstance(base_config, dict),
+                        exc,
+                    )
+
+            if not isinstance(local_override, dict):
+                fallback_base = pre_edit_config if isinstance(pre_edit_config, dict) else {}
+                try:
+                    fallback_override = _compute_local_override_fallback(fallback_base, yaml_config)
+                    local_override = fallback_override if isinstance(fallback_override, dict) else {}
+                except Exception as exc:
+                    logger.warning(
+                        "Wizard fallback override diff failed for %s (base_config_present=%s): %s",
+                        LOCAL_CONFIG_PATH,
+                        isinstance(base_config, dict),
+                        exc,
+                    )
+                    local_override = {}
+
             atomic_write_text(
-                CONFIG_PATH,
-                yaml.dump(yaml_config, default_flow_style=False, sort_keys=False),
+                LOCAL_CONFIG_PATH,
+                yaml.dump(local_override, default_flow_style=False, sort_keys=False),
                 mode_from_existing=True,
             )
         

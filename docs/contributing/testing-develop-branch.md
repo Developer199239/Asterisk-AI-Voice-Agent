@@ -9,6 +9,7 @@ The `develop` branch contains the latest features and fixes before they're merge
 **What gets preserved:**
 
 - Your `config/ai-agent.yaml` settings
+- Your `config/ai-agent.local.yaml` operator overrides (if present)
 - Your `.env` file (API keys, secrets)
 - Your context configurations
 - Your tool configurations
@@ -29,6 +30,7 @@ mkdir -p "$BACKUP_DIR"
 
 # Backup essential files
 cp config/ai-agent.yaml "$BACKUP_DIR/"
+cp config/ai-agent.local.yaml "$BACKUP_DIR/" 2>/dev/null || true
 cp .env "$BACKUP_DIR/" 2>/dev/null || true
 cp -r config/contexts "$BACKUP_DIR/" 2>/dev/null || true
 
@@ -56,6 +58,7 @@ git pull origin develop
 ```bash
 # Restore your configs from backup
 cp "$BACKUP_DIR/ai-agent.yaml" config/
+cp "$BACKUP_DIR/ai-agent.local.yaml" config/ 2>/dev/null || true
 cp "$BACKUP_DIR/.env" . 2>/dev/null || true
 cp -r "$BACKUP_DIR/contexts" config/ 2>/dev/null || true
 ```
@@ -79,6 +82,7 @@ git checkout main
 
 # Restore your configs again
 cp "$BACKUP_DIR/ai-agent.yaml" config/
+cp "$BACKUP_DIR/ai-agent.local.yaml" config/ 2>/dev/null || true
 cp "$BACKUP_DIR/.env" . 2>/dev/null || true
 
 # Rebuild with stable code
@@ -105,6 +109,7 @@ cd AVA-develop
 ```bash
 # Copy from your existing installation
 cp /path/to/existing/Asterisk-AI-Voice-Agent/config/ai-agent.yaml config/
+cp /path/to/existing/Asterisk-AI-Voice-Agent/config/ai-agent.local.yaml config/ 2>/dev/null || true
 cp /path/to/existing/Asterisk-AI-Voice-Agent/.env .
 cp -r /path/to/existing/Asterisk-AI-Voice-Agent/config/contexts config/ 2>/dev/null || true
 ```
@@ -176,10 +181,11 @@ When testing develop, please report any issues:
 # All-in-one: backup → switch → restore → rebuild
 BACKUP="config_backup_$(date +%Y%m%d_%H%M%S)" && \
 mkdir -p "$BACKUP" && \
-cp config/ai-agent.yaml .env "$BACKUP/" 2>/dev/null; \
-cp -r config/contexts "$BACKUP/" 2>/dev/null; \
+cp config/ai-agent.yaml config/ai-agent.local.yaml .env "$BACKUP" 2>/dev/null; \
+cp -r config/contexts "$BACKUP" 2>/dev/null; \
 git fetch origin && git checkout develop && git pull origin develop && \
 cp "$BACKUP/ai-agent.yaml" config/ && \
+cp "$BACKUP/ai-agent.local.yaml" config/ 2>/dev/null; \
 cp "$BACKUP/.env" . 2>/dev/null; \
 cp -r "$BACKUP/contexts" config/ 2>/dev/null; \
 docker compose down && docker compose up -d --build
@@ -191,6 +197,7 @@ docker compose down && docker compose up -d --build
 # Switch back to main with your configs
 git checkout main && \
 cp "$BACKUP/ai-agent.yaml" config/ && \
+cp "$BACKUP/ai-agent.local.yaml" config/ 2>/dev/null; \
 cp "$BACKUP/.env" . 2>/dev/null; \
 docker compose down && docker compose up -d --build
 ```

@@ -742,7 +742,8 @@ export const HealthWidget = () => {
                                         if (isBackendChanged || isPathChanged || isModeChanged) {
                                             const change: any = { backend, modelPath: modelPath || undefined };
                                             if (backend === 'kokoro') {
-                                                change.voice = 'af_heart';
+                                                const currentVoice = health?.local_ai_server.details.kokoro_voice || 'af_heart';
+                                                change.voice = currentVoice;
                                                 change.mode = mode;
                                             }
                                             queueChange('tts', change);

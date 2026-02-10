@@ -1,12 +1,12 @@
-# Asterisk AI Voice Agent - Installation Guide (v6.0.0)
+# Asterisk AI Voice Agent - Installation Guide (v6.1.1)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v6.0.0 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v6.1.1 on your server.
 
 ## Three Setup Paths
 
 Choose the path that best fits your experience level:
 
-## Upgrade from v5.3.1 → v6.0.0 (Existing Checkout)
+## Upgrade to v6.1.1 (Existing Checkout)
 
 This section is for operators upgrading an existing repo checkout (not a fresh install).
 
@@ -14,15 +14,16 @@ This section is for operators upgrading an existing repo checkout (not a fresh i
 
 - Backup `.env`
 - Backup `config/ai-agent.yaml`
+- Backup `config/ai-agent.local.yaml` (if it exists — contains your operator overrides)
 - If you rely on Call History persistence, backup `./data` as well
 
 ### 1) Pull the new release
 
-To upgrade to the tagged `v6.0.0` release (once the tag is published):
+To upgrade to the tagged `v6.1.1` release (once the tag is published):
 
 ```bash
 git fetch --tags
-git checkout v6.0.0
+git checkout v6.1.1
 ```
 
 If the tag is not published yet, track `main` temporarily:
@@ -111,6 +112,10 @@ Preflight ensures required host directories exist with correct permissions, incl
 - `./data` (Call History SQLite and runtime state)
 - `./models/{stt,tts,llm,kroko}` (mounted into `ai_engine` and `local_ai_server` as `/app/models`)
 - `./asterisk_media/ai-generated` (mounted as `/mnt/asterisk_media/ai-generated` for generated audio)
+
+Preflight also audits Asterisk configuration (when Asterisk is on the same host):
+- Checks ARI enabled, ARI user, HTTP server, dialplan context, and required modules
+- Writes results to `data/asterisk_status.json` — the Admin UI **System → Asterisk** page reads this manifest to display a configuration checklist with guided fix commands
 
 > Note: Admin UI health checks validate the media directory from within the `admin_ui` container.
 > On some systems Asterisk uses a non-default group ID; newer releases auto-detect this at `admin_ui` startup so the UI doesn't incorrectly warn after reboot.
@@ -252,7 +257,7 @@ agent setup
 
 **Best for:** Headless servers, scripted deployments, CLI preference
 
-> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.0.0.
+> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.1.1.
 
 ---
 

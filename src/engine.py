@@ -241,6 +241,11 @@ class Engine:
         self._outbound_amd_context = str(os.getenv("AAVA_OUTBOUND_AMD_CONTEXT", "aava-outbound-amd")).strip() or "aava-outbound-amd"
         self._outbound_pjsip_endpoint_cache: Dict[str, Dict[str, Any]] = {}
         self._outbound_pjsip_endpoint_cache_ttl_seconds = float(os.getenv("AAVA_OUTBOUND_PJSIP_ENDPOINT_CACHE_TTL_SECONDS", "300") or "300")
+        # ViciDial / generic PBX compatibility (defaults preserve FreePBX behavior)
+        self._outbound_dial_context = str(os.getenv("AAVA_OUTBOUND_DIAL_CONTEXT", "from-internal")).strip() or "from-internal"
+        self._outbound_dial_prefix = str(os.getenv("AAVA_OUTBOUND_DIAL_PREFIX", "")).strip()
+        self._outbound_channel_tech = str(os.getenv("AAVA_OUTBOUND_CHANNEL_TECH", "auto")).strip().lower() or "auto"
+        self._outbound_pbx_type = str(os.getenv("AAVA_OUTBOUND_PBX_TYPE", "freepbx")).strip().lower() or "freepbx"
         
         # Initialize streaming playback manager
         streaming_config = {}
@@ -1130,7 +1135,7 @@ class Engine:
             logger.error("Outbound scheduler crashed", exc_info=True)
 
     async def _outbound_originate_attempt(self, campaign: Dict[str, Any], lead: Dict[str, Any], attempt_id: str) -> None:
-        """Originate a leased+marked lead via FreePBX routing (Local/...@from-internal)."""
+        """Originate a leased+marked lead via configurable Local/ routing (FreePBX, ViciDial, generic)."""
         campaign_id = str(campaign.get("id") or "")
         lead_id = str(lead.get("id") or "")
         phone = str(lead.get("phone_number") or "").strip()
@@ -1205,18 +1210,18 @@ class Engine:
             "AI_CONTEXT": context_name,
             # Honor context provider by default for outbound calls (unless dialplan overrides later).
             **({"AI_PROVIDER": resolved_context_provider} if resolved_context_provider else {}),
-            # FreePBX routing expects an extension identity for patterns/trunks.
-            "AMPUSER": caller_id_num,
-            "FROMEXTEN": caller_id_num,
             # Ensure the called party sees our configured outbound identity.
             "CALLERID(num)": caller_id_num,
             "CALLERID(name)": caller_id_name,
-            # Local/ dial creates ;1 / ;2 legs; inherit caller-id/identity across the boundary.
-            "__AMPUSER": caller_id_num,
-            "__FROMEXTEN": caller_id_num,
             "__CALLERID(num)": caller_id_num,
             "__CALLERID(name)": caller_id_name,
         }
+        # FreePBX-specific routing vars (AMPUSER/FROMEXTEN are not used by ViciDial or generic Asterisk).
+        if self._outbound_pbx_type == "freepbx":
+            channel_vars["AMPUSER"] = caller_id_num
+            channel_vars["FROMEXTEN"] = caller_id_num
+            channel_vars["__AMPUSER"] = caller_id_num
+            channel_vars["__FROMEXTEN"] = caller_id_num
         if lead_name:
             channel_vars["AAVA_LEAD_NAME"] = lead_name
         channel_vars["AAVA_VM_ENABLED"] = "1" if voicemail_enabled else "0"
@@ -1308,42 +1313,69 @@ class Engine:
         """
         Choose best endpoint for outbound dialing.
 
-        - Default: `Local/<number>@from-internal` so FreePBX handles outbound routing/trunks.
-        - If `<number>` matches a live PJSIP endpoint resource (internal extension), dial `PJSIP/<number>`
-          directly so caller-id is deterministic (FreePBX may not recognize our virtual identity).
+        Configurable via env vars for FreePBX, ViciDial, or generic Asterisk:
+        - AAVA_OUTBOUND_DIAL_CONTEXT  (default: from-internal)
+        - AAVA_OUTBOUND_DIAL_PREFIX   (default: empty — ViciDial uses e.g. '911')
+        - AAVA_OUTBOUND_CHANNEL_TECH  (auto | pjsip | sip | local_only)
+
+        When channel_tech is 'auto', probes PJSIP then SIP for internal extensions.
+        When 'local_only', always routes via Local/ channel (no direct endpoint dial).
         """
+        dial_context = self._outbound_dial_context
+        dial_prefix = self._outbound_dial_prefix
+        channel_tech = self._outbound_channel_tech
+
         phone = (dial_phone or "").strip()
         if not phone:
-            return f"Local/{dial_phone}@from-internal"
+            return f"Local/{dial_prefix}{dial_phone}@{dial_context}"
+
+        # If forced to local_only, skip all endpoint probing.
+        if channel_tech == "local_only":
+            return f"Local/{dial_prefix}{phone}@{dial_context}"
+
+        # Determine which channel technologies to probe for direct internal dialing.
+        techs_to_probe: list = []
+        if channel_tech == "pjsip":
+            techs_to_probe = ["PJSIP"]
+        elif channel_tech == "sip":
+            techs_to_probe = ["SIP"]
+        else:  # "auto" — try PJSIP first, then SIP
+            techs_to_probe = ["PJSIP", "SIP"]
 
         ttl = self._outbound_pjsip_endpoint_cache_ttl_seconds
         now = time.monotonic()
         cached = self._outbound_pjsip_endpoint_cache.get(phone)
         if cached and (now - float(cached.get("ts") or 0.0)) < ttl:
-            if bool(cached.get("exists")):
-                return f"PJSIP/{phone}"
-            return f"Local/{phone}@from-internal"
+            cached_tech = cached.get("tech")
+            if bool(cached.get("exists")) and cached_tech:
+                return f"{cached_tech}/{phone}"
+            return f"Local/{dial_prefix}{phone}@{dial_context}"
 
-        exists = False
-        try:
-            resp = await self.ari_client.send_command(
-                "GET",
-                f"endpoints/PJSIP/{phone}",
-                tolerate_statuses=[404],
-            )
-            if isinstance(resp, dict) and int(resp.get("status") or 0) == 404:
-                exists = False
-            else:
-                # ARI returns endpoint JSON when it exists.
-                exists = isinstance(resp, dict) and ("resource" in resp or "technology" in resp or "state" in resp)
-        except Exception:
-            # If ARI is transiently unavailable, keep default FreePBX routing.
-            exists = False
+        # Probe each technology for a matching endpoint (internal extension).
+        for tech in techs_to_probe:
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"endpoints/{tech}/{phone}",
+                    tolerate_statuses=[404],
+                )
+                if isinstance(resp, dict) and int(resp.get("status") or 0) == 404:
+                    continue
+                if isinstance(resp, dict) and ("resource" in resp or "technology" in resp or "state" in resp):
+                    self._outbound_pjsip_endpoint_cache[phone] = {"exists": True, "tech": tech, "ts": now}
+                    return f"{tech}/{phone}"
+            except Exception as exc:
+                logger.debug(
+                    "Endpoint probe failed",
+                    tech=tech,
+                    phone=phone,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                continue
 
-        self._outbound_pjsip_endpoint_cache[phone] = {"exists": bool(exists), "ts": now}
-        if exists:
-            return f"PJSIP/{phone}"
-        return f"Local/{phone}@from-internal"
+        self._outbound_pjsip_endpoint_cache[phone] = {"exists": False, "tech": None, "ts": now}
+        return f"Local/{dial_prefix}{phone}@{dial_context}"
 
     async def _outbound_cleanup_stale_attempts(self) -> None:
         """
@@ -3099,7 +3131,7 @@ class Engine:
         """
         Handle agent action channels entering Stasis (direct SIP origination via ARI).
         
-        Channels enter Stasis directly when originated by tool execution (e.g., transfer_call).
+        Channels enter Stasis directly when originated by tool execution (e.g., blind_transfer).
         NO dialplan context is used - channels are originated with app="asterisk-ai-voice-agent".
         
         Args:
@@ -5089,9 +5121,9 @@ class Engine:
             self._audiosocket_frame_count[caller_channel_id] = self._audiosocket_frame_count.get(caller_channel_id, 0) + 1
             frame_num = self._audiosocket_frame_count[caller_channel_id]
             
-            # Log every 10th frame + first 5 frames
-            if frame_num <= 5 or frame_num % 10 == 0:
-                logger.info(
+            # Keep this low-volume; per-frame info logs can cause IO/CPU jitter and degrade audio.
+            if frame_num <= 3 or frame_num % 250 == 0:
+                logger.debug(
                     "🎤 AUDIOSOCKET RX - Frame received",
                     call_id=caller_channel_id,
                     frame_num=frame_num,
@@ -5516,15 +5548,17 @@ class Engine:
                         logger.debug("Upstream squelch failed", call_id=caller_channel_id, exc_info=True)
                 
                 # Forward to provider
-                logger.info(
-                    "📤 CONTINUOUS INPUT - Forwarding frame to provider",
-                    call_id=caller_channel_id,
-                    provider=provider_name,
-                    frame_bytes=len(audio_bytes),
-                    pcm_bytes=len(pcm_bytes),
-                    gating_active=needs_gating and not session.audio_capture_enabled,
-                    is_silence=needs_gating and not session.audio_capture_enabled,
-                )
+                if frame_num <= 3 or frame_num % 250 == 0:
+                    logger.debug(
+                        "📤 CONTINUOUS INPUT - Forwarding frame to provider",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                        frame_num=frame_num,
+                        frame_bytes=len(audio_bytes),
+                        pcm_bytes=len(pcm_bytes),
+                        gating_active=needs_gating and not session.audio_capture_enabled,
+                        is_silence=needs_gating and not session.audio_capture_enabled,
+                    )
                 try:
                     self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
                 except Exception:
@@ -5537,14 +5571,16 @@ class Engine:
                         pcm_bytes,
                         pcm_rate,
                     )
-                    logger.info(
-                        "📤 CONTINUOUS INPUT - Encoded for provider",
-                        call_id=caller_channel_id,
-                        provider=provider_name,
-                        prov_payload_bytes=len(prov_payload),
-                        prov_enc=prov_enc,
-                        prov_rate=prov_rate,
-                    )
+                    if frame_num <= 3 or frame_num % 250 == 0:
+                        logger.debug(
+                            "📤 CONTINUOUS INPUT - Encoded for provider",
+                            call_id=caller_channel_id,
+                            provider=provider_name,
+                            frame_num=frame_num,
+                            prov_payload_bytes=len(prov_payload),
+                            prov_enc=prov_enc,
+                            prov_rate=prov_rate,
+                        )
                     try:
                         self.audio_capture.append_encoded(
                             session.call_id,
@@ -5564,19 +5600,23 @@ class Engine:
                     # Google Live needs to know audio is already at provider_rate to skip resampling
                     try:
                         await provider.send_audio(prov_payload, prov_rate, prov_enc)
-                        logger.info(
-                            "✅ CONTINUOUS INPUT - Frame sent to provider successfully",
-                            call_id=caller_channel_id,
-                            provider=provider_name,
-                        )
+                        if frame_num <= 3 or frame_num % 250 == 0:
+                            logger.debug(
+                                "✅ CONTINUOUS INPUT - Frame sent to provider",
+                                call_id=caller_channel_id,
+                                provider=provider_name,
+                                frame_num=frame_num,
+                            )
                     except TypeError:
                         # Fallback for providers with old signature (audio_chunk only)
                         await provider.send_audio(prov_payload)
-                        logger.info(
-                            "✅ CONTINUOUS INPUT - Frame sent to provider (legacy signature)",
-                            call_id=caller_channel_id,
-                            provider=provider_name,
-                        )
+                        if frame_num <= 3 or frame_num % 250 == 0:
+                            logger.debug(
+                                "✅ CONTINUOUS INPUT - Frame sent to provider (legacy signature)",
+                                call_id=caller_channel_id,
+                                provider=provider_name,
+                                frame_num=frame_num,
+                            )
                 except Exception as e:
                     logger.error(
                         "❌ CONTINUOUS INPUT - Provider forward error",
@@ -5598,7 +5638,7 @@ class Engine:
                     logger.debug("Provider barge-in fallback check failed (AudioSocket)", call_id=caller_channel_id, exc_info=True)
                 return
             else:
-                logger.info(
+                logger.debug(
                     "⚠️ CONTINUOUS INPUT - Block skipped",
                     call_id=caller_channel_id,
                     continuous_input=continuous_input,
@@ -7518,6 +7558,55 @@ class Engine:
                 logger.info("Provider audio format announced", call_id=call_id, encoding=encoding, sample_rate=sample_rate)
                 return
 
+            # Provider transport died mid-call (e.g. Google Live WebSocket 1008/1011).
+            # Avoid dead air by terminating the call promptly (or allow future live-agent routing).
+            if etype == "ProviderDisconnected":
+                provider = event.get("provider") or session.provider_name
+                code = event.get("code")
+                reason = event.get("reason")
+                logger.error(
+                    "Provider disconnected",
+                    call_id=call_id,
+                    provider=provider,
+                    code=code,
+                    reason=reason,
+                )
+                try:
+                    session.provider_session_active = False
+                    await self._save_session(session)
+                except Exception:
+                    logger.debug("Failed to mark provider_session_active=false", call_id=call_id, exc_info=True)
+
+                # Optional: play configured fallback media (same knob as hangup_call fallback).
+                try:
+                    tools_cfg = getattr(self.config, "tools", {}) or {}
+                    hangup_cfg = tools_cfg.get("hangup_call", {}) if isinstance(tools_cfg, dict) else {}
+                    media_uri = None
+                    if isinstance(hangup_cfg, dict):
+                        media_uri = hangup_cfg.get("fallback_media_uri") or hangup_cfg.get("farewell_fallback_media_uri")
+                    media_uri = (media_uri or "").strip()
+                    if media_uri:
+                        pb = await self.ari_client.play_media(session.caller_channel_id, media_uri)
+                        playback_id = pb.get("id") if isinstance(pb, dict) else None
+                        if playback_id:
+                            waiter = asyncio.get_running_loop().create_future()
+                            self._ari_playback_waiters[playback_id] = waiter
+                            try:
+                                await asyncio.wait_for(waiter, timeout=8.0)
+                            except asyncio.TimeoutError:
+                                pass
+                            finally:
+                                self._ari_playback_waiters.pop(playback_id, None)
+                except Exception:
+                    logger.debug("Provider-disconnect fallback playback failed", call_id=call_id, exc_info=True)
+
+                # Hang up immediately to avoid long dead-air stretches.
+                try:
+                    await self.ari_client.hangup_channel(session.caller_channel_id)
+                except Exception:
+                    logger.debug("Hangup after provider disconnect failed", call_id=call_id, exc_info=True)
+                return
+
             # Downstream strategy: stream provider audio in near-real time via StreamingPlaybackManager
             if etype == "AgentAudio":
                 chunk: bytes = event.get("data") or b""
@@ -9039,10 +9128,16 @@ class Engine:
 
                     # Contexts are the source of truth for tool allowlisting: enforce at execution time too.
                     allowed_tools: set[str] = set()
+                    allowed_tools_canonical: set[str] = set()
                     try:
+                        from src.tools.registry import tool_registry
                         allowed_tools = set((llm_options or {}).get("tools") or [])
+                        allowed_tools_canonical = {
+                            tool_registry.canonicalize_tool_name(name) for name in allowed_tools
+                        }
                     except Exception:
                         allowed_tools = set()
+                        allowed_tools_canonical = set()
                     if tool_calls:
                         if not allowed_tools:
                             logger.info(
@@ -9053,7 +9148,11 @@ class Engine:
                             tool_calls = []
                         else:
                             before_count = len(tool_calls)
-                            tool_calls = [tc for tc in tool_calls if tc.get("name") in allowed_tools]
+                            tool_calls = [
+                                tc
+                                for tc in tool_calls
+                                if tool_registry.canonicalize_tool_name(tc.get("name")) in allowed_tools_canonical
+                            ]
                             dropped = before_count - len(tool_calls)
                             if dropped:
                                 logger.info(
@@ -9400,14 +9499,16 @@ class Engine:
                                             logger.error("ARI hangup failed", error=str(e))
                                         return
 
-                                    # Handle Terminal Transfer
-                                    if name in ["transfer"] and result.get("status") == "success":
-                                        logger.info("Transfer successful, ending turn loop", tool=name)
+                                    canonical_tool = tool_registry.canonicalize_tool_name(name)
+
+                                    # Handle terminal transfers (blind + live-agent handoff).
+                                    if canonical_tool in ("blind_transfer", "live_agent_transfer") and result.get("status") == "success":
+                                        logger.info("Transfer successful, ending turn loop", tool=name, canonical_tool=canonical_tool)
                                         return
                                     
                                     # Handle non-terminal tools (e.g., request_transcript)
                                     # Feed result back to LLM for continuation
-                                    if not result.get("will_hangup") and name not in ["transfer"]:
+                                    if not result.get("will_hangup") and canonical_tool not in ("blind_transfer", "live_agent_transfer"):
                                         tool_result_msg = result.get("message", f"Tool {name} executed successfully.")
                                         # Add tool result to conversation history
                                         conversation_history.append({
@@ -9460,7 +9561,7 @@ class Engine:
                                                         next_name = next_tc.get("name")
                                                         next_args = next_tc.get("parameters") or {}
                                                         try:
-                                                            if allowed_tools and next_name not in allowed_tools:
+                                                            if allowed_tools and tool_registry.canonicalize_tool_name(next_name) not in allowed_tools_canonical:
                                                                 logger.info(
                                                                     "Skipping disallowed follow-up tool call",
                                                                     call_id=call_id,
@@ -10342,8 +10443,9 @@ class Engine:
                 except Exception:
                     gain_max_db = 0.0
                 
-                logger.info(
-                    "🔧 ENCODE CONFIG - Reading provider config",
+                # This function is called per-frame (50x/sec). Keep logs at debug to avoid IO/CPU jitter.
+                logger.debug(
+                    "ENCODE CONFIG",
                     call_id=call_id,
                     provider=provider_name,
                     provider_enc=provider_enc,
@@ -10374,8 +10476,8 @@ class Engine:
             if expected_rate <= 0:
                 expected_rate = pcm_rate
             if pcm_rate != expected_rate and pcm_bytes:
-                logger.info(
-                    "🔧 ENCODE RESAMPLE - Resampling needed",
+                logger.debug(
+                    "ENCODE RESAMPLE - needed",
                     call_id=call_id,
                     provider=provider_name,
                     pcm_rate=pcm_rate,
@@ -10422,8 +10524,8 @@ class Engine:
                         )
                     
                     pcm_rate = expected_rate
-                    logger.info(
-                        "🔧 ENCODE RESAMPLE - Resampling completed (corrected)",
+                    logger.debug(
+                        "ENCODE RESAMPLE - completed",
                         call_id=call_id,
                         provider=provider_name,
                         new_rate=pcm_rate,
@@ -10439,8 +10541,8 @@ class Engine:
                         exc_info=True,
                     )
             else:
-                logger.info(
-                    "🔧 ENCODE RESAMPLE - No resampling needed",
+                logger.debug(
+                    "ENCODE RESAMPLE - skipped",
                     call_id=call_id,
                     provider=provider_name,
                     pcm_rate=pcm_rate,
@@ -11595,7 +11697,7 @@ class Engine:
                 except Exception:
                     logger.debug("Failed resolving context tool allowlist", call_id=call_id, exc_info=True)
 
-            if function_name not in allowed_tools:
+            if not tool_registry.is_tool_allowed(function_name, allowed_tools):
                 result = {"status": "error", "message": f"Tool '{function_name}' not allowed for this call"}
             else:
                 # Build tool execution context

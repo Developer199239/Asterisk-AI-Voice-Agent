@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-6.1.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -21,7 +21,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v600)
+- [🎉 What's New](#-whats-new-in-v611)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -110,7 +110,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.0.0.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.1.1.
 
 ### Option B: Manual Setup
 ```bash
@@ -153,31 +153,31 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v6.0.0
+## 🎉 What's New in v6.1.1
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### OpenAI Realtime GA API (v6.0.0)
+### OpenAI Realtime GA API (v6.1.1)
 - Full Beta-to-GA migration with `api_version` toggle, nested audio schema, MIME format types
 - New `project_id` field for OpenAI project tracking
 - 10 voices with gender labels (alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse)
 
-### Email System Overhaul (v6.0.0)
+### Email System Overhaul (v6.1.1)
 - SMTP support alongside Resend with auto-detection
 - HTML template editor with per-context overrides, subject prefix, call outcome variables
 - Template autoescaping for security
 
-### 🖥️ Admin UI Modernization (v6.0.0)
+### 🖥️ Admin UI Modernization (v6.1.1)
 - Live System Topology with clickable navigation to settings pages
 - Modern confirm dialogs, toast notifications, tab-based EnvPage, Help section
 - Models page redesign with active model cards during calls
 
-### 🌐 NAT & GPU Support (v6.0.0)
+### 🌐 NAT & GPU Support (v6.1.1)
 - `AUDIOSOCKET_ADVERTISE_HOST` / `EXTERNAL_MEDIA_ADVERTISE_HOST` for split-horizon deployments
 - GPU acceleration via `docker-compose.gpu.yml` overlay with CUDA support
 
-### 🔧 Google Live Improvements (v6.0.0)
+### 🔧 Google Live Improvements (v6.1.1)
 - Hangup fallback watchdog with tunable timeouts
 - Model normalization hardening and `toolConfig` support
 
@@ -335,7 +335,8 @@ docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_u
 
 **Key Features:**
 - **Setup Wizard**: Visual provider configuration.
-- **Dashboard**: Real-time system metrics and container status.
+- **Dashboard**: Real-time system metrics, container status, and Asterisk connection indicator.
+- **Asterisk Setup**: Live ARI status, module checklist, config audit with guided fix commands.
 - **Live Logs**: WebSocket-based log streaming.
 - **YAML Editor**: Monaco-based editor with validation.
 
@@ -454,8 +455,9 @@ agent version             # Version information
 
 ## ⚙ Configuration
 
-### Two-File Configuration
-- **[`config/ai-agent.yaml`](config/ai-agent.yaml)** - Golden baseline configs.
+### Three-File Configuration
+- **[`config/ai-agent.yaml`](config/ai-agent.yaml)** - Golden baseline configs (git-tracked, upstream-managed).
+- **`config/ai-agent.local.yaml`** - Operator overrides (git-ignored). Any keys here are deep-merged on top of the base file at startup; all Admin UI and CLI writes go here so upstream updates never conflict.
 - **[`.env`](.env.example)** - Secrets and API keys (git-ignored).
 
 **Example `.env`:**

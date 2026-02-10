@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -359,79 +360,124 @@ ASTERISK_ARI_PASSWORD=%s
 }
 
 func updateYAMLConfig(activeProvider string) error {
-	data, err := os.ReadFile("config/ai-agent.yaml")
+	configPath := "config/ai-agent.yaml"
+	localPath := "config/ai-agent.local.yaml"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		configPath = "../config/ai-agent.yaml"
+		localPath = "../config/ai-agent.local.yaml"
+	}
+
+	baseData, err := os.ReadFile(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to read config/ai-agent.yaml: %w", err)
+		return fmt.Errorf("failed to read %s: %w", configPath, err)
 	}
 
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil {
-		return fmt.Errorf("failed to parse config: %w", err)
+	var base map[string]interface{}
+	if err := yaml.Unmarshal(baseData, &base); err != nil {
+		return fmt.Errorf("failed to parse base config: %w", err)
+	}
+	if base == nil {
+		base = map[string]interface{}{}
 	}
 
-	// Helper to traverse and update value
-	updateKey := func(path []string, value string) bool {
-		node := &root
-		if len(node.Content) > 0 {
-			node = node.Content[0] // Access document root
-		}
-
-		for _, key := range path[:len(path)-1] {
-			found := false
-			for i := 0; i < len(node.Content); i += 2 {
-				if node.Content[i].Value == key {
-					node = node.Content[i+1]
-					found = true
-					break
-				}
-			}
-			if !found {
-				return false
-			}
-		}
-
-		targetKey := path[len(path)-1]
-		for i := 0; i < len(node.Content); i += 2 {
-			if node.Content[i].Value == targetKey {
-				node.Content[i+1].Value = value
-				if value == "true" || value == "false" {
-					node.Content[i+1].Tag = "!!bool"
-				} else {
-					node.Content[i+1].Tag = "!!str"
-				}
-				return true
-			}
-		}
-		return false
+	var merged map[string]interface{}
+	if err := yaml.Unmarshal(baseData, &merged); err != nil {
+		return fmt.Errorf("failed to parse base config: %w", err)
+	}
+	if merged == nil {
+		merged = map[string]interface{}{}
 	}
 
-	// Update default_provider
-	updateKey([]string{"default_provider"}, activeProvider)
-
-	// Update enabled flags for all providers
-	providers := []string{"openai_realtime", "deepgram", "google_live", "local"}
-	for _, p := range providers {
-		enabled := "false"
-		if p == activeProvider || (activeProvider == "local_hybrid" && p == "local") {
-			enabled = "true"
+	// Merge local override (if present) on top of base so sparse local files still
+	// get a complete structure for wizard updates.
+	if localData, err := os.ReadFile(localPath); err == nil {
+		var local map[string]interface{}
+		if err := yaml.Unmarshal(localData, &local); err == nil && local != nil {
+			merged = deepMergeMaps(merged, local)
 		}
-		updateKey([]string{"providers", p, "enabled"}, enabled)
 	}
 
-	// Special handling for local_hybrid pipeline
+	merged["default_provider"] = activeProvider
 	if activeProvider == "local_hybrid" {
-		updateKey([]string{"active_pipeline"}, "local_hybrid")
-		updateKey([]string{"default_provider"}, "local_hybrid")
+		merged["active_pipeline"] = "local_hybrid"
 	}
 
-	// Write back
-	f, err := os.Create("config/ai-agent.yaml")
+	providersRaw, ok := merged["providers"].(map[string]interface{})
+	if !ok || providersRaw == nil {
+		providersRaw = map[string]interface{}{}
+	}
+
+	for _, p := range []string{"openai_realtime", "deepgram", "google_live", "local"} {
+		providerCfg, ok := providersRaw[p].(map[string]interface{})
+		if !ok || providerCfg == nil {
+			providerCfg = map[string]interface{}{}
+		}
+		enabled := p == activeProvider || (activeProvider == "local_hybrid" && p == "local")
+		providerCfg["enabled"] = enabled
+		providersRaw[p] = providerCfg
+	}
+	merged["providers"] = providersRaw
+
+	override := computeOverrideMap(base, merged)
+	output, err := yaml.Marshal(override)
 	if err != nil {
-		return fmt.Errorf("failed to open config for writing: %w", err)
+		return fmt.Errorf("failed to encode local override config: %w", err)
 	}
-	defer f.Close()
 
-	encoder := yaml.NewEncoder(f)
-	encoder.SetIndent(2)
-	return encoder.Encode(&root)
+	return os.WriteFile(localPath, output, 0644)
+}
+
+func deepMergeMaps(base map[string]interface{}, override map[string]interface{}) map[string]interface{} {
+	out := map[string]interface{}{}
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, ov := range override {
+		if ov == nil {
+			delete(out, k)
+			continue
+		}
+		if bv, ok := out[k].(map[string]interface{}); ok {
+			if om, ok2 := ov.(map[string]interface{}); ok2 {
+				out[k] = deepMergeMaps(bv, om)
+				continue
+			}
+		}
+		out[k] = ov
+	}
+	return out
+}
+
+func computeOverrideMap(base map[string]interface{}, merged map[string]interface{}) map[string]interface{} {
+	out := map[string]interface{}{}
+
+	for k, mv := range merged {
+		bv, exists := base[k]
+		if !exists {
+			out[k] = mv
+			continue
+		}
+
+		bm, baseIsMap := bv.(map[string]interface{})
+		mm, mergedIsMap := mv.(map[string]interface{})
+		if baseIsMap && mergedIsMap {
+			child := computeOverrideMap(bm, mm)
+			if len(child) > 0 {
+				out[k] = child
+			}
+			continue
+		}
+
+		if !reflect.DeepEqual(bv, mv) {
+			out[k] = mv
+		}
+	}
+
+	for k := range base {
+		if _, ok := merged[k]; !ok {
+			out[k] = nil
+		}
+	}
+
+	return out
 }

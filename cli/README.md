@@ -6,7 +6,7 @@ Go-based command-line interface for Asterisk AI Voice Agent operations.
 
 The `agent` CLI provides a comprehensive set of tools for setup, diagnostics, and troubleshooting. All commands are built as a single Go binary for easy distribution.
 
-**Current Status**: ✅ CLI v6.0.0 (simplified surface)
+**Current Status**: ✅ CLI v6.1.1 (simplified surface)
 
 ## Available Commands
 
@@ -16,7 +16,7 @@ The `agent` CLI provides a comprehensive set of tools for setup, diagnostics, an
 - **`agent update`** - Pull latest code + rebuild/restart as needed
 - **`agent version`** - Show version information
 
-Legacy aliases (hidden from `--help` in v6.0.0):
+Legacy aliases (hidden from `--help` in v6.1.1):
 - `agent init` → `agent setup`
 - `agent doctor` → `agent check`
 - `agent troubleshoot` → `agent rca`
@@ -238,7 +238,7 @@ agent troubleshoot --last --symptom <no-audio|garbled|echo|interruption|one-way>
 
 ## Hidden (Legacy) Commands
 
-CLI v6.0.0 intentionally keeps a small visible surface (`agent setup/check/rca/update/version`). For backwards compatibility and advanced workflows, these commands still exist but are hidden from `agent --help`:
+CLI v6.1.1 intentionally keeps a small visible surface (`agent setup/check/rca/update/version`). For backwards compatibility and advanced workflows, these commands still exist but are hidden from `agent --help`:
 
 - Compatibility aliases: `agent init`, `agent doctor`, `agent troubleshoot`
 - Advanced tools: `agent demo`, `agent dialplan`, `agent config validate`
@@ -253,7 +253,8 @@ agent update
 ```
 
 Notes:
-- Creates backups of `.env` and `config/ai-agent.yaml` before updating.
+- Creates backups of `.env`, `config/ai-agent.yaml`, `config/ai-agent.local.yaml`, and `config/users.json` before updating.
+- If a `git stash pop` conflict occurs (e.g. upstream changes to `ai-agent.yaml`), the updater automatically recovers: resets the working tree, drops the failed stash, and restores operator config from the pre-update backup.
 - Uses fast-forward only; if your local branch has diverged, it will stop and print guidance.
 - Rebuilds/restarts only the impacted services, then runs `agent check` (unless `--skip-check`).
 - If a newer CLI release is available, `agent update` can self-update the `agent` binary first (default; disable with `--self-update=false`).

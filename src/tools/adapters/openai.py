@@ -38,6 +38,8 @@ class OpenAIToolAdapter:
             List of tool schemas for OpenAI session.update
         
         Example:
+            Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+            by ToolRegistry before execution.
             [
                 {
                     "type": "function",
@@ -64,6 +66,8 @@ class OpenAIToolAdapter:
         Handle function_call event from OpenAI Realtime API.
         
         OpenAI format (from response.output_item.done event):
+        Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+        by ToolRegistry before execution.
         {
             "type": "response.output_item.done",
             "response_id": "resp_123",
@@ -112,7 +116,7 @@ class OpenAIToolAdapter:
             return {"call_id": function_call_id, "function_name": function_name, "status": "error", "message": "Not a function call"}
 
         allowed = context.get("allowed_tools", None)
-        if allowed is not None and function_name not in allowed:
+        if allowed is not None and not self.registry.is_tool_allowed(function_name, allowed):
             error_msg = f"Tool '{function_name}' not allowed for this call"
             logger.warning(error_msg, tool=function_name)
             return {

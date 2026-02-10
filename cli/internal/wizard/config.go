@@ -12,23 +12,23 @@ import (
 // Config holds all configuration
 type Config struct {
 	// .env values
-	AsteriskHost        string
-	AsteriskUsername    string
-	AsteriskPassword    string
-	AudioTransport      string
-	AudioSocketHost     string
-	AudioSocketPort     string
-	OpenAIKey           string
-	DeepgramKey         string
-	AnthropicKey        string
-	
+	AsteriskHost     string
+	AsteriskUsername string
+	AsteriskPassword string
+	AudioTransport   string
+	AudioSocketHost  string
+	AudioSocketPort  string
+	OpenAIKey        string
+	DeepgramKey      string
+	AnthropicKey     string
+
 	// YAML values
-	ActivePipeline      string
-	DefaultProvider     string
-	
+	ActivePipeline  string
+	DefaultProvider string
+
 	// File paths
-	EnvPath             string
-	YAMLPath            string
+	EnvPath  string
+	YAMLPath string
 }
 
 // LoadConfig reads current configuration from .env and YAML
@@ -41,28 +41,35 @@ func LoadConfig() (*Config, error) {
 			envPath = ".env" // Reset to current for creation
 		}
 	}
-	
-	yamlPath := "config/ai-agent.yaml"
+
+	// Prefer local override file for reading; fall back to base
+	yamlPath := "config/ai-agent.local.yaml"
 	if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
-		yamlPath = "../config/ai-agent.yaml"
+		yamlPath = "config/ai-agent.yaml"
+		if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+			yamlPath = "../config/ai-agent.local.yaml"
+			if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+				yamlPath = "../config/ai-agent.yaml"
+			}
+		}
 	}
-	
+
 	cfg := &Config{
 		EnvPath:  envPath,
 		YAMLPath: yamlPath,
 	}
-	
+
 	// Load .env
 	if err := cfg.loadEnv(); err != nil {
 		return nil, fmt.Errorf("failed to load .env: %w", err)
 	}
-	
+
 	// Load YAML
 	if err := cfg.loadYAML(); err != nil {
 		// YAML might not exist yet, that's okay
 		PrintWarning(fmt.Sprintf("Could not load %s: %v", cfg.YAMLPath, err))
 	}
-	
+
 	return cfg, nil
 }
 
@@ -80,28 +87,28 @@ func (c *Config) loadEnv() error {
 		return err
 	}
 	defer file.Close()
-	
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		// Parse KEY=VALUE
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
 		}
-		
+
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
-		
+
 		// Remove quotes if present
 		value = strings.Trim(value, "\"'")
-		
+
 		switch key {
 		case "ASTERISK_HOST":
 			c.AsteriskHost = value
@@ -123,7 +130,7 @@ func (c *Config) loadEnv() error {
 			c.AnthropicKey = value
 		}
 	}
-	
+
 	return scanner.Err()
 }
 
@@ -133,12 +140,12 @@ func (c *Config) createEnvFromExample() error {
 	if err != nil {
 		return err
 	}
-	
+
 	err = os.WriteFile(c.EnvPath, input, 0644)
 	if err != nil {
 		return err
 	}
-	
+
 	PrintSuccess("Created .env from .env.example")
 	return c.loadEnv()
 }
@@ -149,22 +156,22 @@ func (c *Config) loadYAML() error {
 	if err != nil {
 		return err
 	}
-	
+
 	var yamlData map[string]interface{}
 	if err := yaml.Unmarshal(data, &yamlData); err != nil {
 		return err
 	}
-	
+
 	// Extract active_pipeline
 	if val, ok := yamlData["active_pipeline"].(string); ok {
 		c.ActivePipeline = val
 	}
-	
+
 	// Extract default_provider
 	if val, ok := yamlData["default_provider"].(string); ok {
 		c.DefaultProvider = val
 	}
-	
+
 	return nil
 }
 
@@ -172,7 +179,7 @@ func (c *Config) loadYAML() error {
 func (c *Config) SaveEnv() error {
 	// Read existing .env
 	lines := []string{}
-	
+
 	file, err := os.Open(c.EnvPath)
 	if err == nil {
 		scanner := bufio.NewScanner(file)
@@ -181,7 +188,7 @@ func (c *Config) SaveEnv() error {
 		}
 		file.Close()
 	}
-	
+
 	// Update values
 	updates := map[string]string{
 		"ASTERISK_HOST":         c.AsteriskHost,
@@ -194,13 +201,13 @@ func (c *Config) SaveEnv() error {
 		"DEEPGRAM_API_KEY":      c.DeepgramKey,
 		"ANTHROPIC_API_KEY":     c.AnthropicKey,
 	}
-	
+
 	// Apply updates
 	for key, value := range updates {
 		if value == "" {
 			continue // Skip empty values
 		}
-		
+
 		found := false
 		for i, line := range lines {
 			trimmed := strings.TrimSpace(line)
@@ -210,53 +217,51 @@ func (c *Config) SaveEnv() error {
 				break
 			}
 		}
-		
+
 		if !found {
 			// Append new key
 			lines = append(lines, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	// Write back
 	content := strings.Join(lines, "\n") + "\n"
 	return os.WriteFile(c.EnvPath, []byte(content), 0644)
 }
 
-// SaveYAML updates config/ai-agent.yaml
+// SaveYAML updates config/ai-agent.local.yaml (operator override file)
 func (c *Config) SaveYAML(template string) error {
-	// Try to find template in current and parent directory
-	templatePath := template
-	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		templatePath = "../" + template
+	_ = template // Kept for backwards compatibility with existing call sites.
+
+	// Write only local overrides to avoid freezing base defaults in the operator file.
+	localPath := "config/ai-agent.local.yaml"
+	if _, err := os.Stat("config"); os.IsNotExist(err) {
+		localPath = "../config/ai-agent.local.yaml"
 	}
-	
-	// Copy template to config/ai-agent.yaml
-	input, err := os.ReadFile(templatePath)
-	if err != nil {
-		return fmt.Errorf("failed to read template %s: %w", templatePath, err)
+
+	yamlData := map[string]interface{}{}
+	if input, err := os.ReadFile(localPath); err == nil {
+		var existing map[string]interface{}
+		if err := yaml.Unmarshal(input, &existing); err == nil && existing != nil {
+			yamlData = existing
+		}
 	}
-	
-	// Read as YAML to modify
-	var yamlData map[string]interface{}
-	if err := yaml.Unmarshal(input, &yamlData); err != nil {
-		return err
-	}
-	
-	// Update active_pipeline or default_provider
+
+	// Update active_pipeline/default_provider overrides.
 	if c.ActivePipeline != "" {
 		yamlData["active_pipeline"] = c.ActivePipeline
 	}
 	if c.DefaultProvider != "" {
 		yamlData["default_provider"] = c.DefaultProvider
 	}
-	
+
 	// Write back
 	output, err := yaml.Marshal(yamlData)
 	if err != nil {
 		return err
 	}
-	
-	return os.WriteFile(c.YAMLPath, output, 0644)
+
+	return os.WriteFile(localPath, output, 0644)
 }
 
 // GetMaskedKey returns masked version of API key for display

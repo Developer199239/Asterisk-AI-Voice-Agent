@@ -38,6 +38,8 @@ class DeepgramToolAdapter:
             List of tool schemas for Deepgram session initialization
         
         Example:
+            Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+            by ToolRegistry before execution.
             [
                 {
                     "name": "transfer_call",
@@ -63,6 +65,8 @@ class DeepgramToolAdapter:
         Handle function call event from Deepgram.
         
         Actual Deepgram format:
+        Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+        by ToolRegistry before execution.
         {
             "type": "FunctionCallRequest",
             "functions": [
@@ -105,7 +109,7 @@ class DeepgramToolAdapter:
         function_name = func.get('name')
 
         allowed = context.get("allowed_tools", None)
-        if allowed is not None and function_name not in allowed:
+        if not self.registry.is_tool_allowed(function_name, allowed):
             error_msg = f"Tool '{function_name}' not allowed for this call"
             logger.warning(error_msg, tool=function_name)
             return {

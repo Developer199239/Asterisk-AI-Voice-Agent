@@ -119,7 +119,7 @@ const RawYamlPage = () => {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Raw Configuration</h1>
                     <p className="text-muted-foreground mt-1">
-                        Directly edit the `ai-agent.yaml` file. Use with caution.
+                        Directly edit the AI agent configuration. Changes are saved to `ai-agent.local.yaml` (your operator overrides).
                     </p>
                 </div>
                 <div className="flex gap-2">

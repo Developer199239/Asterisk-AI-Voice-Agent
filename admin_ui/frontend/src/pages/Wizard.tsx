@@ -527,7 +527,9 @@ exten => s,1,NoOp(AI Agent Call)
                 llm: config.local_llm_model || pickRecommendedLlmId(),
                 tts: config.local_tts_backend,
                 kroko_embedded: config.kroko_embedded,
+                kroko_api_key: config.kroko_api_key,
                 kokoro_mode: config.kokoro_mode,
+                kokoro_voice: config.kokoro_voice,
                 language: selectedLanguage,
                 stt_model_id: config.local_stt_model,
                 tts_model_id: config.local_tts_model,
@@ -1564,16 +1566,16 @@ exten => s,1,NoOp(AI Agent Call)
                                     <p className="text-xs text-muted-foreground">Required for ElevenLabs Conversational provider.</p>
                                 </div>
 
-                                <div className="bg-amber-50/50 dark:bg-amber-900/10 p-4 rounded-md border border-amber-100 dark:border-amber-900/20">
-                                    <h4 className="font-semibold mb-2 text-amber-800 dark:text-amber-300 text-sm">Setup Requirements</h4>
-                                    <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
-                                        <li>Create an agent at elevenlabs.io/app/agents</li>
-                                        <li>Enable "Require authentication" in security settings</li>
-                                        <li>Add client tools (hangup_call, transfer_call, etc.)</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        )}
+                                        <div className="bg-amber-50/50 dark:bg-amber-900/10 p-4 rounded-md border border-amber-100 dark:border-amber-900/20">
+                                            <h4 className="font-semibold mb-2 text-amber-800 dark:text-amber-300 text-sm">Setup Requirements</h4>
+                                            <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
+                                                <li>Create an agent at elevenlabs.io/app/agents</li>
+                                                <li>Enable "Require authentication" in security settings</li>
+                                                <li>Add client tools (hangup_call, blind_transfer, etc.)</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                )}
 
                         {config.provider === 'local' && (
                             <div className="space-y-6">

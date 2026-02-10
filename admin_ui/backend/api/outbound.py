@@ -310,24 +310,30 @@ def _detect_server_timezone() -> str:
 
 def _load_known_context_names() -> List[str]:
     """
-    Best-effort list of known context names from the active ai-agent.yaml.
+    Best-effort list of known context names from the active config.
 
-    Used to validate CSV-imported contexts and overwrite unknown values with campaign defaults.
+    Reads the merged config (base + local override) so operator-added
+    contexts in ai-agent.local.yaml are included.
     """
     try:
-        from settings import CONFIG_PATH
-        if not os.path.exists(CONFIG_PATH):
-            return []
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            parsed = yaml.safe_load(f) or {}
-        if not isinstance(parsed, dict):
-            return []
-        ctxs = parsed.get("contexts") or {}
-        if not isinstance(ctxs, dict):
-            return []
-        return [str(k).strip() for k in ctxs.keys() if str(k).strip()]
+        from api.config import _read_merged_config_dict
+        parsed = _read_merged_config_dict()
     except Exception:
+        # Fallback to reading base file directly.
+        try:
+            from settings import CONFIG_PATH
+            if not os.path.exists(CONFIG_PATH):
+                return []
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                parsed = yaml.safe_load(f) or {}
+        except Exception:
+            return []
+    if not isinstance(parsed, dict):
         return []
+    ctxs = parsed.get("contexts") or {}
+    if not isinstance(ctxs, dict):
+        return []
+    return [str(k).strip() for k in ctxs.keys() if str(k).strip()]
 
 @router.get("/meta")
 async def outbound_meta():

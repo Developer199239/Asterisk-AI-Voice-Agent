@@ -221,7 +221,7 @@ class CheckExtensionStatusTool(Tool):
             ),
             category=ToolCategory.TELEPHONY,
             phase=ToolPhase.IN_CALL,
-            is_global=True,
+            is_global=False,
             requires_channel=False,
             max_execution_time=10,
             parameters=[
@@ -300,7 +300,7 @@ class CheckExtensionStatusTool(Tool):
             if not _looks_like_extension_number(extension):
                 resolved_id = ""
             else:
-            # Try common techs in an opinionated order (most FreePBX installs are PJSIP-first).
+                # Try common techs in an opinionated order (most FreePBX installs are PJSIP-first).
                 for candidate in ("PJSIP", "SIP"):
                     endpoint = await _probe_endpoint(context=context, tech=candidate, extension=extension)
                     if endpoint:

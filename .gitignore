@@ -201,6 +201,9 @@ asterisk_media/
 # Admin UI user database (generated at first login)
 config/users.json
 
+# Operator-specific config overrides (deep-merged over ai-agent.yaml at runtime)
+config/ai-agent.local.yaml
+
 # Logs and archived folders (development artifacts, not for main)
 logs/
 archived/*
