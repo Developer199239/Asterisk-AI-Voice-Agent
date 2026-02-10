@@ -241,6 +241,11 @@ class Engine:
         self._outbound_amd_context = str(os.getenv("AAVA_OUTBOUND_AMD_CONTEXT", "aava-outbound-amd")).strip() or "aava-outbound-amd"
         self._outbound_pjsip_endpoint_cache: Dict[str, Dict[str, Any]] = {}
         self._outbound_pjsip_endpoint_cache_ttl_seconds = float(os.getenv("AAVA_OUTBOUND_PJSIP_ENDPOINT_CACHE_TTL_SECONDS", "300") or "300")
+        # ViciDial / generic PBX compatibility (defaults preserve FreePBX behavior)
+        self._outbound_dial_context = str(os.getenv("AAVA_OUTBOUND_DIAL_CONTEXT", "from-internal")).strip() or "from-internal"
+        self._outbound_dial_prefix = str(os.getenv("AAVA_OUTBOUND_DIAL_PREFIX", "")).strip()
+        self._outbound_channel_tech = str(os.getenv("AAVA_OUTBOUND_CHANNEL_TECH", "auto")).strip().lower() or "auto"
+        self._outbound_pbx_type = str(os.getenv("AAVA_OUTBOUND_PBX_TYPE", "freepbx")).strip().lower() or "freepbx"
         
         # Initialize streaming playback manager
         streaming_config = {}
@@ -1130,7 +1135,7 @@ class Engine:
             logger.error("Outbound scheduler crashed", exc_info=True)
 
     async def _outbound_originate_attempt(self, campaign: Dict[str, Any], lead: Dict[str, Any], attempt_id: str) -> None:
-        """Originate a leased+marked lead via FreePBX routing (Local/...@from-internal)."""
+        """Originate a leased+marked lead via configurable Local/ routing (FreePBX, ViciDial, generic)."""
         campaign_id = str(campaign.get("id") or "")
         lead_id = str(lead.get("id") or "")
         phone = str(lead.get("phone_number") or "").strip()
@@ -1205,18 +1210,18 @@ class Engine:
             "AI_CONTEXT": context_name,
             # Honor context provider by default for outbound calls (unless dialplan overrides later).
             **({"AI_PROVIDER": resolved_context_provider} if resolved_context_provider else {}),
-            # FreePBX routing expects an extension identity for patterns/trunks.
-            "AMPUSER": caller_id_num,
-            "FROMEXTEN": caller_id_num,
             # Ensure the called party sees our configured outbound identity.
             "CALLERID(num)": caller_id_num,
             "CALLERID(name)": caller_id_name,
-            # Local/ dial creates ;1 / ;2 legs; inherit caller-id/identity across the boundary.
-            "__AMPUSER": caller_id_num,
-            "__FROMEXTEN": caller_id_num,
             "__CALLERID(num)": caller_id_num,
             "__CALLERID(name)": caller_id_name,
         }
+        # FreePBX-specific routing vars (AMPUSER/FROMEXTEN are not used by ViciDial or generic Asterisk).
+        if self._outbound_pbx_type == "freepbx":
+            channel_vars["AMPUSER"] = caller_id_num
+            channel_vars["FROMEXTEN"] = caller_id_num
+            channel_vars["__AMPUSER"] = caller_id_num
+            channel_vars["__FROMEXTEN"] = caller_id_num
         if lead_name:
             channel_vars["AAVA_LEAD_NAME"] = lead_name
         channel_vars["AAVA_VM_ENABLED"] = "1" if voicemail_enabled else "0"
@@ -1308,42 +1313,62 @@ class Engine:
         """
         Choose best endpoint for outbound dialing.
 
-        - Default: `Local/<number>@from-internal` so FreePBX handles outbound routing/trunks.
-        - If `<number>` matches a live PJSIP endpoint resource (internal extension), dial `PJSIP/<number>`
-          directly so caller-id is deterministic (FreePBX may not recognize our virtual identity).
+        Configurable via env vars for FreePBX, ViciDial, or generic Asterisk:
+        - AAVA_OUTBOUND_DIAL_CONTEXT  (default: from-internal)
+        - AAVA_OUTBOUND_DIAL_PREFIX   (default: empty — ViciDial uses e.g. '911')
+        - AAVA_OUTBOUND_CHANNEL_TECH  (auto | pjsip | sip | local_only)
+
+        When channel_tech is 'auto', probes PJSIP then SIP for internal extensions.
+        When 'local_only', always routes via Local/ channel (no direct endpoint dial).
         """
+        dial_context = self._outbound_dial_context
+        dial_prefix = self._outbound_dial_prefix
+        channel_tech = self._outbound_channel_tech
+
         phone = (dial_phone or "").strip()
         if not phone:
-            return f"Local/{dial_phone}@from-internal"
+            return f"Local/{dial_prefix}{dial_phone}@{dial_context}"
+
+        # If forced to local_only, skip all endpoint probing.
+        if channel_tech == "local_only":
+            return f"Local/{dial_prefix}{phone}@{dial_context}"
+
+        # Determine which channel technologies to probe for direct internal dialing.
+        techs_to_probe: list = []
+        if channel_tech == "pjsip":
+            techs_to_probe = ["PJSIP"]
+        elif channel_tech == "sip":
+            techs_to_probe = ["SIP"]
+        else:  # "auto" — try PJSIP first, then SIP
+            techs_to_probe = ["PJSIP", "SIP"]
 
         ttl = self._outbound_pjsip_endpoint_cache_ttl_seconds
         now = time.monotonic()
         cached = self._outbound_pjsip_endpoint_cache.get(phone)
         if cached and (now - float(cached.get("ts") or 0.0)) < ttl:
-            if bool(cached.get("exists")):
-                return f"PJSIP/{phone}"
-            return f"Local/{phone}@from-internal"
+            cached_tech = cached.get("tech")
+            if bool(cached.get("exists")) and cached_tech:
+                return f"{cached_tech}/{phone}"
+            return f"Local/{dial_prefix}{phone}@{dial_context}"
 
-        exists = False
-        try:
-            resp = await self.ari_client.send_command(
-                "GET",
-                f"endpoints/PJSIP/{phone}",
-                tolerate_statuses=[404],
-            )
-            if isinstance(resp, dict) and int(resp.get("status") or 0) == 404:
-                exists = False
-            else:
-                # ARI returns endpoint JSON when it exists.
-                exists = isinstance(resp, dict) and ("resource" in resp or "technology" in resp or "state" in resp)
-        except Exception:
-            # If ARI is transiently unavailable, keep default FreePBX routing.
-            exists = False
+        # Probe each technology for a matching endpoint (internal extension).
+        for tech in techs_to_probe:
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"endpoints/{tech}/{phone}",
+                    tolerate_statuses=[404],
+                )
+                if isinstance(resp, dict) and int(resp.get("status") or 0) == 404:
+                    continue
+                if isinstance(resp, dict) and ("resource" in resp or "technology" in resp or "state" in resp):
+                    self._outbound_pjsip_endpoint_cache[phone] = {"exists": True, "tech": tech, "ts": now}
+                    return f"{tech}/{phone}"
+            except Exception:
+                continue
 
-        self._outbound_pjsip_endpoint_cache[phone] = {"exists": bool(exists), "ts": now}
-        if exists:
-            return f"PJSIP/{phone}"
-        return f"Local/{phone}@from-internal"
+        self._outbound_pjsip_endpoint_cache[phone] = {"exists": False, "tech": None, "ts": now}
+        return f"Local/{dial_prefix}{phone}@{dial_context}"
 
     async def _outbound_cleanup_stale_attempts(self) -> None:
         """
