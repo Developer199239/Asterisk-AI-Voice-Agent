@@ -7,6 +7,7 @@ from src.providers.google_live import GoogleLiveProvider
 class _DummySession:
     def __init__(self):
         self.conversation_history = []
+        self.cleanup_after_tts = False
 
 
 class _DummySessionStore:
@@ -65,3 +66,43 @@ async def test_google_live_flush_skips_duplicate_pending_user_text():
     assert flushed is False
     assert provider._input_transcription_buffer == ""
     assert provider._last_input_transcription_fragment == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_google_live_disarms_cleanup_after_tts_fallback_on_user_speech():
+    provider = GoogleLiveProvider(config=GoogleProviderConfig(), on_event=lambda e: None)
+    provider._call_id = "call-1"
+    provider._session_store = _DummySessionStore()
+
+    provider._hangup_fallback_armed = True
+    provider._hangup_after_response = False
+    provider._session_store.session.cleanup_after_tts = True
+
+    await provider._maybe_disarm_cleanup_after_tts_fallback_on_user_speech()
+
+    assert provider._session_store.session.cleanup_after_tts is False
+    assert provider._hangup_fallback_armed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_google_live_flushes_pending_transcriptions_on_disconnect():
+    provider = GoogleLiveProvider(config=GoogleProviderConfig(), on_event=lambda e: None)
+    provider._call_id = "call-1"
+    provider._session_store = _DummySessionStore()
+
+    provider._input_transcription_buffer = "user fragment"
+    provider._output_transcription_buffer = "assistant fragment"
+
+    await provider._flush_pending_transcriptions_on_disconnect(code=1011, reason="Internal error occurred.")
+
+    history = provider._session_store.session.conversation_history
+    assert len(history) == 2
+    assert history[0]["role"] == "user"
+    assert history[0]["content"] == "(partial) user fragment"
+    assert history[1]["role"] == "assistant"
+    assert history[1]["content"] == "(partial) assistant fragment"
+
+    assert provider._input_transcription_buffer == ""
+    assert provider._output_transcription_buffer == ""

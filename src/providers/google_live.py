@@ -273,6 +273,56 @@ class GoogleLiveProvider(AIProviderInterface):
             }
         )
 
+    async def _flush_pending_transcriptions_on_disconnect(self, *, code: Optional[int], reason: str) -> None:
+        """
+        Best-effort: persist any pending transcription buffers when the websocket closes mid-turn.
+
+        Google Live may close with 1008/1011 before emitting `turnComplete`, which means incremental
+        fragments were logged but never committed to call history. This keeps the tail visible for RCA.
+        """
+        if not self._call_id:
+            return
+        # Prefer outputTranscription; fall back to modelTurn.text buffer if present.
+        pending_user = (self._input_transcription_buffer or "").strip()
+        pending_assistant = (self._output_transcription_buffer or self._model_text_buffer or "").strip()
+
+        try:
+            if pending_user and pending_user != (self._last_final_user_text or "").strip():
+                await self._track_conversation_message("user", f"(partial) {pending_user}")
+                self._last_final_user_text = pending_user
+                logger.info(
+                    "Google Live flushed pending user transcription on disconnect",
+                    call_id=self._call_id,
+                    code=code,
+                    reason=(reason or "")[:120],
+                    text=pending_user[:150],
+                )
+        except Exception:
+            logger.debug("Failed flushing pending user transcription on disconnect", call_id=self._call_id, exc_info=True)
+
+        try:
+            if pending_assistant and pending_assistant != (self._last_final_assistant_text or "").strip():
+                await self._track_conversation_message("assistant", f"(partial) {pending_assistant}")
+                self._last_final_assistant_text = pending_assistant
+                logger.info(
+                    "Google Live flushed pending assistant transcription on disconnect",
+                    call_id=self._call_id,
+                    code=code,
+                    reason=(reason or "")[:120],
+                    text=pending_assistant[:150],
+                )
+        except Exception:
+            logger.debug(
+                "Failed flushing pending assistant transcription on disconnect", call_id=self._call_id, exc_info=True
+            )
+
+        # Clear buffers so any subsequent teardown doesn't double-log.
+        self._input_transcription_buffer = ""
+        self._last_input_transcription_fragment = ""
+        self._output_transcription_buffer = ""
+        self._last_output_transcription_fragment = ""
+        self._model_text_buffer = ""
+
     @staticmethod
     def _norm_text(value: str) -> str:
         return re.sub(r"\s+", " ", (value or "").strip().lower())
@@ -1108,6 +1158,16 @@ class GoogleLiveProvider(AIProviderInterface):
                     hint=hint,
                     outbound_tail=list(self._outbound_summaries),
                 )
+            # Persist any pending transcription buffers before we signal the engine to tear down.
+            try:
+                if close_code != 1000:
+                    await self._flush_pending_transcriptions_on_disconnect(code=close_code, reason=close_reason)
+            except Exception:
+                logger.debug(
+                    "Failed flushing pending transcriptions on disconnect",
+                    call_id=self._call_id,
+                    exc_info=True,
+                )
             self._mark_ws_disconnected()
             try:
                 # Only treat abnormal closes as a "disconnect" signal for the engine.
@@ -1209,6 +1269,10 @@ class GoogleLiveProvider(AIProviderInterface):
         if input_transcription:
             text = input_transcription.get("text", "")
             if text:
+                # If we armed a heuristic cleanup_after_tts fallback (no toolCall), cancel it when the
+                # user continues speaking. This prevents premature hangups during transcript/email
+                # capture where the model may say "thank you for calling" before the user is done.
+                await self._maybe_disarm_cleanup_after_tts_fallback_on_user_speech()
                 # Track turn start time on EVERY user input fragment (Milestone 21)
                 # This captures the LAST speech fragment time before AI responds
                 # Measures: last user speech → first AI audio response
@@ -1258,10 +1322,6 @@ class GoogleLiveProvider(AIProviderInterface):
                         intent=farewell,
                         buffer_preview=self._output_transcription_buffer[:120],
                     )
-                await self._maybe_arm_cleanup_after_tts(
-                    user_text=self._input_transcription_buffer,
-                    assistant_text=self._output_transcription_buffer,
-                )
         
         # Check if model turn is complete - THIS is when we save the final transcription
         turn_complete = content.get("turnComplete", False)
@@ -1405,6 +1465,53 @@ class GoogleLiveProvider(AIProviderInterface):
                 "Failed to arm cleanup_after_tts fallback",
                 call_id=self._call_id,
                 error=str(e),
+                exc_info=True,
+            )
+
+    async def _maybe_disarm_cleanup_after_tts_fallback_on_user_speech(self) -> None:
+        """
+        Cancel heuristic cleanup_after_tts fallback when the user continues speaking.
+
+        This is Google-Live-specific: the Live API can emit "farewell-ish" outputTranscription
+        fragments (e.g. "thank you for calling") before the user finishes confirming an email
+        address for transcript delivery. If we set cleanup_after_tts too early, the engine may
+        hang up as soon as the assistant audio completes, cutting off the caller.
+
+        We do NOT cancel explicit hangups requested via the hangup_call tool (those set
+        `_hangup_after_response=True`).
+        """
+        if not self._call_id:
+            return
+        if not self._hangup_fallback_armed:
+            return
+        # If hangup_call tool was invoked, keep the hangup flow intact.
+        if self._hangup_after_response:
+            return
+
+        session_store = getattr(self, "_session_store", None)
+        if not session_store:
+            return
+        try:
+            session = await session_store.get_by_call_id(self._call_id)
+            if not session:
+                return
+            if not getattr(session, "cleanup_after_tts", False):
+                return
+            session.cleanup_after_tts = False
+            await session_store.upsert_call(session)
+            self._hangup_fallback_armed = False
+            self._hangup_fallback_armed_at = None
+            self._hangup_fallback_audio_started = False
+            self._hangup_fallback_turn_complete_seen = False
+            self._hangup_fallback_wait_logged = False
+            logger.info(
+                "🛑 Disarmed cleanup_after_tts fallback due to continued user speech",
+                call_id=self._call_id,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to disarm cleanup_after_tts fallback on user speech",
+                call_id=self._call_id,
                 exc_info=True,
             )
 
