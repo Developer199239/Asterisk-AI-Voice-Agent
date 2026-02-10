@@ -81,6 +81,7 @@ class TestLiveAgentTransferTool:
             "enabled": True,
             "destinations": {
                 "support_agent": {"type": "extension", "target": "6000", "description": "Support agent"},
+                "live_agent": {"type": "extension", "target": "6000", "description": "Live Agent"},
             },
         }
         tool_context.config["tools"]["extensions"] = {

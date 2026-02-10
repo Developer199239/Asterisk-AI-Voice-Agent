@@ -140,6 +140,10 @@ class LiveAgentTransferTool(Tool):
         for key, cfg in destinations.items():
             if not isinstance(cfg, dict):
                 continue
+            # Only map to destinations explicitly marked as live-agent (or the conventional key),
+            # otherwise we risk labeling a live-agent transfer as "Support agent", etc.
+            if key != "live_agent" and not bool(cfg.get("live_agent")):
+                continue
             transfer_type = str(cfg.get("type", "") or "").strip().lower()
             target = str(cfg.get("target", "") or "").strip()
             if transfer_type == "extension" and target == extension:
