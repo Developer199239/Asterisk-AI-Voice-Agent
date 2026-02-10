@@ -454,19 +454,19 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                             </div>
 
                             <div className="grid grid-cols-1 gap-2">
-                                {Object.entries(config.transfer?.destinations || {}).map(([key, dest]: [string, any]) => (
-                                    <div key={key} className="flex items-center justify-between p-3 bg-accent/30 rounded border border-border/50">
-                                        <div>
-                                            <div className="font-medium text-sm">{key}</div>
-                                            <div className="text-xs text-muted-foreground">
-                                                {dest.type} • {dest.target} • {dest.description}
-                                                {dest.type === 'extension' && dest.attended_allowed ? ' • attended' : ''}
-                                                {dest.type === 'extension' && dest.live_agent ? ' • live-agent' : ''}
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-1">
-                                            <button onClick={() => handleEditDestination(key, dest)} className="p-1.5 hover:bg-background rounded text-muted-foreground hover:text-foreground">
-                                                <Settings className="w-4 h-4" />
+	                                {Object.entries(config.transfer?.destinations || {}).map(([key, dest]: [string, any]) => (
+	                                    <div key={key} className="flex items-center justify-between p-3 bg-accent/30 rounded border border-border/50">
+	                                        <div>
+	                                            <div className="font-medium text-sm">{key}</div>
+	                                            <div className="text-xs text-muted-foreground">
+	                                                {dest.type} • {dest.target} • {dest.description}
+	                                                {dest.type === 'extension' && dest.attended_allowed ? ' • attended' : ''}
+	                                                {dest.type === 'extension' && showLiveAgentRoutingAdvanced && dest.live_agent ? ' • live-agent' : ''}
+	                                            </div>
+	                                        </div>
+	                                        <div className="flex items-center gap-1">
+	                                            <button onClick={() => handleEditDestination(key, dest)} className="p-1.5 hover:bg-background rounded text-muted-foreground hover:text-foreground">
+	                                                <Settings className="w-4 h-4" />
                                             </button>
                                             <button onClick={() => handleDeleteDestination(key)} className="p-1.5 hover:bg-destructive/10 rounded text-destructive">
                                                 <Trash2 className="w-4 h-4" />
@@ -1330,14 +1330,19 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                             onChange={(e) => setDestinationForm({ ...destinationForm, attended_allowed: e.target.checked })}
                         />
                     )}
-                    {destinationForm.type === 'extension' && (
-                        <FormSwitch
-                            label="Use As Live Agent Destination"
-                            description="Marks this destination as the live-agent target fallback when no explicit live_agent_destination_key is set."
-                            checked={destinationForm.live_agent ?? false}
-                            onChange={(e) => setDestinationForm({ ...destinationForm, live_agent: e.target.checked })}
-                        />
-                    )}
+	                    {destinationForm.type === 'extension' && (
+	                        <FormSwitch
+	                            label="Use As Live Agent Destination"
+	                            description={
+	                                showLiveAgentRoutingAdvanced
+	                                    ? "Marks this destination as the live-agent target fallback when no explicit live_agent_destination_key is set."
+	                                    : "Disabled. Enable 'Advanced: Route Live Agent via Destination' to use destination-based live-agent routing."
+	                            }
+	                            checked={destinationForm.live_agent ?? false}
+	                            onChange={(e) => setDestinationForm({ ...destinationForm, live_agent: e.target.checked })}
+	                            disabled={!showLiveAgentRoutingAdvanced}
+	                        />
+	                    )}
                     <FormInput
                         label="Target Number"
                         value={destinationForm.target || ''}

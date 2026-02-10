@@ -172,12 +172,27 @@ interface SwitchProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const FormSwitch = React.forwardRef<HTMLInputElement, SwitchProps>(
-    ({ label, description, tooltip, className = '', ...props }, ref) => (
-        <div className="flex items-center justify-between mb-4 p-3 border border-border rounded-lg bg-card/50">
+    ({ label, description, tooltip, className = '', ...props }, ref) => {
+        const disabled = Boolean(props.disabled);
+        return (
+        <div
+            className={[
+                "flex items-center justify-between mb-4 p-3 border border-border rounded-lg bg-card/50",
+                disabled ? "opacity-60" : "",
+                className,
+            ]
+                .filter(Boolean)
+                .join(" ")}
+        >
             <div className="space-y-0.5">
                 {label && (
                     <div className="flex items-center gap-1.5">
-                        <label htmlFor={props.id} className="text-sm font-medium cursor-pointer">
+                        <label
+                            htmlFor={props.id}
+                            className={["text-sm font-medium", disabled ? "cursor-not-allowed" : "cursor-pointer"]
+                                .filter(Boolean)
+                                .join(" ")}
+                        >
                             {label}
                         </label>
                         {tooltip && (
@@ -187,17 +202,18 @@ export const FormSwitch = React.forwardRef<HTMLInputElement, SwitchProps>(
                 )}
                 {description && <p className="text-xs text-muted-foreground">{description}</p>}
             </div>
-            <label className="relative inline-flex items-center cursor-pointer">
+            <label className={["relative inline-flex items-center", disabled ? "cursor-not-allowed" : "cursor-pointer"].join(" ")}>
                 <input
                     type="checkbox"
                     ref={ref}
                     className="sr-only peer"
                     {...props}
                 />
-                <div className="w-9 h-5 bg-muted peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-background after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                <div className="w-9 h-5 bg-muted peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-background after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary peer-disabled:bg-muted/60 peer-disabled:after:bg-muted peer-disabled:after:border-muted"></div>
             </label>
         </div>
-    )
+        );
+    }
 );
 
 const FormSwitchTooltip = ({ tooltip }: { tooltip: string }) => {
