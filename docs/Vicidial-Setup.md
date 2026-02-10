@@ -59,9 +59,13 @@ password = your_secure_password_here
 ```ini
 [general]
 enabled=yes
-bindaddr=0.0.0.0
+bindaddr=127.0.0.1
 bindport=8088
 ```
+
+Security note for remote deployments:
+- Keep `bindaddr=127.0.0.1` unless remote ARI access is explicitly required.
+- If remote access is required, bind to a specific trusted interface (not `0.0.0.0` when possible), restrict `bindport` with firewall/ACL rules, and prefer TLS (`ASTERISK_ARI_SCHEME=https`) with certificate validation.
 
 After editing, reload Asterisk:
 
