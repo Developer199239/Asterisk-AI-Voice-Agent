@@ -851,7 +851,7 @@ agent rca
 ```
 [info] Configured agent.think.functions for Deepgram
 [info] FunctionCallRequest event received
-[info] Function: transfer_call, parameters: {destination: 'sales'}
+[info] Function: blind_transfer, parameters: {destination: 'sales'}
 [info] Transfer tool executed: success
 ```
 

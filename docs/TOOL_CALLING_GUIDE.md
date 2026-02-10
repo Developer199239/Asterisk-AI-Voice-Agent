@@ -815,6 +815,45 @@ tools:
         description: "Support team ring group"
 
   # ----------------------------------------------------------------------------
+  # LIVE AGENTS - Human extensions used by live_agent_transfer()
+  # ----------------------------------------------------------------------------
+  #
+  # These are NOT normal transfer destinations. They represent real human endpoints
+  # (extensions) that the AI can hand off to when the caller explicitly asks for a
+  # "live agent" / "human" / "representative".
+  #
+  # Admin UI: Tools -> Live Agents
+  #
+  extensions:
+    internal:
+      "6000":
+        name: "Live Support Agent"
+        dial_string: "PJSIP/6000"
+        device_state_tech: auto
+        description: "Live customer service representative"
+        transfer: true
+
+  # ----------------------------------------------------------------------------
+  # LIVE AGENT OVERRIDE (Advanced/Legacy)
+  # ----------------------------------------------------------------------------
+  #
+  # Default behavior: live_agent_transfer() routes to tools.extensions.internal.
+  #
+  # Advanced/legacy override: route live-agent requests via a normal transfer
+  # destination key (queue/ringgroup/extension). Enable this only if you
+  # intentionally want "live agent" requests to behave like a normal transfer
+  # destination.
+  #
+  # transfer:
+  #   live_agent_destination_key: "support_queue"
+  #   destinations:
+  #     support_queue:
+  #       type: queue
+  #       target: "301"
+  #       description: "Technical support queue"
+  #       live_agent: true
+
+  # ----------------------------------------------------------------------------
   # ATTENDED_TRANSFER - Warm transfer with announcement + DTMF acceptance
   # ----------------------------------------------------------------------------
   attended_transfer:
@@ -932,6 +971,7 @@ contexts:
     provider: google_live
     tools:
       - attended_transfer   # warm transfer
+      - live_agent_transfer # explicit: caller asked for a live human agent
       - cancel_transfer
       - hangup_call
       - request_transcript

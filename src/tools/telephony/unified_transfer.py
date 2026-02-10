@@ -1,8 +1,8 @@
 """
 Unified Transfer Tool - Transfer calls to extensions, queues, or ring groups.
 
-This tool replaces the separate transfer_call and transfer_to_queue tools
-with a single unified interface for all transfer types.
+This tool implements the canonical `blind_transfer` tool and replaces the legacy
+`transfer_call` and `transfer_to_queue` tools with a single unified interface.
 """
 
 from typing import Dict, Any, Optional, Tuple, List

@@ -222,7 +222,7 @@ pipelines:
 
 ## Success Criteria
 
-- ✅ local_hybrid executes transfer_call
+- ✅ local_hybrid executes blind_transfer
 - ✅ local_hybrid executes hangup_call
 - ✅ local_hybrid executes send_email_summary
 - ✅ local_hybrid executes request_transcript

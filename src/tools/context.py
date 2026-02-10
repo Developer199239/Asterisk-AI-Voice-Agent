@@ -94,7 +94,7 @@ class ToolExecutionContext:
         Get configuration value.
         
         Args:
-            key: Config key (supports dot notation, e.g., "tools.transfer_call.mode")
+            key: Config key (supports dot notation, e.g., "tools.transfer.destinations.support_agent.target")
             default: Default value if key not found
         
         Returns:
