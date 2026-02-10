@@ -86,17 +86,48 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
     text = (msg or "").lower()
     comp = (component or "").lower()
 
-    # Strong component-based categorization first (least ambiguous)
+    # ── Per-frame noise (fires every ~20 ms, ~50/sec) ──────────────────
+    # Intercept before any other rule so these never pollute focused views.
+    if "continuous input" in text and ("forwarding frame" in text or "frame sent" in text):
+        return "audio", False
+    if "encode resample" in text:
+        return "audio", False
+    if "encode config - reading provider config" in text:
+        return "audio", False
+    if "encoded for provider" in text:
+        return "audio", False
+    if "audiosocket rx" in text and "frame received" in text:
+        return "transport", False
+
+    # ── Strong component-based categorization ──────────────────────────
     if comp.startswith("src.tools.") or comp.startswith("src.mcp."):
         return "tools", False
 
     if comp.startswith("src.providers."):
+        # Milestone-worthy provider events
+        if "final user transcription" in text or "final ai transcription" in text:
+            return "provider", True
+        if "websocket connected" in text or "websocket closed" in text:
+            return "provider", True
+        if "websocket not open" in text:
+            return "provider", False  # warning level handles visibility
+        if "session started" in text or "setup complete" in text:
+            return "provider", True
+        if "greeting" in text and ("completed" in text or "sent" in text or "request" in text):
+            return "provider", True
+        if "farewell" in text or "cleanup_after_tts" in text or "armed cleanup" in text:
+            return "provider", True
+        if "flushed pending" in text:
+            return "provider", True
+        if "stopping" in text and "session" in text:
+            return "provider", True
         return "provider", False
 
     if "vad" in comp or "vad_manager" in comp:
         return "vad", False
 
-    # Milestones (info-level) + categories
+    # ── Milestones (info-level) + categories ───────────────────────────
+    # Call lifecycle
     if "stasisstart event received" in text:
         return "call", True
     if text.startswith("stasis ended") or "stasis ended" in text:
@@ -107,18 +138,64 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
         return "call", True
     if text.startswith("bridge destroyed") or "bridge destroyed" in text:
         return "call", True
+    if "call cleanup completed" in text or text.startswith("cleaning up call"):
+        return "call", True
+    if "cleanup after tts" in text:
+        return "call", True
+    if "hangupreay" in text or "hangupready" in text:
+        return "call", True
+    if "rca_call_end" in text:
+        return "call", True
+    if "recorded call duration" in text:
+        return "call", True
+
+    # Audio / streaming milestones
     if "audio profile resolved and applied" in text:
         return "audio", True
+    if "streaming playback" in text and ("started" in text or "stopped" in text):
+        return "audio", True
+    if "streaming tuning summary" in text:
+        return "audio", True
+    if "intelligent buffer calculated" in text:
+        return "audio", True
+    if "stream characterized" in text:
+        return "audio", True
+    if "continuous stream" in text and ("enabled" in text or "segment boundary" in text):
+        return "audio", True
+    if "output suppression" in text:
+        return "audio", True
+
+    # Provider milestones (from src.engine)
     if "openai session.updated ack received" in text or "session.updated ack received" in text:
         return "provider", True
+    if "provider session started" in text:
+        return "provider", True
+    if "streaming playback started" in text:
+        return "provider", True
+
+    # Transport milestones
     if "rtp server started for externalmedia transport" in text or "externalmedia channel created" in text:
         return "transport", True
     if "transportcard" in text:
         return "transport", True
-    if "call cleanup completed" in text or text.startswith("cleaning up call"):
+    if "audiosocket" in text and ("connected" in text or "disconnected" in text):
+        return "transport", True
+
+    # VAD / barge-in milestones
+    if "barge-in" in text and ("action applied" in text or "triggered" in text):
+        return "vad", True
+    if "conversation" in text and "clearing gating" in text:
+        return "vad", True
+
+    # Tool milestones
+    if "executing post-call tools" in text or "post-call tool" in text:
+        return "tools", True
+    if "farewell" in text and "intent" in text:
+        return "call", True
+    if "armed cleanup" in text:
         return "call", True
 
-    # Categories (non-milestone)
+    # ── Categories (non-milestone) ────────────────────────────────────
     if "externalmedia" in text or "rtp " in text or "ari " in text or "audiosocket" in text:
         return "transport", False
     if "vad" in text or "talk detect" in text or "barge" in text:

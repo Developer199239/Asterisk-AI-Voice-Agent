@@ -18,7 +18,7 @@ class TestCheckExtensionStatusTool:
         assert d.name == "check_extension_status"
         assert d.category.value == "telephony"
         assert d.requires_channel is False
-        assert d.is_global is True
+        assert d.is_global is False
 
         params = {p.name: p for p in d.parameters}
         assert params["extension"].required is True

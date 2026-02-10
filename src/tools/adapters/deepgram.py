@@ -105,7 +105,7 @@ class DeepgramToolAdapter:
         function_name = func.get('name')
 
         allowed = context.get("allowed_tools", None)
-        if allowed is not None and function_name not in allowed:
+        if allowed is not None and not self.registry.is_tool_allowed(function_name, allowed):
             error_msg = f"Tool '{function_name}' not allowed for this call"
             logger.warning(error_msg, tool=function_name)
             return {

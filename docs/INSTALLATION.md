@@ -14,6 +14,7 @@ This section is for operators upgrading an existing repo checkout (not a fresh i
 
 - Backup `.env`
 - Backup `config/ai-agent.yaml`
+- Backup `config/ai-agent.local.yaml` (if it exists — contains your operator overrides)
 - If you rely on Call History persistence, backup `./data` as well
 
 ### 1) Pull the new release

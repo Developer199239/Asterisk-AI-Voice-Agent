@@ -359,9 +359,16 @@ ASTERISK_ARI_PASSWORD=%s
 }
 
 func updateYAMLConfig(activeProvider string) error {
-	data, err := os.ReadFile("config/ai-agent.yaml")
+	// Read from base config (or local override if it exists)
+	configPath := "config/ai-agent.yaml"
+	localPath := "config/ai-agent.local.yaml"
+	readPath := configPath
+	if _, err := os.Stat(localPath); err == nil {
+		readPath = localPath
+	}
+	data, err := os.ReadFile(readPath)
 	if err != nil {
-		return fmt.Errorf("failed to read config/ai-agent.yaml: %w", err)
+		return fmt.Errorf("failed to read %s: %w", readPath, err)
 	}
 
 	var root yaml.Node
@@ -424,8 +431,8 @@ func updateYAMLConfig(activeProvider string) error {
 		updateKey([]string{"default_provider"}, "local_hybrid")
 	}
 
-	// Write back
-	f, err := os.Create("config/ai-agent.yaml")
+	// Write to LOCAL override file so git-tracked base stays clean
+	f, err := os.Create(localPath)
 	if err != nil {
 		return fmt.Errorf("failed to open config for writing: %w", err)
 	}

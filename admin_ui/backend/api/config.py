@@ -99,6 +99,143 @@ def _safe_load_no_duplicates(content: str):
         _assert_no_duplicate_yaml_keys(node)
     return yaml.safe_load(content)
 
+
+def _deep_merge_dicts(base: dict, override: dict) -> dict:
+    """
+    Recursively deep-merge *override* into a copy of *base*.
+
+    Deletion semantics:
+    - If the override explicitly sets a key to null/None, that key is removed from
+      the merged output. This is important because our operator override file is
+      merged on top of a git-tracked base file and needs a way to represent
+      "delete this upstream default".
+    """
+    merged = dict(base)
+    for key, override_val in override.items():
+        if override_val is None:
+            merged.pop(key, None)
+            continue
+        base_val = merged.get(key)
+        if isinstance(base_val, dict) and isinstance(override_val, dict):
+            merged[key] = _deep_merge_dicts(base_val, override_val)
+        else:
+            merged[key] = override_val
+    return merged
+
+
+def _read_base_config_dict() -> dict:
+    """Read base config/ai-agent.yaml as a dict (no local overrides)."""
+    if not os.path.exists(settings.CONFIG_PATH):
+        return {}
+    with open(settings.CONFIG_PATH, "r") as f:
+        base = _safe_load_no_duplicates(f.read()) or {}
+    return base if isinstance(base, dict) else {}
+
+
+def _compute_local_override(base: dict, desired: dict) -> dict:
+    """
+    Compute a minimal operator-local override that, when merged over *base*,
+    yields *desired* (including deletions via null tombstones).
+    """
+    if not isinstance(base, dict) or not isinstance(desired, dict):
+        # Defensive: treat the desired value as a full replacement.
+        return desired
+
+    override: dict = {}
+
+    # Include updates/additions.
+    for key, desired_val in desired.items():
+        if key not in base:
+            override[key] = desired_val
+            continue
+
+        base_val = base.get(key)
+        if isinstance(base_val, dict) and isinstance(desired_val, dict):
+            child = _compute_local_override(base_val, desired_val)
+            if child:
+                override[key] = child
+            continue
+
+        if base_val != desired_val:
+            override[key] = desired_val
+
+    # Include deletions (tombstones).
+    for key in base.keys():
+        if key not in desired:
+            override[key] = None
+
+    return override
+
+
+def _read_merged_config_dict() -> dict:
+    """
+    Read and return the merged config (base + local override) as a dict.
+
+    Loads ``config/ai-agent.yaml`` (base), then deep-merges
+    ``config/ai-agent.local.yaml`` (operator overrides) on top if it exists.
+    """
+    if not os.path.exists(settings.CONFIG_PATH):
+        return {}
+    with open(settings.CONFIG_PATH, "r") as f:
+        base = _safe_load_no_duplicates(f.read()) or {}
+
+    if not os.path.exists(settings.LOCAL_CONFIG_PATH):
+        return base
+
+    try:
+        with open(settings.LOCAL_CONFIG_PATH, "r") as f:
+            local = _safe_load_no_duplicates(f.read()) or {}
+    except Exception:
+        return base
+
+    if not isinstance(local, dict):
+        return base
+
+    return _deep_merge_dicts(base, local)
+
+
+def _read_merged_config_content() -> str:
+    """Return the merged config as a YAML string (for display / validation)."""
+    merged = _read_merged_config_dict()
+    return yaml.dump(merged, default_flow_style=False, sort_keys=False) if merged else ""
+
+
+def _write_local_config(content: str) -> None:
+    """
+    Atomically write *content* to the local override config file.
+
+    Creates a backup of the existing local file (if any), validates permissions,
+    and performs an atomic temp-file + rename write.
+    """
+    import datetime
+    dir_path = os.path.dirname(settings.LOCAL_CONFIG_PATH)
+
+    # Backup existing local file
+    if os.path.exists(settings.LOCAL_CONFIG_PATH):
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{settings.LOCAL_CONFIG_PATH}.bak.{timestamp}"
+        with open(settings.LOCAL_CONFIG_PATH, "r") as src:
+            with open(backup_path, "w") as dst:
+                dst.write(src.read())
+        _rotate_backups(settings.LOCAL_CONFIG_PATH)
+
+    # Preserve permissions from existing local or base file
+    original_mode = None
+    for candidate in (settings.LOCAL_CONFIG_PATH, settings.CONFIG_PATH):
+        if os.path.exists(candidate):
+            original_mode = os.stat(candidate).st_mode
+            break
+
+    with tempfile.NamedTemporaryFile("w", dir=dir_path, delete=False, suffix=".tmp") as f:
+        f.write(content)
+        temp_path = f.name
+
+    if original_mode is not None:
+        os.chmod(temp_path, original_mode)
+
+    os.replace(temp_path, settings.LOCAL_CONFIG_PATH)
+
+
 # Regex to strip ANSI escape codes from logs
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
@@ -341,33 +478,21 @@ async def update_yaml_config(update: ConfigUpdate):
         validation = _validate_ai_agent_config(update.content)
         warnings = validation.get("warnings") or []
 
-        # Create backup before saving
-        if os.path.exists(settings.CONFIG_PATH):
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = f"{settings.CONFIG_PATH}.bak.{timestamp}"
-            with open(settings.CONFIG_PATH, 'r') as src:
-                with open(backup_path, 'w') as dst:
-                    dst.write(src.read())
-            # A11: Rotate backups - keep only last MAX_BACKUPS
-            _rotate_backups(settings.CONFIG_PATH)
+        # Snapshot current merged config for hot-reload comparison
+        old_merged = _read_merged_config_dict()
 
-        # A8: Atomic write via temp file + rename (preserve permissions)
-        dir_path = os.path.dirname(settings.CONFIG_PATH)
-        # Get original file permissions if file exists
-        original_mode = None
-        if os.path.exists(settings.CONFIG_PATH):
-            original_mode = os.stat(settings.CONFIG_PATH).st_mode
-        
-        with tempfile.NamedTemporaryFile('w', dir=dir_path, delete=False, suffix='.tmp') as f:
-            f.write(update.content)
-            temp_path = f.name
-        
-        # Restore original permissions before replace
-        if original_mode is not None:
-            os.chmod(temp_path, original_mode)
-        
-        os.replace(temp_path, settings.CONFIG_PATH)  # Atomic on POSIX
+        # Parse desired merged config content from UI.
+        new_parsed = _safe_load_no_duplicates(update.content) or {}
+        if not isinstance(new_parsed, dict):
+            raise HTTPException(status_code=400, detail="Config YAML must be a mapping at the top level")
+
+        # Convert desired merged config into a minimal local override (supports deletions).
+        base = _read_base_config_dict()
+        local_override = _compute_local_override(base, new_parsed)
+        local_content = yaml.dump(local_override or {}, default_flow_style=False, sort_keys=False)
+
+        # Write to LOCAL override file (keeps base ai-agent.yaml clean for git)
+        _write_local_config(local_content)
         
         # Determine recommended apply method based on what changed
         # hot_reload: contexts, MCP servers, greetings/instructions only
@@ -377,26 +502,15 @@ async def update_yaml_config(update: ConfigUpdate):
         
         # Check if change is limited to hot-reloadable sections
         try:
-            old_content = None
-            # Read the backup we just created to compare
-            import glob
-            backups = sorted(glob.glob(f"{settings.CONFIG_PATH}.bak.*"), reverse=True)
-            if backups:
-                with open(backups[0], 'r') as f:
-                    old_content = f.read()
-            
-            if old_content:
-                old_parsed = _safe_load_no_duplicates(old_content) or {}
-                new_parsed = _safe_load_no_duplicates(update.content) or {}
-                
+            if old_merged:
                 # Keys that can be hot-reloaded
                 hot_reload_keys = {'contexts', 'profiles', 'mcp'}
                 
                 # Check if only hot-reloadable keys changed
-                all_keys = set(old_parsed.keys()) | set(new_parsed.keys())
+                all_keys = set(old_merged.keys()) | set(new_parsed.keys())
                 changed_keys = set()
                 for key in all_keys:
-                    if old_parsed.get(key) != new_parsed.get(key):
+                    if old_merged.get(key) != new_parsed.get(key):
                         changed_keys.add(key)
                 
                 if changed_keys and changed_keys.issubset(hot_reload_keys):
@@ -428,8 +542,9 @@ async def get_yaml_config():
         print("Config file not found")
         raise HTTPException(status_code=404, detail="Config file not found")
     try:
-        with open(settings.CONFIG_PATH, 'r') as f:
-            config_content = f.read()
+        # Return the merged config (base + local overrides) so the editor
+        # always shows the effective configuration the engine will use.
+        config_content = _read_merged_config_content()
         _safe_load_no_duplicates(config_content)  # Validate YAML and reject duplicate keys
         return {"content": config_content}
     except yaml.YAMLError as e:
@@ -1157,9 +1272,11 @@ async def export_configuration():
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Add YAML config
+            # Add YAML config (base + local override)
             if os.path.exists(settings.CONFIG_PATH):
                 zip_file.write(settings.CONFIG_PATH, 'ai-agent.yaml')
+            if os.path.exists(settings.LOCAL_CONFIG_PATH):
+                zip_file.write(settings.LOCAL_CONFIG_PATH, 'ai-agent.local.yaml')
             
             # Add ENV file
             if os.path.exists(settings.ENV_PATH):
@@ -1296,48 +1413,48 @@ async def export_logs():
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # 1. Sanitized YAML
-            if os.path.exists(settings.CONFIG_PATH):
-                try:
-                    import yaml
-                    with open(settings.CONFIG_PATH, 'r') as f:
-                        parsed = yaml.safe_load(f) or {}
+            # 1. Sanitized YAML (merged base + local override)
+            try:
+                import yaml
+                parsed = _read_merged_config_dict()
 
-                    import re
-                    email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
-                    # Pattern for hostnames that look like internal infrastructure
-                    hostname_pattern = re.compile(r'\b(?:pbx|sip|voip|trunk|asterisk)[a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b', re.IGNORECASE)
-                    
-                    def redact(obj):
-                        if isinstance(obj, dict):
-                            out = {}
-                            for k, v in obj.items():
-                                key = str(k).lower()
-                                # Redact sensitive keys
-                                if any(s in key for s in ["api_key", "apikey", "token", "secret", "password", "pass", "key"]):
-                                    out[k] = "[REDACTED]"
-                                # Redact email fields
-                                elif "email" in key:
-                                    out[k] = "[EMAIL_REDACTED]"
-                                else:
-                                    out[k] = redact(v)
-                            return out
-                        if isinstance(obj, list):
-                            return [redact(v) for v in obj]
-                        # Redact email addresses and sensitive hostnames in string values
-                        if isinstance(obj, str):
-                            result = email_pattern.sub('[EMAIL_REDACTED]', obj)
-                            result = hostname_pattern.sub('[HOSTNAME_REDACTED]', result)
-                            return result
-                        return obj
+                import re
+                email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+                # Pattern for hostnames that look like internal infrastructure
+                hostname_pattern = re.compile(r'\b(?:pbx|sip|voip|trunk|asterisk)[a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b', re.IGNORECASE)
+                
+                def redact(obj):
+                    if isinstance(obj, dict):
+                        out = {}
+                        for k, v in obj.items():
+                            key = str(k).lower()
+                            # Redact sensitive keys
+                            if any(s in key for s in ["api_key", "apikey", "token", "secret", "password", "pass", "key"]):
+                                out[k] = "[REDACTED]"
+                            # Redact email fields
+                            elif "email" in key:
+                                out[k] = "[EMAIL_REDACTED]"
+                            else:
+                                out[k] = redact(v)
+                        return out
+                    if isinstance(obj, list):
+                        return [redact(v) for v in obj]
+                    # Redact email addresses and sensitive hostnames in string values
+                    if isinstance(obj, str):
+                        result = email_pattern.sub('[EMAIL_REDACTED]', obj)
+                        result = hostname_pattern.sub('[HOSTNAME_REDACTED]', result)
+                        return result
+                    return obj
 
+                if parsed:
                     redacted = redact(parsed)
                     zip_file.writestr(
                         'ai-agent-sanitized.yaml',
                         yaml.safe_dump(redacted, sort_keys=False, default_flow_style=False),
                     )
-                except Exception:
-                    # Fallback: write raw if sanitization fails
+            except Exception:
+                # Fallback: write raw base if sanitization fails
+                if os.path.exists(settings.CONFIG_PATH):
                     with open(settings.CONFIG_PATH, 'r') as f:
                         zip_file.writestr('ai-agent-sanitized.yaml', f.read())
             
@@ -1440,9 +1557,9 @@ async def import_configuration(file: UploadFile = File(...)):
         # Create backups of current config
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        if os.path.exists(settings.CONFIG_PATH):
-            backup_path = f"{settings.CONFIG_PATH}.bak.{timestamp}"
-            shutil.copy2(settings.CONFIG_PATH, backup_path)
+        if os.path.exists(settings.LOCAL_CONFIG_PATH):
+            backup_path = f"{settings.LOCAL_CONFIG_PATH}.bak.{timestamp}"
+            shutil.copy2(settings.LOCAL_CONFIG_PATH, backup_path)
             
         if os.path.exists(settings.ENV_PATH):
             backup_path = f"{settings.ENV_PATH}.bak.{timestamp}"
@@ -1451,12 +1568,16 @@ async def import_configuration(file: UploadFile = File(...)):
         with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
             # Check contents
             file_names = zip_ref.namelist()
-            if 'ai-agent.yaml' not in file_names and '.env' not in file_names:
-                raise HTTPException(status_code=400, detail="ZIP must contain ai-agent.yaml or .env")
+            if 'ai-agent.yaml' not in file_names and 'ai-agent.local.yaml' not in file_names and '.env' not in file_names:
+                raise HTTPException(status_code=400, detail="ZIP must contain ai-agent.yaml, ai-agent.local.yaml, or .env")
             
-            # Extract
-            if 'ai-agent.yaml' in file_names:
-                with open(settings.CONFIG_PATH, 'wb') as f:
+            # Extract: imported ai-agent.yaml content goes to the LOCAL override
+            # so the git-tracked base stays clean.
+            if 'ai-agent.local.yaml' in file_names:
+                with open(settings.LOCAL_CONFIG_PATH, 'wb') as f:
+                    f.write(zip_ref.read('ai-agent.local.yaml'))
+            elif 'ai-agent.yaml' in file_names:
+                with open(settings.LOCAL_CONFIG_PATH, 'wb') as f:
                     f.write(zip_ref.read('ai-agent.yaml'))
                     
             if '.env' in file_names:
@@ -1477,19 +1598,13 @@ def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bo
 
     This helper is used by model-management flows (local-ai sync).
 
-    Safety properties (aligned with update_yaml_config):
-    - Creates a timestamped backup and rotates old backups
-    - Validates resulting YAML against the canonical AppConfig schema
-    - Writes atomically (temp file + rename) and preserves file mode
+    Reads the merged config (base + local), applies the change, validates,
+    and writes the result to the LOCAL override file so the git-tracked
+    base stays clean.
     """
     try:
-        if not os.path.exists(settings.CONFIG_PATH):
-            return False
-
-        with open(settings.CONFIG_PATH, 'r') as f:
-            config = _safe_load_no_duplicates(f.read())
-
-        if not isinstance(config, dict):
+        config = _read_merged_config_dict()
+        if not config:
             return False
 
         providers = config.get('providers')
@@ -1512,28 +1627,8 @@ def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bo
         # Validate before writing
         _validate_ai_agent_config(content)
 
-        # Backup + rotate
-        if os.path.exists(settings.CONFIG_PATH):
-            import datetime
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_path = f"{settings.CONFIG_PATH}.bak.{timestamp}"
-            with open(settings.CONFIG_PATH, 'r') as src:
-                with open(backup_path, 'w') as dst:
-                    dst.write(src.read())
-            _rotate_backups(settings.CONFIG_PATH)
-
-        # Atomic write (preserve permissions)
-        dir_path = os.path.dirname(settings.CONFIG_PATH)
-        original_mode = os.stat(settings.CONFIG_PATH).st_mode if os.path.exists(settings.CONFIG_PATH) else None
-
-        with tempfile.NamedTemporaryFile('w', dir=dir_path, delete=False, suffix='.tmp') as tf:
-            tf.write(content)
-            temp_path = tf.name
-
-        if original_mode is not None:
-            os.chmod(temp_path, original_mode)
-
-        os.replace(temp_path, settings.CONFIG_PATH)
+        # Write to LOCAL override file
+        _write_local_config(content)
 
         return True
     except Exception as e:

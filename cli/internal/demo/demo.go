@@ -194,12 +194,18 @@ func (r *Runner) testConfiguration() error {
 		}
 	}
 	
-	// Check for YAML config
-	yamlPath := "config/ai-agent.yaml"
+	// Check for YAML config (prefer local override, fall back to base)
+	yamlPath := "config/ai-agent.local.yaml"
 	if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
-		yamlPath = "../config/ai-agent.yaml"
+		yamlPath = "config/ai-agent.yaml"
 		if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
-			return fmt.Errorf("config/ai-agent.yaml not found")
+			yamlPath = "../config/ai-agent.local.yaml"
+			if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+				yamlPath = "../config/ai-agent.yaml"
+				if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+					return fmt.Errorf("config/ai-agent.yaml not found")
+				}
+			}
 		}
 	}
 	

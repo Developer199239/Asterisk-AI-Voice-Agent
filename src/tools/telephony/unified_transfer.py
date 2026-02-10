@@ -5,7 +5,7 @@ This tool replaces the separate transfer_call and transfer_to_queue tools
 with a single unified interface for all transfer types.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple, List
 import structlog
 
 from ..base import Tool, ToolDefinition, ToolParameter, ToolCategory
@@ -29,13 +29,11 @@ class UnifiedTransferTool(Tool):
     def definition(self) -> ToolDefinition:
         """Return tool definition."""
         return ToolDefinition(
-            name="transfer",
+            name="blind_transfer",
             description=(
-                "Transfer the caller to another destination. "
-                "Choose from configured destinations like: "
-                "'sales_agent', 'support_agent', 'sales_queue', 'support_queue', "
-                "'sales_team', 'support_team'. "
-                "The system will validate the destination exists."
+                "Blind transfer the caller to another destination. "
+                "Use a configured destination key from Tools -> Transfer Destinations. "
+                "The system validates that the destination exists before transferring."
             ),
             category=ToolCategory.TELEPHONY,
             requires_channel=True,
@@ -45,14 +43,90 @@ class UnifiedTransferTool(Tool):
                     name="destination",
                     type="string",
                     description=(
-                        "Name of the destination to transfer to. "
-                        "Examples: 'sales_agent' for direct agent, "
-                        "'sales_queue' for ACD queue, 'sales_team' for ring group"
+                        "Configured destination key or close match "
+                        "(matched against destination key/description)."
                     ),
                     required=True
                 )
             ]
         )
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return " ".join(str(value or "").strip().lower().replace("_", " ").replace("-", " ").split())
+
+    def _resolve_destination_key(self, destination: Any, destinations: Dict[str, Any]) -> Tuple[Optional[str], str]:
+        raw = str(destination or "").strip()
+        if not raw:
+            return None, "empty_input"
+
+        if raw in destinations:
+            return raw, "exact_key"
+
+        normalized = self._normalize_text(raw)
+
+        # Case-insensitive exact key match.
+        for key in destinations.keys():
+            if self._normalize_text(key) == normalized:
+                return str(key), "casefold_key"
+
+        # Key prefix/contains matching.
+        for key in destinations.keys():
+            key_norm = self._normalize_text(key)
+            if key_norm.startswith(normalized) or normalized in key_norm:
+                return str(key), "partial_key"
+
+        # Direct target number match (e.g., destination="6000" should map
+        # to a configured key such as "support_agent" with target=6000).
+        target_matches: List[str] = []
+        for key, cfg in destinations.items():
+            if not isinstance(cfg, dict):
+                continue
+            target_norm = self._normalize_text(str(cfg.get("target", "")))
+            if target_norm and target_norm == normalized:
+                target_matches.append(str(key))
+        if len(target_matches) == 1:
+            return target_matches[0], "exact_target"
+        if len(target_matches) > 1:
+            return None, "ambiguous_target"
+
+        # Description prefix/contains matching.
+        for key, cfg in destinations.items():
+            if not isinstance(cfg, dict):
+                continue
+            description_norm = self._normalize_text(cfg.get("description", ""))
+            if description_norm and (description_norm.startswith(normalized) or normalized in description_norm):
+                return str(key), "partial_description"
+
+        # Multi-word fallback (e.g., "live agent"): all tokens must match key or description.
+        tokens = [t for t in normalized.split() if t]
+        if tokens:
+            token_matches = []
+            for key, cfg in destinations.items():
+                if not isinstance(cfg, dict):
+                    continue
+                haystack = f"{self._normalize_text(key)} {self._normalize_text(cfg.get('description', ''))}".strip()
+                if all(token in haystack for token in tokens):
+                    token_matches.append(str(key))
+            if len(token_matches) == 1:
+                return token_matches[0], "token_match"
+            if len(token_matches) > 1:
+                return None, "ambiguous_token_match"
+
+        # Generic "human transfer" fallback:
+        # If the user asks for a person/agent and exactly one extension destination exists,
+        # use that destination.
+        human_intent_tokens = {"agent", "human", "person", "representative", "rep", "operator", "live"}
+        if any(t in human_intent_tokens for t in tokens):
+            extension_keys = [
+                str(key)
+                for key, cfg in destinations.items()
+                if isinstance(cfg, dict) and str(cfg.get("type", "")).strip().lower() == "extension"
+            ]
+            if len(extension_keys) == 1:
+                return extension_keys[0], "single_extension_human_fallback"
+
+        return None, "no_match"
     
     async def execute(
         self,
@@ -88,57 +162,58 @@ class UnifiedTransferTool(Tool):
                 "message": "Transfer service is not available",
             }
         
-        # Fuzzy matching for common destination patterns
-        # Maps generic terms to configured destination keys
+        # Resolve exact / fuzzy destination name without hardcoded destination keys.
         if destination and destination not in destinations:
-            dest_lower = destination.lower().strip()
-            matched = None
-            
-            # Try exact match first (case-insensitive)
-            for key in destinations:
-                if key.lower() == dest_lower:
-                    matched = key
-                    break
-            
-            # Try prefix/contains matching
-            if not matched:
-                for key in destinations:
-                    key_lower = key.lower()
-                    # "sales" matches "sales_agent", "sales_team", "sales_queue"
-                    if key_lower.startswith(dest_lower) or dest_lower in key_lower:
-                        matched = key
-                        logger.info("Fuzzy matched destination", 
-                                   original=destination, matched=matched)
-                        break
-            
-            # Try common aliases
-            if not matched:
-                alias_map = {
-                    'sales': 'sales_team',
-                    'support': 'support_team', 
-                    'live agent': 'sales_agent',
-                    'live person': 'sales_agent',
-                    'agent': 'sales_agent',
-                    'human': 'sales_agent',
-                    'person': 'sales_agent',
-                    'representative': 'support_agent',
-                    'rep': 'support_agent',
-                }
-                if dest_lower in alias_map and alias_map[dest_lower] in destinations:
-                    matched = alias_map[dest_lower]
-                    logger.info("Alias matched destination",
-                               original=destination, matched=matched)
-            
+            matched, match_reason = self._resolve_destination_key(destination, destinations)
             if matched:
+                dest_cfg = destinations.get(matched) if isinstance(destinations, dict) else {}
+                logger.info(
+                    "Resolved destination alias",
+                    call_id=context.call_id,
+                    original=destination,
+                    matched=matched,
+                    reason=match_reason,
+                    matched_type=(dest_cfg or {}).get("type"),
+                    matched_target=(dest_cfg or {}).get("target"),
+                )
                 destination = matched
-        
+            else:
+                destination_debug = []
+                for key, cfg in destinations.items():
+                    if not isinstance(cfg, dict):
+                        continue
+                    destination_debug.append(
+                        {
+                            "key": str(key),
+                            "type": str(cfg.get("type", "")),
+                            "target": str(cfg.get("target", "")),
+                            "description": str(cfg.get("description", ""))[:80],
+                        }
+                    )
+                logger.warning(
+                    "Transfer destination resolution failed",
+                    call_id=context.call_id,
+                    requested_destination=destination,
+                    reason=match_reason,
+                    configured_destinations=destination_debug[:12],
+                )
+
         # Validate destination exists
         if destination not in destinations:
-            logger.error("Invalid destination", destination=destination, 
-                        available=list(destinations.keys()))
+            available_keys = [str(k) for k in destinations.keys()]
+            logger.error(
+                "Invalid destination",
+                call_id=context.call_id,
+                destination=destination,
+                available=available_keys,
+            )
+            available_hint = ", ".join(sorted(available_keys)[:12])
+            message = f"Unknown destination: {destination}"
+            if available_hint:
+                message += f". Available destinations: {available_hint}"
             return {
                 "status": "failed",
-                "message": f"Unknown destination: {destination}"
+                "message": message
             }
         
         dest_config = destinations[destination]

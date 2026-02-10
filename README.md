@@ -454,8 +454,9 @@ agent version             # Version information
 
 ## ⚙ Configuration
 
-### Two-File Configuration
-- **[`config/ai-agent.yaml`](config/ai-agent.yaml)** - Golden baseline configs.
+### Three-File Configuration
+- **[`config/ai-agent.yaml`](config/ai-agent.yaml)** - Golden baseline configs (git-tracked, upstream-managed).
+- **`config/ai-agent.local.yaml`** - Operator overrides (git-ignored). Any keys here are deep-merged on top of the base file at startup; all Admin UI and CLI writes go here so upstream updates never conflict.
 - **[`.env`](.env.example)** - Secrets and API keys (git-ignored).
 
 **Example `.env`:**

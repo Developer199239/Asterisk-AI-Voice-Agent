@@ -9064,10 +9064,16 @@ class Engine:
 
                     # Contexts are the source of truth for tool allowlisting: enforce at execution time too.
                     allowed_tools: set[str] = set()
+                    allowed_tools_canonical: set[str] = set()
                     try:
+                        from src.tools.registry import tool_registry
                         allowed_tools = set((llm_options or {}).get("tools") or [])
+                        allowed_tools_canonical = {
+                            tool_registry.canonicalize_tool_name(name) for name in allowed_tools
+                        }
                     except Exception:
                         allowed_tools = set()
+                        allowed_tools_canonical = set()
                     if tool_calls:
                         if not allowed_tools:
                             logger.info(
@@ -9078,7 +9084,11 @@ class Engine:
                             tool_calls = []
                         else:
                             before_count = len(tool_calls)
-                            tool_calls = [tc for tc in tool_calls if tc.get("name") in allowed_tools]
+                            tool_calls = [
+                                tc
+                                for tc in tool_calls
+                                if tool_registry.canonicalize_tool_name(tc.get("name")) in allowed_tools_canonical
+                            ]
                             dropped = before_count - len(tool_calls)
                             if dropped:
                                 logger.info(
@@ -9426,13 +9436,13 @@ class Engine:
                                         return
 
                                     # Handle Terminal Transfer
-                                    if name in ["transfer"] and result.get("status") == "success":
+                                    if tool_registry.canonicalize_tool_name(name) == "blind_transfer" and result.get("status") == "success":
                                         logger.info("Transfer successful, ending turn loop", tool=name)
                                         return
                                     
                                     # Handle non-terminal tools (e.g., request_transcript)
                                     # Feed result back to LLM for continuation
-                                    if not result.get("will_hangup") and name not in ["transfer"]:
+                                    if not result.get("will_hangup") and tool_registry.canonicalize_tool_name(name) != "blind_transfer":
                                         tool_result_msg = result.get("message", f"Tool {name} executed successfully.")
                                         # Add tool result to conversation history
                                         conversation_history.append({
@@ -9485,7 +9495,7 @@ class Engine:
                                                         next_name = next_tc.get("name")
                                                         next_args = next_tc.get("parameters") or {}
                                                         try:
-                                                            if allowed_tools and next_name not in allowed_tools:
+                                                            if allowed_tools and tool_registry.canonicalize_tool_name(next_name) not in allowed_tools_canonical:
                                                                 logger.info(
                                                                     "Skipping disallowed follow-up tool call",
                                                                     call_id=call_id,
@@ -11620,7 +11630,7 @@ class Engine:
                 except Exception:
                     logger.debug("Failed resolving context tool allowlist", call_id=call_id, exc_info=True)
 
-            if function_name not in allowed_tools:
+            if not tool_registry.is_tool_allowed(function_name, allowed_tools):
                 result = {"status": "error", "message": f"Tool '{function_name}' not allowed for this call"}
             else:
                 # Build tool execution context

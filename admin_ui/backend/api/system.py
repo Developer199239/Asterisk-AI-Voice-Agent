@@ -2732,6 +2732,100 @@ class AriTestRequest(BaseModel):
     ssl_verify: bool = True  # Set to False for self-signed certs
 
 
+class AriExtensionStatusResponse(BaseModel):
+    success: bool
+    source: str = "unknown"  # device_state | endpoint | error
+    status: str = "unknown"  # available | busy | unknown
+    state: str = ""
+    device_state_id: str = ""
+    endpoint_tech: str = ""
+    endpoint_resource: str = ""
+    error: str = ""
+
+
+def _ari_env_settings() -> dict:
+    """
+    Resolve ARI connection settings.
+
+    Prefer container environment variables (what the container actually runs with),
+    but fall back to `.env` for friendliness in dev setups.
+    """
+    host = (os.environ.get("ASTERISK_HOST") or _dotenv_value("ASTERISK_HOST") or "127.0.0.1").strip()
+    scheme = (os.environ.get("ASTERISK_ARI_SCHEME") or _dotenv_value("ASTERISK_ARI_SCHEME") or "http").strip()
+    port_raw = (os.environ.get("ASTERISK_ARI_PORT") or _dotenv_value("ASTERISK_ARI_PORT") or "8088").strip()
+    user = (
+        os.environ.get("ASTERISK_ARI_USERNAME")
+        or os.environ.get("ARI_USERNAME")
+        or _dotenv_value("ASTERISK_ARI_USERNAME")
+        or _dotenv_value("ARI_USERNAME")
+        or ""
+    ).strip()
+    password = (
+        os.environ.get("ASTERISK_ARI_PASSWORD")
+        or os.environ.get("ARI_PASSWORD")
+        or _dotenv_value("ASTERISK_ARI_PASSWORD")
+        or _dotenv_value("ARI_PASSWORD")
+        or ""
+    ).strip()
+    ssl_verify_raw = (os.environ.get("ASTERISK_ARI_SSL_VERIFY") or _dotenv_value("ASTERISK_ARI_SSL_VERIFY") or "true").strip().lower()
+    ssl_verify = ssl_verify_raw not in ("0", "false", "no", "off")
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 8088
+
+    return {
+        "host": host,
+        "scheme": scheme,
+        "port": port,
+        "username": user,
+        "password": password,
+        "ssl_verify": ssl_verify,
+    }
+
+
+def _extract_device_state_id(dial_string: str, device_state_tech: str, extension_key: str) -> str:
+    s = (dial_string or "").strip()
+    if s:
+        m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
+        if m:
+            tech = str(m.group(1)).upper()
+            num = str(m.group(2))
+            return f"{tech}/{num}"
+    tech = (device_state_tech or "").strip()
+    key = (extension_key or "").strip()
+    if tech and tech.lower() != "auto" and key.isdigit():
+        return f"{tech.upper()}/{key}"
+    return ""
+
+
+def _extract_endpoint(dial_string: str, device_state_tech: str, extension_key: str) -> tuple[str, str]:
+    s = (dial_string or "").strip()
+    if s:
+        m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
+        if m:
+            return (str(m.group(1)).upper(), str(m.group(2)))
+    tech = (device_state_tech or "").strip()
+    key = (extension_key or "").strip()
+    if tech and tech.lower() != "auto" and key:
+        return (tech.upper(), key)
+    return ("", "")
+
+
+def _classify_device_state(state: str) -> str:
+    s = (state or "").strip().upper()
+    if s in ("NOT_INUSE",):
+        return "available"
+    if s in ("INUSE", "BUSY", "RINGING", "RINGINUSE", "ONHOLD"):
+        return "busy"
+    if not s:
+        return "unknown"
+    if s in ("UNAVAILABLE", "UNKNOWN", "INVALID"):
+        return "unknown"
+    # Be conservative for unrecognized states.
+    return "unknown"
+
+
 @router.post("/test-ari")
 async def test_ari_connection(request: AriTestRequest):
     """Test connection to Asterisk ARI endpoint"""
@@ -2805,6 +2899,89 @@ async def test_ari_connection(request: AriTestRequest):
             "success": False,
             "error": "Connection failed - check host/port/scheme and credentials."
         }
+
+
+@router.get("/ari/extension-status", response_model=AriExtensionStatusResponse)
+async def ari_extension_status(key: str = "", device_state_tech: str = "auto", dial_string: str = ""):
+    """
+    Low-complexity helper for the Admin UI:
+    check the current ARI device state (preferred) or endpoint state (fallback)
+    for a configured internal extension.
+    """
+    import httpx
+    from urllib.parse import quote
+
+    extension_key = (key or "").strip()
+    settings = _ari_env_settings()
+    if not settings.get("username") or not settings.get("password"):
+        return AriExtensionStatusResponse(success=False, source="error", status="unknown", error="Missing ARI credentials in environment (.env).")
+
+    device_state_id = _extract_device_state_id(dial_string, device_state_tech, extension_key)
+    endpoint_tech, endpoint_resource = _extract_endpoint(dial_string, device_state_tech, extension_key)
+
+    if not device_state_id and not (endpoint_tech and endpoint_resource):
+        return AriExtensionStatusResponse(
+            success=False,
+            source="error",
+            status="unknown",
+            error="Unable to derive device state id from dial string or tech/key.",
+        )
+
+    verify = settings["ssl_verify"] if settings["scheme"] == "https" else True
+    base = f"{settings['scheme']}://{settings['host']}:{settings['port']}/ari"
+
+    async with httpx.AsyncClient(timeout=8.0, verify=verify) as client:
+        if device_state_id:
+            url = f"{base}/deviceStates/{quote(device_state_id, safe='')}"
+            try:
+                resp = await client.get(url, auth=(settings["username"], settings["password"]))
+                if resp.status_code == 200:
+                    data = resp.json() or {}
+                    state = str(data.get("state") or "")
+                    return AriExtensionStatusResponse(
+                        success=True,
+                        source="device_state",
+                        status=_classify_device_state(state),
+                        state=state,
+                        device_state_id=device_state_id,
+                        endpoint_tech=endpoint_tech,
+                        endpoint_resource=endpoint_resource,
+                    )
+            except Exception:
+                logger.debug("ARI device state query failed", exc_info=True)
+
+        if endpoint_tech and endpoint_resource:
+            url = f"{base}/endpoints/{quote(endpoint_tech, safe='')}/{quote(endpoint_resource, safe='')}"
+            try:
+                resp = await client.get(url, auth=(settings["username"], settings["password"]))
+                if resp.status_code == 200:
+                    data = resp.json() or {}
+                    state = str(data.get("state") or "")
+                    # Endpoint state is not "availability"; be conservative.
+                    status = "unknown"
+                    if state.strip().lower() in ("online", "reachable", "registered"):
+                        status = "available"
+                    return AriExtensionStatusResponse(
+                        success=True,
+                        source="endpoint",
+                        status=status,
+                        state=state,
+                        device_state_id=device_state_id,
+                        endpoint_tech=endpoint_tech,
+                        endpoint_resource=endpoint_resource,
+                    )
+            except Exception:
+                logger.debug("ARI endpoint query failed", exc_info=True)
+
+    return AriExtensionStatusResponse(
+        success=False,
+        source="error",
+        status="unknown",
+        device_state_id=device_state_id,
+        endpoint_tech=endpoint_tech,
+        endpoint_resource=endpoint_resource,
+        error="Unable to retrieve device state or endpoint state from ARI.",
+    )
 
 
 # =============================================================================

@@ -210,7 +210,8 @@ src/
     vad.py               # Voice activity detection
 
 config/
-  ai-agent.yaml          # Main configuration
+  ai-agent.yaml          # Main configuration (git-tracked baseline)
+  ai-agent.local.yaml    # Operator overrides (git-ignored, deep-merged on top)
   contexts/              # System prompts
 ```
 

@@ -297,7 +297,11 @@ func runUpdate() (retErr error) {
 	if ctx.stashed {
 		printUpdateStep("Restoring stashed changes")
 		if err := gitStashPop(ctx); err != nil {
-			return err
+			printUpdateInfo("⚠ Stash pop conflict detected; recovering from backup")
+			if recoverErr := recoverFromStashConflict(ctx); recoverErr != nil {
+				return fmt.Errorf("stash pop failed and recovery also failed: %w (original: %v)", recoverErr, err)
+			}
+			printUpdateInfo("Operator config restored from backup — update will continue")
 		}
 	}
 	if strings.TrimSpace(ctx.oldSHA) != strings.TrimSpace(ctx.newSHA) {
@@ -802,6 +806,7 @@ func createUpdateBackups(ctx *updateContext) error {
 	paths := []string{
 		".env",
 		filepath.Join("config", "ai-agent.yaml"),
+		filepath.Join("config", "ai-agent.local.yaml"),
 		filepath.Join("config", "users.json"),
 		filepath.Join("config", "contexts"),
 	}
@@ -1001,6 +1006,60 @@ func gitStashPop(ctx *updateContext) error {
 		// On conflict, git typically returns non-zero and leaves the stash in place.
 		return fmt.Errorf("git stash pop failed (possible conflicts). Your stash is likely preserved; run `git stash list` and resolve conflicts: %w", err)
 	}
+	return nil
+}
+
+// recoverFromStashConflict handles a failed git stash pop by resetting the conflicted
+// working tree, dropping the failed stash, and restoring operator-owned config files
+// from the pre-update backup so the update can continue.
+func recoverFromStashConflict(ctx *updateContext) error {
+	// 1. Reset the conflicted working tree to the (already merged) HEAD.
+	if _, err := runGitCmd("checkout", "--", "."); err != nil {
+		return fmt.Errorf("git checkout -- . failed: %w", err)
+	}
+
+	// 2. Drop the stash entry that caused the conflict.
+	//    After a failed `stash pop`, the stash entry is preserved at stash@{0}.
+	if _, err := runGitCmd("stash", "drop"); err != nil {
+		// Non-fatal: the stash may have been consumed on some git versions.
+		printUpdateInfo("Note: could not drop stash (may already be consumed): %v", err)
+	}
+
+	// 3. Restore operator config from the backup created earlier in this run.
+	if ctx.backupDir == "" {
+		return errors.New("no backup directory available for recovery")
+	}
+
+	configFiles := []string{
+		".env",
+		filepath.Join("config", "ai-agent.yaml"),
+		filepath.Join("config", "ai-agent.local.yaml"),
+		filepath.Join("config", "users.json"),
+	}
+
+	for _, rel := range configFiles {
+		src := filepath.Join(ctx.backupDir, rel)
+		if _, err := os.Stat(src); err != nil {
+			continue // backup didn't include this file (e.g. local.yaml may not exist yet)
+		}
+		if err := copyFile(src, rel); err != nil {
+			return fmt.Errorf("failed to restore %s from backup: %w", rel, err)
+		}
+		printUpdateInfo("Restored %s", rel)
+	}
+
+	// Restore contexts directory if backed up.
+	ctxSrc := filepath.Join(ctx.backupDir, "config", "contexts")
+	if info, err := os.Stat(ctxSrc); err == nil && info.IsDir() {
+		ctxDst := filepath.Join("config", "contexts")
+		_ = os.RemoveAll(ctxDst)
+		if err := copyDir(ctxSrc, ctxDst); err != nil {
+			return fmt.Errorf("failed to restore config/contexts from backup: %w", err)
+		}
+		printUpdateInfo("Restored config/contexts/")
+	}
+
+	ctx.stashed = false
 	return nil
 }
 
@@ -1335,6 +1394,7 @@ func printUpdateFailureRecovery(ctx *updateContext, err error) {
 		fmt.Println("Recovery (restore operator-owned config):")
 		fmt.Printf("  cp %s .env\n", filepath.Join(ctx.backupDir, ".env"))
 		fmt.Printf("  cp %s %s\n", filepath.Join(ctx.backupDir, "config", "ai-agent.yaml"), filepath.Join("config", "ai-agent.yaml"))
+		fmt.Printf("  cp %s %s  # if exists\n", filepath.Join(ctx.backupDir, "config", "ai-agent.local.yaml"), filepath.Join("config", "ai-agent.local.yaml"))
 		fmt.Printf("  cp %s %s\n", filepath.Join(ctx.backupDir, "config", "users.json"), filepath.Join("config", "users.json"))
 		fmt.Println("  # Replace contexts directory (if needed):")
 		fmt.Printf("  rm -rf %s && cp -r %s %s\n",

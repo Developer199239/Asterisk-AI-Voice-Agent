@@ -221,7 +221,7 @@ class CheckExtensionStatusTool(Tool):
             ),
             category=ToolCategory.TELEPHONY,
             phase=ToolPhase.IN_CALL,
-            is_global=True,
+            is_global=False,
             requires_channel=False,
             max_execution_time=10,
             parameters=[

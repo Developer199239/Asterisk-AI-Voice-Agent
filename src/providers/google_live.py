@@ -1615,7 +1615,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
 
                 # Enforce allowlist from context
-                if not self._allowed_tools or func_name not in self._allowed_tools:
+                if not self._allowed_tools or not tool_registry.is_tool_allowed(func_name, self._allowed_tools):
                     result = {
                         "status": "error",
                         "message": f"Tool '{func_name}' not allowed for this call",
