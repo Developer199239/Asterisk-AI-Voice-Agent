@@ -406,6 +406,7 @@ const EnvPage = () => {
         'CALL_HISTORY_ENABLED', 'CALL_HISTORY_RETENTION_DAYS', 'CALL_HISTORY_DB_PATH',
         // System - Outbound Campaign
         'AAVA_OUTBOUND_EXTENSION_IDENTITY', 'AAVA_OUTBOUND_AMD_CONTEXT', 'AAVA_MEDIA_DIR', 'AAVA_VM_UPLOAD_MAX_BYTES',
+        'AAVA_OUTBOUND_PBX_TYPE', 'AAVA_OUTBOUND_DIAL_CONTEXT', 'AAVA_OUTBOUND_DIAL_PREFIX', 'AAVA_OUTBOUND_CHANNEL_TECH',
         // System - Docker Build Settings (build-time ARGs, require rebuild)
         'INCLUDE_VOSK', 'INCLUDE_SHERPA', 'INCLUDE_FASTER_WHISPER',
         'INCLUDE_PIPER', 'INCLUDE_KOKORO', 'INCLUDE_MELOTTS', 'INCLUDE_LLAMA', 'INCLUDE_KROKO_EMBEDDED',
@@ -1572,6 +1573,41 @@ const EnvPage = () => {
                                     value={env['AAVA_OUTBOUND_AMD_CONTEXT'] || 'aava-outbound-amd'}
                                     onChange={(e) => updateEnv('AAVA_OUTBOUND_AMD_CONTEXT', e.target.value)}
                                     tooltip="Dialplan context for AMD hop."
+                                />
+                                <FormSelect
+                                    label="PBX Type"
+                                    value={env['AAVA_OUTBOUND_PBX_TYPE'] || 'freepbx'}
+                                    onChange={(e) => updateEnv('AAVA_OUTBOUND_PBX_TYPE', e.target.value)}
+                                    options={[
+                                        { value: 'freepbx', label: 'FreePBX' },
+                                        { value: 'vicidial', label: 'ViciDial' },
+                                        { value: 'generic', label: 'Generic Asterisk' },
+                                    ]}
+                                    tooltip="Controls FreePBX-specific channel vars (AMPUSER/FROMEXTEN). ViciDial and generic skip them."
+                                />
+                                <FormInput
+                                    label="Dial Context"
+                                    value={env['AAVA_OUTBOUND_DIAL_CONTEXT'] || 'from-internal'}
+                                    onChange={(e) => updateEnv('AAVA_OUTBOUND_DIAL_CONTEXT', e.target.value)}
+                                    tooltip="Asterisk dialplan context for Local/ origination. FreePBX: from-internal, ViciDial: default."
+                                />
+                                <FormInput
+                                    label="Dial Prefix"
+                                    value={env['AAVA_OUTBOUND_DIAL_PREFIX'] || ''}
+                                    onChange={(e) => updateEnv('AAVA_OUTBOUND_DIAL_PREFIX', e.target.value)}
+                                    tooltip="Prefix prepended to phone number for carrier routing. ViciDial example: 911."
+                                />
+                                <FormSelect
+                                    label="Channel Tech"
+                                    value={env['AAVA_OUTBOUND_CHANNEL_TECH'] || 'auto'}
+                                    onChange={(e) => updateEnv('AAVA_OUTBOUND_CHANNEL_TECH', e.target.value)}
+                                    options={[
+                                        { value: 'auto', label: 'Auto (PJSIP \u2192 SIP)' },
+                                        { value: 'pjsip', label: 'PJSIP only' },
+                                        { value: 'sip', label: 'SIP only (chan_sip)' },
+                                        { value: 'local_only', label: 'Local only (no probing)' },
+                                    ]}
+                                    tooltip="Channel technology for internal extension probing. ViciDial uses SIP (chan_sip)."
                                 />
                                 <FormInput
                                     label="Media Directory"
