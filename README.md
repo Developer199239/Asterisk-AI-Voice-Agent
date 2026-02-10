@@ -335,7 +335,8 @@ docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_u
 
 **Key Features:**
 - **Setup Wizard**: Visual provider configuration.
-- **Dashboard**: Real-time system metrics and container status.
+- **Dashboard**: Real-time system metrics, container status, and Asterisk connection indicator.
+- **Asterisk Setup**: Live ARI status, module checklist, config audit with guided fix commands.
 - **Live Logs**: WebSocket-based log streaming.
 - **YAML Editor**: Monaco-based editor with validation.
 
