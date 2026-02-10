@@ -2932,12 +2932,21 @@ def _extract_device_state_id(dial_string: str, device_state_tech: str, extension
         m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
         if m:
             tech = str(m.group(1)).upper()
-            num = str(m.group(2))
+            try:
+                num = str(int(str(m.group(2))))
+            except Exception:
+                num = ""
+            if not num:
+                return ""
             return f"{tech}/{num}"
     tech = _normalize_ari_tech(device_state_tech)
     key = (extension_key or "").strip()
     if tech and key.isdigit():
-        return f"{tech}/{key}"
+        try:
+            num = str(int(key))
+        except Exception:
+            return ""
+        return f"{tech}/{num}"
     return ""
 
 
@@ -2946,11 +2955,20 @@ def _extract_endpoint(dial_string: str, device_state_tech: str, extension_key: s
     if s:
         m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
         if m:
-            return (str(m.group(1)).upper(), str(m.group(2)))
+            tech = str(m.group(1)).upper()
+            try:
+                num = str(int(str(m.group(2))))
+            except Exception:
+                return ("", "")
+            return (tech, num)
     tech = _normalize_ari_tech(device_state_tech)
     key = (extension_key or "").strip()
     if tech and key.isdigit():
-        return (tech, key)
+        try:
+            num = str(int(key))
+        except Exception:
+            return ("", "")
+        return (tech, num)
     return ("", "")
 
 
@@ -3051,8 +3069,6 @@ async def ari_extension_status(key: str = "", device_state_tech: str = "auto", d
     for a configured internal extension.
     """
     import httpx
-    from urllib.parse import quote
-
     extension_key = (key or "").strip()
     settings = _ari_env_settings()
     if not settings.get("username") or not settings.get("password"):
@@ -3074,7 +3090,8 @@ async def ari_extension_status(key: str = "", device_state_tech: str = "auto", d
 
     async with httpx.AsyncClient(timeout=8.0, verify=verify) as client:
         if device_state_id:
-            url = f"{base}/deviceStates/{quote(device_state_id, safe='')}"
+            # device_state_id is normalized to ALLOWED_TECH + numeric extension only.
+            url = f"{base}/deviceStates/{device_state_id.replace('/', '%2F')}"
             try:
                 resp = await client.get(url, auth=(settings["username"], settings["password"]))
                 if resp.status_code == 200:
@@ -3093,7 +3110,8 @@ async def ari_extension_status(key: str = "", device_state_tech: str = "auto", d
                 logger.debug("ARI device state query failed", exc_info=True)
 
         if endpoint_tech and endpoint_resource:
-            url = f"{base}/endpoints/{quote(endpoint_tech, safe='')}/{quote(endpoint_resource, safe='')}"
+            # endpoint_tech/resource are normalized to allowlisted tech + numeric extension.
+            url = f"{base}/endpoints/{endpoint_tech}/{endpoint_resource}"
             try:
                 resp = await client.get(url, auth=(settings["username"], settings["password"]))
                 if resp.status_code == 200:
