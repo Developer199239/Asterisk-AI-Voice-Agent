@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Plus, Trash2, Settings } from 'lucide-react';
+import { Plus, Trash2, Settings, Loader2 } from 'lucide-react';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { Modal } from '../ui/Modal';
 import { EmailTemplateModal } from './EmailTemplateModal';
@@ -109,6 +109,21 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
             if (status === 'available') return 'bg-emerald-500';
             if (status === 'busy') return 'bg-red-500';
             return 'bg-amber-500';
+        };
+
+        const _statusPillClass = (status: string, loading: boolean) => {
+            if (loading) return 'border-border bg-muted/40 text-muted-foreground';
+            if (status === 'available') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700';
+            if (status === 'busy') return 'border-red-500/30 bg-red-500/10 text-red-700';
+            return 'border-amber-500/30 bg-amber-500/10 text-amber-800';
+        };
+
+        const _statusLabel = (status: string, loading: boolean, checkedAt?: string) => {
+            if (loading) return 'Checking';
+            if (!checkedAt) return 'Check status';
+            if (status === 'available') return 'Available';
+            if (status === 'busy') return 'Busy';
+            return 'Unknown';
         };
 
         const checkLiveAgentStatus = async (rowId: string, key: string, ext: any) => {
@@ -633,10 +648,14 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                     const status = String(st.status || 'unknown');
                                     const loading = Boolean(st.loading);
                                     const dotClass = _statusDotClass(status, loading);
+                                    const pillClass = _statusPillClass(status, loading);
+                                    const label = _statusLabel(status, loading, st.checkedAt);
                                     const titleParts: string[] = [];
-                                    titleParts.push('Click to check status via ARI');
+                                    titleParts.push('Checks Asterisk ARI device/endpoint state');
+                                    titleParts.push('Click to refresh');
                                     if (st.source) titleParts.push(`source=${st.source}`);
                                     if (st.state) titleParts.push(`state=${st.state}`);
+                                    if (st.checkedAt) titleParts.push(`checked=${st.checkedAt}`);
                                     if (st.error) titleParts.push(`error=${st.error}`);
                                     const title = titleParts.join(' • ');
 
@@ -647,21 +666,13 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                             const derived = extractNumericExtensionKeyFromDialString(ext?.dial_string || '');
                                             const displayKey = isNumericKey(key) ? key : derived;
                                             return (
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        type="button"
-                                                        className={`w-3 h-3 rounded-full ${dotClass} ring-1 ring-border`}
-                                                        title={title}
-                                                        onClick={() => checkLiveAgentStatus(rowId, key, ext)}
-                                                    />
-	                                                <input
-	                                                    className="w-full border rounded px-2 py-1 text-sm bg-muted text-muted-foreground"
-	                                                    placeholder="Auto"
-	                                                    value={displayKey || ''}
-	                                                    disabled
-	                                                    title="Auto-derived from dial string (e.g. PJSIP/2765 -> 2765). Numeric keys are locked to prevent accidental renames."
-	                                                />
-                                                </div>
+	                                            <input
+	                                                className="w-full border rounded px-2 py-1 text-sm bg-muted text-muted-foreground"
+	                                                placeholder="Auto"
+	                                                value={displayKey || ''}
+	                                                disabled
+	                                                title="Auto-derived from dial string (e.g. PJSIP/2765 -> 2765). Numeric keys are locked to prevent accidental renames."
+	                                            />
                                             );
                                         })()}
 	                                </div>
@@ -751,23 +762,34 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                             updated[key] = { ...ext, description: e.target.value };
                                             updateNestedConfig('extensions', 'internal', updated);
                                         }}
-                                        title="Description"
-                                    />
-                                </div>
-                                <div className="md:col-span-1 flex justify-center">
-                                    <FormSwitch
-                                        checked={ext.transfer ?? true}
-                                        onChange={(e) => {
-                                            const updated = { ...(config.extensions?.internal || {}) };
-                                            updated[key] = { ...ext, transfer: e.target.checked };
-                                            updateNestedConfig('extensions', 'internal', updated);
-                                        }}
-                                        className="mb-0"
-                                        label=""
-                                        description=""
-                                    />
-                                </div>
-	                                <div className="md:col-span-1 flex justify-end">
+	                                        title="Description"
+	                                    />
+	                                </div>
+	                                <div className="md:col-span-2 flex justify-end items-center gap-3">
+                                        <button
+                                            type="button"
+                                            className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-medium border ${pillClass} hover:bg-accent/40 transition-colors`}
+                                            title={title}
+                                            onClick={() => checkLiveAgentStatus(rowId, key, ext)}
+                                        >
+                                            {loading ? (
+                                                <Loader2 className="w-3 h-3 animate-spin" />
+                                            ) : (
+                                                <span className={`w-2 h-2 rounded-full ${dotClass}`} />
+                                            )}
+                                            <span>{label}</span>
+                                        </button>
+	                                    <FormSwitch
+	                                        checked={ext.transfer ?? true}
+	                                        onChange={(e) => {
+	                                            const updated = { ...(config.extensions?.internal || {}) };
+	                                            updated[key] = { ...ext, transfer: e.target.checked };
+	                                            updateNestedConfig('extensions', 'internal', updated);
+	                                        }}
+	                                        className="mb-0 border-0 p-0 bg-transparent"
+	                                        label=""
+	                                        description=""
+	                                    />
 	                                    <button
 	                                        onClick={() => {
 	                                            const updated = { ...(config.extensions?.internal || {}) };
