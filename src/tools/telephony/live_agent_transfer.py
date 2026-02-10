@@ -1,9 +1,10 @@
 """
 Live Agent Transfer Tool - explicit handoff to configured live agent destination.
 
-This tool is a thin, config-driven wrapper around blind_transfer so operators can:
-- enable/disable a dedicated "live agent" action per context in Admin UI, and
-- control which transfer destination key represents the live agent.
+This tool is intended to mean: the caller explicitly asked for a human/live agent.
+
+Default behavior (v6.1.1+): route to configured Live Agents (`tools.extensions.internal`).
+Advanced/legacy override: route via a transfer destination key (`tools.transfer.*`).
 """
 
 from typing import Any, Dict, Optional, Tuple, List, Mapping
@@ -27,8 +28,9 @@ class LiveAgentTransferTool(Tool):
         return ToolDefinition(
             name="live_agent_transfer",
             description=(
-                "Transfer the caller to the configured live agent destination. "
-                "Destination is configured in Tools -> Transfer -> Live Agent Destination Key."
+                "Transfer the caller to a live (human) agent. "
+                "By default routes to Tools -> Live Agents. Optionally, an advanced/legacy "
+                "override can route live-agent requests via a transfer destination."
             ),
             category=ToolCategory.TELEPHONY,
             requires_channel=True,
@@ -160,55 +162,62 @@ class LiveAgentTransferTool(Tool):
         if isinstance(transfer_cfg, dict) and transfer_cfg.get("enabled") is False:
             return {"status": "failed", "message": "Transfer service is disabled"}
 
-        destination_key, source = self._resolve_live_agent_destination_key(transfer_cfg)
-        if not destination_key:
+        # 1) Explicit override: if an operator configured a live_agent_destination_key, use it.
+        configured_key = str(transfer_cfg.get("live_agent_destination_key") or "").strip() if isinstance(transfer_cfg, dict) else ""
+        if configured_key:
+            destination_key, source = self._resolve_live_agent_destination_key(transfer_cfg)
+            if destination_key:
+                logger.info(
+                    "Executing live agent transfer via configured destination override",
+                    call_id=context.call_id,
+                    destination_key=destination_key,
+                    resolution_source=source,
+                )
+                return await UnifiedTransferTool().execute({"destination": destination_key}, context)
             logger.warning(
-                "Live agent transfer destination not configured",
+                "Live agent destination override misconfigured; falling back to Live Agents",
                 call_id=context.call_id,
+                configured_key=configured_key,
                 resolution_source=source,
             )
 
-            extensions_cfg = context.get_config_value("tools.extensions.internal") or {}
-            extension, ext_entry, ext_source = self._resolve_live_agent_extension_from_internal_config(extensions_cfg)
-            if not extension:
-                return {
-                    "status": "failed",
-                    "message": (
-                        "Live agent destination is not configured. "
-                        "Set tools.transfer.live_agent_destination_key, mark a transfer destination "
-                        "as live_agent, or configure tools.extensions.internal with a Live Agent extension."
-                    ),
-                }
-
-            mapped_destination_key = self._map_extension_to_transfer_destination_key(extension, transfer_cfg)
-            if mapped_destination_key:
-                logger.info(
-                    "Resolved live agent transfer via internal extension mapping",
-                    call_id=context.call_id,
-                    extension=extension,
-                    destination_key=mapped_destination_key,
-                    resolution_source=ext_source,
-                )
-                return await UnifiedTransferTool().execute({"destination": mapped_destination_key}, context)
-
+        # 2) Default: route to Live Agents (tools.extensions.internal) if configured.
+        extensions_cfg = context.get_config_value("tools.extensions.internal") or {}
+        extension, ext_entry, ext_source = self._resolve_live_agent_extension_from_internal_config(extensions_cfg)
+        if extension:
             display_name = str(ext_entry.get("name", "") or "").strip()
             display_desc = str(ext_entry.get("description", "") or "").strip()
             description = display_name or display_desc or "Live agent"
 
             logger.info(
-                "Resolved live agent transfer via direct internal extension fallback",
+                "Executing live agent transfer via Live Agents",
                 call_id=context.call_id,
                 extension=extension,
                 resolution_source=ext_source,
             )
             return await UnifiedTransferTool()._transfer_to_extension(context, extension, description)
 
-        logger.info(
-            "Executing live agent transfer",
+        # 3) Fallback (legacy): if no Live Agents are configured, allow transfer-destination based routing.
+        destination_key, source = self._resolve_live_agent_destination_key(transfer_cfg)
+        if destination_key:
+            logger.info(
+                "Executing live agent transfer via destination fallback",
+                call_id=context.call_id,
+                destination_key=destination_key,
+                resolution_source=source,
+            )
+            return await UnifiedTransferTool().execute({"destination": destination_key}, context)
+
+        logger.warning(
+            "Live agent transfer not configured",
             call_id=context.call_id,
-            destination_key=destination_key,
             resolution_source=source,
         )
-
-        # Reuse canonical blind transfer execution path to avoid logic duplication.
-        return await UnifiedTransferTool().execute({"destination": destination_key}, context)
+        return {
+            "status": "failed",
+            "message": (
+                "Live agent transfer is not configured. "
+                "Configure Tools -> Live Agents, or set tools.transfer.live_agent_destination_key, "
+                "or mark a transfer destination as live_agent."
+            ),
+        }
