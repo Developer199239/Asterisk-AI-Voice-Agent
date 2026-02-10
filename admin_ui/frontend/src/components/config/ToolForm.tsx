@@ -49,6 +49,12 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
         const internalExtRowMetaRef = useRef<Record<string, { autoDerivedKey: boolean }>>({});
         const internalExtRenameToastKeyRef = useRef<string>('');
         const [internalExtStatusByRowId, setInternalExtStatusByRowId] = useState<Record<string, any>>({});
+        const liveAgentsCount = Object.keys(config.extensions?.internal || {}).length;
+        const hasLiveAgents = liveAgentsCount > 0;
+        const hasLiveAgentDestinationOverride = Boolean((config.transfer?.live_agent_destination_key || '').trim());
+        const [showLiveAgentRoutingAdvanced, setShowLiveAgentRoutingAdvanced] = useState<boolean>(
+            () => !hasLiveAgents || hasLiveAgentDestinationOverride
+        );
 
         const isNumericKey = (k: string) => /^\d+$/.test((k || '').trim());
 
@@ -259,6 +265,13 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
         };
     }, []);
 
+    useEffect(() => {
+        // If user has no Live Agents configured or already has an override set, keep advanced visible.
+        if (!hasLiveAgents || hasLiveAgentDestinationOverride) {
+            setShowLiveAgentRoutingAdvanced(true);
+        }
+    }, [hasLiveAgents, hasLiveAgentDestinationOverride]);
+
     const openTemplateModal = (tool: 'send_email_summary' | 'request_transcript') => {
         setTemplateModalTool(tool);
         setTemplateModalOpen(true);
@@ -387,33 +400,53 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                         />
                     </div>
 
-                    {config.transfer?.enabled !== false && (
-                        <div className="mt-4 space-y-4">
-                            <FormInput
-                                label="Channel Technology"
-                                value={config.transfer?.technology || 'SIP'}
-                                onChange={(e) => updateNestedConfig('transfer', 'technology', e.target.value)}
-                                tooltip="Channel technology for extension transfers (SIP, PJSIP, IAX2, etc.). Default: SIP"
-                                placeholder="SIP"
-                            />
-                            <FormSelect
-                                label="Live Agent Destination Key"
-                                value={config.transfer?.live_agent_destination_key || ''}
-                                onChange={(e) => updateNestedConfig('transfer', 'live_agent_destination_key', e.target.value)}
-                                options={[
-                                    { value: '', label: 'Not set (falls back to destination key: live_agent)' },
-                                    ...Object.entries(config.transfer?.destinations || {})
-                                        .filter(([key, dest]: [string, any]) => key === 'live_agent' || Boolean(dest?.live_agent))
-                                        .map(([key]) => key)
-                                        .sort()
-                                        .map((key) => ({ value: key, label: key })),
-                                ]}
-                                tooltip="Used by the live_agent_transfer tool. Select which transfer destination key should be used for live-agent handoff."
-                            />
-                            <div className="flex justify-between items-center">
-                                <FormLabel>Destinations</FormLabel>
-                                <button
-                                    onClick={handleAddDestination}
+	                    {config.transfer?.enabled !== false && (
+	                        <div className="mt-4 space-y-4">
+	                            <FormInput
+	                                label="Channel Technology"
+	                                value={config.transfer?.technology || 'SIP'}
+	                                onChange={(e) => updateNestedConfig('transfer', 'technology', e.target.value)}
+	                                tooltip="Channel technology for extension transfers (SIP, PJSIP, IAX2, etc.). Default: SIP"
+	                                placeholder="SIP"
+	                            />
+                                <FormSwitch
+                                    label="Advanced: Route Live Agent via Destination"
+                                    description={
+                                        hasLiveAgents
+                                            ? "Default: live_agent_transfer uses Live Agents. Enable only if you want live-agent requests routed to a transfer destination (queue/ring group/extension)."
+                                            : "No Live Agents configured. Enable to select which transfer destination should handle live-agent requests."
+                                    }
+                                    checked={showLiveAgentRoutingAdvanced}
+                                    onChange={(e) => {
+                                        const enabled = e.target.checked;
+                                        setShowLiveAgentRoutingAdvanced(enabled);
+                                        if (!enabled) {
+                                            // Disable override behavior and reduce config confusion.
+                                            unsetNestedConfig('transfer', 'live_agent_destination_key');
+                                        }
+                                    }}
+                                    className="mb-0 border border-border rounded-lg p-3 bg-background/50"
+                                />
+                                {showLiveAgentRoutingAdvanced && (
+	                                <FormSelect
+	                                    label="Live Agent Destination Key (Advanced)"
+	                                    value={config.transfer?.live_agent_destination_key || ''}
+	                                    onChange={(e) => updateNestedConfig('transfer', 'live_agent_destination_key', e.target.value)}
+	                                    options={[
+	                                        { value: '', label: 'Not set (auto: destinations.live_agent or key live_agent)' },
+	                                        ...Object.entries(config.transfer?.destinations || {})
+	                                            .filter(([key, dest]: [string, any]) => key === 'live_agent' || Boolean(dest?.live_agent))
+	                                            .map(([key]) => key)
+	                                            .sort()
+	                                            .map((key) => ({ value: key, label: key })),
+	                                    ]}
+	                                    tooltip="Advanced/legacy override for live_agent_transfer. When set, live-agent requests route to this destination key instead of Live Agents."
+	                                />
+                                )}
+	                            <div className="flex justify-between items-center">
+	                                <FormLabel>Destinations</FormLabel>
+	                                <button
+	                                    onClick={handleAddDestination}
                                     className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors"
                                 >
                                     <Plus className="w-3 h-3 mr-1" /> Add Destination
