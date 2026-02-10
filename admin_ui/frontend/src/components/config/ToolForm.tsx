@@ -275,7 +275,9 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                 onChange={(e) => updateNestedConfig('transfer', 'live_agent_destination_key', e.target.value)}
                                 options={[
                                     { value: '', label: 'Not set (falls back to destination key: live_agent)' },
-                                    ...Object.keys(config.transfer?.destinations || {})
+                                    ...Object.entries(config.transfer?.destinations || {})
+                                        .filter(([key, dest]: [string, any]) => key === 'live_agent' || Boolean(dest?.live_agent))
+                                        .map(([key]) => key)
                                         .sort()
                                         .map((key) => ({ value: key, label: key })),
                                 ]}

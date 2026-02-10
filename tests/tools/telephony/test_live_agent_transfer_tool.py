@@ -26,7 +26,7 @@ class TestLiveAgentTransferTool:
             "live_agent_destination_key": "tier2_live",
             "destinations": {
                 "sales_agent": {"type": "extension", "target": "2765", "description": "Sales"},
-                "tier2_live": {"type": "extension", "target": "6000", "description": "Live Agent"},
+                "tier2_live": {"type": "extension", "target": "6000", "description": "Live Agent", "live_agent": True},
             },
         }
 
@@ -89,6 +89,7 @@ class TestLiveAgentTransferTool:
                     "name": "Live Agent",
                     "aliases": ["agent", "human"],
                     "dial_string": "SIP/6000",
+                    "description": "Live customer service representative",
                 },
             }
         }
@@ -115,6 +116,7 @@ class TestLiveAgentTransferTool:
                     "name": "Live Agent",
                     "aliases": ["live agent"],
                     "dial_string": "PJSIP/7007",
+                    "description": "Escalation desk",
                 },
             }
         }
@@ -126,3 +128,29 @@ class TestLiveAgentTransferTool:
         call_args = mock_ari_client.send_command.call_args.kwargs
         assert call_args["resource"] == f"channels/{tool_context.caller_channel_id}/continue"
         assert call_args["params"]["extension"] == "7007"
+
+    @pytest.mark.asyncio
+    async def test_ignores_misconfigured_live_agent_destination_key_and_uses_internal_extension(
+        self, tool, tool_context, mock_ari_client
+    ):
+        tool_context.config["tools"]["transfer"] = {
+            "enabled": True,
+            # Misconfigured: points at a normal destination (not marked live_agent).
+            "live_agent_destination_key": "support_agent",
+            "destinations": {
+                "support_agent": {"type": "extension", "target": "2765", "description": "Support agent"},
+            },
+        }
+        tool_context.config["tools"]["extensions"] = {
+            "internal": {
+                "6000": {"name": "Live Agent", "description": "Live customer service rep", "dial_string": "SIP/6000", "transfer": True},
+            }
+        }
+
+        result = await tool.execute({}, tool_context)
+
+        assert result["status"] == "success"
+        assert result["destination"] == "6000"
+        call_args = mock_ari_client.send_command.call_args.kwargs
+        assert call_args["resource"] == f"channels/{tool_context.caller_channel_id}/continue"
+        assert call_args["params"]["extension"] == "6000"

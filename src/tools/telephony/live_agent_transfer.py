@@ -6,7 +6,7 @@ This tool is a thin, config-driven wrapper around blind_transfer so operators ca
 - control which transfer destination key represents the live agent.
 """
 
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List, Mapping
 
 import structlog
 
@@ -46,13 +46,21 @@ class LiveAgentTransferTool(Tool):
 
         configured_key = str(transfer_cfg.get("live_agent_destination_key") or "").strip()
         if configured_key:
-            if configured_key in destinations:
+            cfg = destinations.get(configured_key)
+            # Prevent misrouting "live agent" to arbitrary destinations: only accept
+            # keys explicitly marked live_agent (or the conventional key name).
+            if isinstance(cfg, dict) and (bool(cfg.get("live_agent")) or configured_key == "live_agent"):
                 return configured_key, "config.live_agent_destination_key"
             return None, "configured_key_missing"
 
+        live_agent_keys: List[str] = []
         for key, cfg in destinations.items():
             if isinstance(cfg, dict) and bool(cfg.get("live_agent")):
-                return str(key), "destinations.<key>.live_agent"
+                live_agent_keys.append(str(key))
+        if len(live_agent_keys) == 1:
+            return live_agent_keys[0], "destinations.<key>.live_agent"
+        if len(live_agent_keys) > 1:
+            return None, "destinations.live_agent_ambiguous"
 
         if "live_agent" in destinations:
             return "live_agent", "default.live_agent_key"
@@ -63,9 +71,9 @@ class LiveAgentTransferTool(Tool):
     def _resolve_live_agent_extension_from_internal_config(
         cls,
         extensions_cfg: Dict[str, Any],
-    ) -> Tuple[Optional[str], str]:
+    ) -> Tuple[Optional[str], Dict[str, Any], str]:
         if not isinstance(extensions_cfg, dict) or not extensions_cfg:
-            return None, "extensions.internal.empty"
+            return None, {}, "extensions.internal.empty"
 
         def _numeric_extension_key(key: Any) -> Optional[str]:
             ext = str(key or "").strip()
@@ -73,42 +81,53 @@ class LiveAgentTransferTool(Tool):
                 return ext
             return None
 
-        explicit_flag: List[str] = []
-        name_match: List[str] = []
-        alias_match: List[str] = []
+        def _contains_live_agent(cfg: Mapping[str, Any]) -> bool:
+            hay = f"{cls._normalize_text(cfg.get('name'))} {cls._normalize_text(cfg.get('description'))}".strip()
+            tokens = [t for t in cls._normalize_text("live agent").split() if t]
+            return bool(tokens) and all(t in hay for t in tokens)
+
+        explicit_flag: List[Tuple[str, Dict[str, Any]]] = []
+        text_match: List[Tuple[str, Dict[str, Any]]] = []
+        alias_match: List[Tuple[str, Dict[str, Any]]] = []
 
         for key, cfg in extensions_cfg.items():
             extension = _numeric_extension_key(key)
             if not extension or not isinstance(cfg, dict):
                 continue
+            # Treat missing 'transfer' as enabled (UI defaults to true).
+            if cfg.get("transfer") is False:
+                continue
 
             if bool(cfg.get("live_agent")):
-                explicit_flag.append(extension)
+                explicit_flag.append((extension, dict(cfg)))
 
-            if cls._normalize_text(cfg.get("name")) == "live agent":
-                name_match.append(extension)
+            if _contains_live_agent(cfg):
+                text_match.append((extension, dict(cfg)))
 
             aliases = cfg.get("aliases")
             alias_values = aliases if isinstance(aliases, list) else [aliases] if aliases is not None else []
             if any(cls._normalize_text(alias) == "live agent" for alias in alias_values):
-                alias_match.append(extension)
+                alias_match.append((extension, dict(cfg)))
 
         if len(explicit_flag) == 1:
-            return explicit_flag[0], "extensions.internal.live_agent_flag"
+            ext, entry = explicit_flag[0]
+            return ext, entry, "extensions.internal.live_agent_flag"
         if len(explicit_flag) > 1:
-            return None, "extensions.internal.live_agent_flag_ambiguous"
+            return None, {}, "extensions.internal.live_agent_flag_ambiguous"
 
-        if len(name_match) == 1:
-            return name_match[0], "extensions.internal.name_live_agent"
-        if len(name_match) > 1:
-            return None, "extensions.internal.name_live_agent_ambiguous"
+        if len(text_match) == 1:
+            ext, entry = text_match[0]
+            return ext, entry, "extensions.internal.text_live_agent"
+        if len(text_match) > 1:
+            return None, {}, "extensions.internal.text_live_agent_ambiguous"
 
         if len(alias_match) == 1:
-            return alias_match[0], "extensions.internal.alias_live_agent"
+            ext, entry = alias_match[0]
+            return ext, entry, "extensions.internal.alias_live_agent"
         if len(alias_match) > 1:
-            return None, "extensions.internal.alias_live_agent_ambiguous"
+            return None, {}, "extensions.internal.alias_live_agent_ambiguous"
 
-        return None, "extensions.internal.unconfigured"
+        return None, {}, "extensions.internal.unconfigured"
 
     @staticmethod
     def _map_extension_to_transfer_destination_key(
@@ -146,7 +165,7 @@ class LiveAgentTransferTool(Tool):
             )
 
             extensions_cfg = context.get_config_value("tools.extensions.internal") or {}
-            extension, ext_source = self._resolve_live_agent_extension_from_internal_config(extensions_cfg)
+            extension, ext_entry, ext_source = self._resolve_live_agent_extension_from_internal_config(extensions_cfg)
             if not extension:
                 return {
                     "status": "failed",
@@ -168,13 +187,17 @@ class LiveAgentTransferTool(Tool):
                 )
                 return await UnifiedTransferTool().execute({"destination": mapped_destination_key}, context)
 
+            display_name = str(ext_entry.get("name", "") or "").strip()
+            display_desc = str(ext_entry.get("description", "") or "").strip()
+            description = display_name or display_desc or "Live agent"
+
             logger.info(
                 "Resolved live agent transfer via direct internal extension fallback",
                 call_id=context.call_id,
                 extension=extension,
                 resolution_source=ext_source,
             )
-            return await UnifiedTransferTool()._transfer_to_extension(context, extension, "Live agent")
+            return await UnifiedTransferTool()._transfer_to_extension(context, extension, description)
 
         logger.info(
             "Executing live agent transfer",
