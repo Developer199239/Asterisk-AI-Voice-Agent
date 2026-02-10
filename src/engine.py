@@ -5114,9 +5114,9 @@ class Engine:
             self._audiosocket_frame_count[caller_channel_id] = self._audiosocket_frame_count.get(caller_channel_id, 0) + 1
             frame_num = self._audiosocket_frame_count[caller_channel_id]
             
-            # Log every 10th frame + first 5 frames
-            if frame_num <= 5 or frame_num % 10 == 0:
-                logger.info(
+            # Keep this low-volume; per-frame info logs can cause IO/CPU jitter and degrade audio.
+            if frame_num <= 3 or frame_num % 250 == 0:
+                logger.debug(
                     "🎤 AUDIOSOCKET RX - Frame received",
                     call_id=caller_channel_id,
                     frame_num=frame_num,
@@ -5541,15 +5541,17 @@ class Engine:
                         logger.debug("Upstream squelch failed", call_id=caller_channel_id, exc_info=True)
                 
                 # Forward to provider
-                logger.info(
-                    "📤 CONTINUOUS INPUT - Forwarding frame to provider",
-                    call_id=caller_channel_id,
-                    provider=provider_name,
-                    frame_bytes=len(audio_bytes),
-                    pcm_bytes=len(pcm_bytes),
-                    gating_active=needs_gating and not session.audio_capture_enabled,
-                    is_silence=needs_gating and not session.audio_capture_enabled,
-                )
+                if frame_num <= 3 or frame_num % 250 == 0:
+                    logger.debug(
+                        "📤 CONTINUOUS INPUT - Forwarding frame to provider",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                        frame_num=frame_num,
+                        frame_bytes=len(audio_bytes),
+                        pcm_bytes=len(pcm_bytes),
+                        gating_active=needs_gating and not session.audio_capture_enabled,
+                        is_silence=needs_gating and not session.audio_capture_enabled,
+                    )
                 try:
                     self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
                 except Exception:
@@ -5562,14 +5564,16 @@ class Engine:
                         pcm_bytes,
                         pcm_rate,
                     )
-                    logger.info(
-                        "📤 CONTINUOUS INPUT - Encoded for provider",
-                        call_id=caller_channel_id,
-                        provider=provider_name,
-                        prov_payload_bytes=len(prov_payload),
-                        prov_enc=prov_enc,
-                        prov_rate=prov_rate,
-                    )
+                    if frame_num <= 3 or frame_num % 250 == 0:
+                        logger.debug(
+                            "📤 CONTINUOUS INPUT - Encoded for provider",
+                            call_id=caller_channel_id,
+                            provider=provider_name,
+                            frame_num=frame_num,
+                            prov_payload_bytes=len(prov_payload),
+                            prov_enc=prov_enc,
+                            prov_rate=prov_rate,
+                        )
                     try:
                         self.audio_capture.append_encoded(
                             session.call_id,
@@ -5589,19 +5593,23 @@ class Engine:
                     # Google Live needs to know audio is already at provider_rate to skip resampling
                     try:
                         await provider.send_audio(prov_payload, prov_rate, prov_enc)
-                        logger.info(
-                            "✅ CONTINUOUS INPUT - Frame sent to provider successfully",
-                            call_id=caller_channel_id,
-                            provider=provider_name,
-                        )
+                        if frame_num <= 3 or frame_num % 250 == 0:
+                            logger.debug(
+                                "✅ CONTINUOUS INPUT - Frame sent to provider",
+                                call_id=caller_channel_id,
+                                provider=provider_name,
+                                frame_num=frame_num,
+                            )
                     except TypeError:
                         # Fallback for providers with old signature (audio_chunk only)
                         await provider.send_audio(prov_payload)
-                        logger.info(
-                            "✅ CONTINUOUS INPUT - Frame sent to provider (legacy signature)",
-                            call_id=caller_channel_id,
-                            provider=provider_name,
-                        )
+                        if frame_num <= 3 or frame_num % 250 == 0:
+                            logger.debug(
+                                "✅ CONTINUOUS INPUT - Frame sent to provider (legacy signature)",
+                                call_id=caller_channel_id,
+                                provider=provider_name,
+                                frame_num=frame_num,
+                            )
                 except Exception as e:
                     logger.error(
                         "❌ CONTINUOUS INPUT - Provider forward error",
@@ -5623,7 +5631,7 @@ class Engine:
                     logger.debug("Provider barge-in fallback check failed (AudioSocket)", call_id=caller_channel_id, exc_info=True)
                 return
             else:
-                logger.info(
+                logger.debug(
                     "⚠️ CONTINUOUS INPUT - Block skipped",
                     call_id=caller_channel_id,
                     continuous_input=continuous_input,

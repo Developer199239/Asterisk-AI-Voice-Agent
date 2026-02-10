@@ -1270,13 +1270,21 @@ class StreamingPlaybackManager:
             cfg_wait = max(0.0, float(self.provider_grace_ms) / 1000.0)
         except Exception:
             cfg_wait = 0.5
-        if cfg_wait > 0.06 and not bool(stream_info.get('warned_grace_cap', False)):
+        # Avoid pathological "wait forever" configs, but don't hard-cap so low that
+        # bursty providers (e.g., Google Live) constantly drain the buffer and stutter.
+        max_wait_cap_sec = 2.0
+        if cfg_wait > max_wait_cap_sec and not bool(stream_info.get('warned_grace_cap', False)):
             try:
-                logger.warning("provider_grace_ms capped", call_id=call_id, configured_ms=int(self.provider_grace_ms), cap_ms=60)
+                logger.warning(
+                    "provider_grace_ms clamped",
+                    call_id=call_id,
+                    configured_ms=int(self.provider_grace_ms),
+                    clamp_ms=int(max_wait_cap_sec * 1000),
+                )
             except Exception:
                 pass
             stream_info['warned_grace_cap'] = True
-        max_wait = min(0.06, cfg_wait)
+        max_wait = min(max_wait_cap_sec, cfg_wait)
         if max_wait <= 0.0:
             stream_info.pop('low_water_deadline', None)
             return False
