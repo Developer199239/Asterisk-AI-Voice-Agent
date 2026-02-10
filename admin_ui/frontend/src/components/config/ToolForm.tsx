@@ -765,43 +765,47 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                                        title="Description"
 	                                    />
 	                                </div>
-	                                <div className="md:col-span-2 flex justify-end items-center gap-3">
+	                                <div className="md:col-span-2 flex justify-end items-center gap-3 min-w-0 overflow-hidden">
                                         <button
                                             type="button"
-                                            className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-medium border ${pillClass} hover:bg-accent/40 transition-colors`}
+                                            className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-medium border ${pillClass} hover:bg-accent/40 transition-colors min-w-0 max-w-[150px] overflow-hidden`}
                                             title={title}
                                             onClick={() => checkLiveAgentStatus(rowId, key, ext)}
                                         >
                                             {loading ? (
-                                                <Loader2 className="w-3 h-3 animate-spin" />
+                                                <Loader2 className="w-3 h-3 animate-spin shrink-0" />
                                             ) : (
-                                                <span className={`w-2 h-2 rounded-full ${dotClass}`} />
+                                                <span className={`w-2 h-2 rounded-full ${dotClass} shrink-0`} />
                                             )}
-                                            <span>{label}</span>
+                                            <span className="truncate whitespace-nowrap">{label}</span>
                                         </button>
-	                                    <FormSwitch
-	                                        checked={ext.transfer ?? true}
-	                                        onChange={(e) => {
-	                                            const updated = { ...(config.extensions?.internal || {}) };
-	                                            updated[key] = { ...ext, transfer: e.target.checked };
-	                                            updateNestedConfig('extensions', 'internal', updated);
-	                                        }}
-	                                        className="mb-0 border-0 p-0 bg-transparent"
-	                                        label=""
-	                                        description=""
-	                                    />
-	                                    <button
-	                                        onClick={() => {
-	                                            const updated = { ...(config.extensions?.internal || {}) };
-	                                            delete updated[key];
-                                                deleteInternalExtRowId(key);
-	                                            updateNestedConfig('extensions', 'internal', updated);
-	                                        }}
-	                                        className="p-2 text-destructive hover:bg-destructive/10 rounded"
-	                                        title="Delete Extension"
-	                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
+                                        <div className="shrink-0">
+	                                        <FormSwitch
+	                                            checked={ext.transfer ?? true}
+	                                            onChange={(e) => {
+	                                                const updated = { ...(config.extensions?.internal || {}) };
+	                                                updated[key] = { ...ext, transfer: e.target.checked };
+	                                                updateNestedConfig('extensions', 'internal', updated);
+	                                            }}
+	                                            className="mb-0 border-0 p-0 bg-transparent"
+	                                            label=""
+	                                            description=""
+	                                        />
+                                        </div>
+                                        <div className="shrink-0">
+	                                        <button
+	                                            onClick={() => {
+	                                                const updated = { ...(config.extensions?.internal || {}) };
+	                                                delete updated[key];
+                                                    deleteInternalExtRowId(key);
+	                                                updateNestedConfig('extensions', 'internal', updated);
+	                                            }}
+	                                            className="p-2 text-destructive hover:bg-destructive/10 rounded"
+	                                            title="Delete Extension"
+	                                        >
+	                                            <Trash2 className="w-4 h-4" />
+	                                        </button>
+                                        </div>
 	                                </div>
 	                            </div>
                                     );
