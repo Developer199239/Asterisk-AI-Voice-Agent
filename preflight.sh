@@ -1866,6 +1866,182 @@ check_asterisk_uid_gid() {
 }
 
 # ============================================================================
+# Asterisk Config Audit → JSON Manifest (AAVA: Asterisk Config Discovery)
+# ============================================================================
+check_asterisk_config() {
+    # Only run if Asterisk was detected on host
+    if [ "$ASTERISK_FOUND" != true ] || [ -z "$ASTERISK_DIR" ]; then
+        log_info "Asterisk config audit skipped (not detected on host)"
+        # Write minimal manifest so the UI knows preflight ran
+        _write_asterisk_manifest false "" "" false "" "{}"
+        return 0
+    fi
+
+    local APP_NAME
+    APP_NAME="$(grep -E '^[[:space:]]*app_name:' "$SCRIPT_DIR/config/ai-agent.yaml" 2>/dev/null | head -1 | sed 's/.*app_name:[[:space:]]*//' | tr -d '\r\n"'"'" || echo "asterisk-ai-voice-agent")"
+    [ -z "$APP_NAME" ] && APP_NAME="asterisk-ai-voice-agent"
+
+    local FREEPBX_DETECTED=false
+    local FREEPBX_VER=""
+    if [ -f "/etc/freepbx.conf" ] || [ -f "/etc/sangoma/pbx" ]; then
+        FREEPBX_DETECTED=true
+        FREEPBX_VER=$(fwconsole -V 2>/dev/null | head -1 || echo "detected")
+    fi
+
+    # --- ARI enabled check ---
+    local ari_enabled_ok=false
+    local ari_enabled_detail="not found"
+    # FreePBX splits config via #include; check both main and included files
+    for f in "$ASTERISK_DIR/ari.conf" "$ASTERISK_DIR/ari_general_additional.conf" "$ASTERISK_DIR/ari_general_custom.conf"; do
+        if [ -f "$f" ] && grep -qiE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*yes' "$f" 2>/dev/null; then
+            ari_enabled_ok=true
+            ari_enabled_detail="enabled=yes in $(basename "$f")"
+            break
+        fi
+    done
+    if [ "$ari_enabled_ok" = true ]; then
+        log_ok "ARI enabled: $ari_enabled_detail"
+    else
+        log_warn "ARI not enabled in ari.conf (or included files)"
+        log_info "  Fix: ensure 'enabled=yes' under [general] in ari.conf or ari_general_custom.conf"
+    fi
+
+    # --- ARI user check ---
+    local ari_user_ok=false
+    local ari_user_detail="not found"
+    local ARI_USERNAME="${ASTERISK_ARI_USERNAME:-}"
+    [ -z "$ARI_USERNAME" ] && ARI_USERNAME="$(grep -E '^ASTERISK_ARI_USERNAME=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '\r\n"'"'" || true)"
+    [ -z "$ARI_USERNAME" ] && ARI_USERNAME="AIAgent"
+    for f in "$ASTERISK_DIR/ari.conf" "$ASTERISK_DIR/ari_additional.conf" "$ASTERISK_DIR/ari_additional_custom.conf"; do
+        if [ -f "$f" ] && grep -qE "^\[$ARI_USERNAME\]" "$f" 2>/dev/null; then
+            ari_user_ok=true
+            ari_user_detail="[$ARI_USERNAME] found in $(basename "$f")"
+            break
+        fi
+    done
+    if [ "$ari_user_ok" = true ]; then
+        log_ok "ARI user: $ari_user_detail"
+    else
+        log_warn "ARI user [$ARI_USERNAME] not found in ari.conf (or included files)"
+        log_info "  Fix: add user block in ari_additional_custom.conf or via FreePBX Admin"
+    fi
+
+    # --- HTTP enabled check ---
+    local http_enabled_ok=false
+    local http_enabled_detail="not found"
+    for f in "$ASTERISK_DIR/http.conf" "$ASTERISK_DIR/http_additional.conf" "$ASTERISK_DIR/http_custom.conf"; do
+        if [ -f "$f" ] && grep -qiE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*yes' "$f" 2>/dev/null; then
+            http_enabled_ok=true
+            http_enabled_detail="enabled=yes in $(basename "$f")"
+            break
+        fi
+    done
+    if [ "$http_enabled_ok" = true ]; then
+        log_ok "HTTP server: $http_enabled_detail"
+    else
+        log_warn "HTTP server not enabled in http.conf (or included files)"
+        log_info "  Fix: ensure 'enabled=yes' under [general] in http.conf or http_custom.conf"
+    fi
+
+    # --- Dialplan context check ---
+    local dialplan_ok=false
+    local dialplan_detail="not found"
+    if [ -f "$ASTERISK_DIR/extensions_custom.conf" ]; then
+        if grep -qiE "Stasis\($APP_NAME\)" "$ASTERISK_DIR/extensions_custom.conf" 2>/dev/null; then
+            dialplan_ok=true
+            dialplan_detail="Stasis($APP_NAME) in extensions_custom.conf"
+        fi
+    fi
+    if [ "$dialplan_ok" = true ]; then
+        log_ok "Dialplan context: $dialplan_detail"
+    else
+        log_warn "No Stasis($APP_NAME) context found in extensions_custom.conf"
+        log_info "  Fix: add a context with 'Stasis($APP_NAME)' to extensions_custom.conf"
+    fi
+
+    # --- Module checks (requires asterisk binary) ---
+    local mod_audiosocket_ok=false mod_audiosocket_detail="binary not available"
+    local mod_res_ari_ok=false mod_res_ari_detail="binary not available"
+    local mod_res_stasis_ok=false mod_res_stasis_detail="binary not available"
+    local mod_chan_pjsip_ok=false mod_chan_pjsip_detail="binary not available"
+
+    if command -v asterisk &>/dev/null; then
+        _check_ast_module "app_audiosocket" && mod_audiosocket_ok=true && mod_audiosocket_detail="Running"
+        [ "$mod_audiosocket_ok" = false ] && mod_audiosocket_detail="Not loaded"
+
+        _check_ast_module "res_ari" && mod_res_ari_ok=true && mod_res_ari_detail="Running"
+        [ "$mod_res_ari_ok" = false ] && mod_res_ari_detail="Not loaded"
+
+        _check_ast_module "res_stasis" && mod_res_stasis_ok=true && mod_res_stasis_detail="Running"
+        [ "$mod_res_stasis_ok" = false ] && mod_res_stasis_detail="Not loaded"
+
+        _check_ast_module "chan_pjsip" && mod_chan_pjsip_ok=true && mod_chan_pjsip_detail="Running"
+        [ "$mod_chan_pjsip_ok" = false ] && mod_chan_pjsip_detail="Not loaded"
+
+        log_ok "Asterisk modules: audiosocket=$mod_audiosocket_detail, res_ari=$mod_res_ari_detail, res_stasis=$mod_res_stasis_detail, chan_pjsip=$mod_chan_pjsip_detail"
+    else
+        log_info "Asterisk binary not in PATH — module checks skipped (will use ARI in Admin UI)"
+    fi
+
+    # --- Build JSON checks object ---
+    local CHECKS
+    CHECKS=$(cat <<JSONEOF
+{
+    "ari_enabled": { "ok": $ari_enabled_ok, "detail": "$ari_enabled_detail" },
+    "ari_user": { "ok": $ari_user_ok, "detail": "$ari_user_detail" },
+    "http_enabled": { "ok": $http_enabled_ok, "detail": "$http_enabled_detail" },
+    "dialplan_context": { "ok": $dialplan_ok, "detail": "$dialplan_detail" },
+    "module_app_audiosocket": { "ok": $mod_audiosocket_ok, "detail": "$mod_audiosocket_detail" },
+    "module_res_ari": { "ok": $mod_res_ari_ok, "detail": "$mod_res_ari_detail" },
+    "module_res_stasis": { "ok": $mod_res_stasis_ok, "detail": "$mod_res_stasis_detail" },
+    "module_chan_pjsip": { "ok": $mod_chan_pjsip_ok, "detail": "$mod_chan_pjsip_detail" }
+}
+JSONEOF
+    )
+
+    _write_asterisk_manifest true "${ASTERISK_VERSION:-unknown}" "$ASTERISK_DIR" "$FREEPBX_DETECTED" "$FREEPBX_VER" "$CHECKS"
+}
+
+# Helper: check if an Asterisk module is loaded via CLI
+_check_ast_module() {
+    local mod_name="$1"
+    local output
+    output=$(asterisk -rx "module show like $mod_name" 2>/dev/null || true)
+    echo "$output" | grep -qiE "$mod_name.*Running"
+}
+
+# Helper: write the JSON manifest to data/asterisk_status.json
+_write_asterisk_manifest() {
+    local ast_found="$1" ast_version="$2" config_dir="$3" fpbx_detected="$4" fpbx_version="$5" checks_json="$6"
+    local MANIFEST_DIR="$SCRIPT_DIR/data"
+    local MANIFEST_FILE="$MANIFEST_DIR/asterisk_status.json"
+    local TIMESTAMP
+    TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")"
+
+    mkdir -p "$MANIFEST_DIR" 2>/dev/null || true
+
+    cat > "$MANIFEST_FILE" <<MANIFESTEOF
+{
+    "timestamp": "$TIMESTAMP",
+    "asterisk_found": $ast_found,
+    "asterisk_version": "$ast_version",
+    "config_dir": "$config_dir",
+    "freepbx": {
+        "detected": $fpbx_detected,
+        "version": "$fpbx_version"
+    },
+    "checks": $checks_json
+}
+MANIFESTEOF
+
+    if [ -f "$MANIFEST_FILE" ]; then
+        log_ok "Asterisk config manifest: $MANIFEST_FILE"
+    else
+        log_warn "Could not write Asterisk config manifest to $MANIFEST_FILE"
+    fi
+}
+
+# ============================================================================
 # GPU Detection (AAVA-140)
 # ============================================================================
 check_gpu() {
@@ -2232,6 +2408,7 @@ main() {
     check_docker_gid
     check_asterisk
     check_asterisk_uid_gid
+    check_asterisk_config
     check_gpu
     check_ports
     

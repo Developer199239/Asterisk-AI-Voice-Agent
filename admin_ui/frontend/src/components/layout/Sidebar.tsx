@@ -100,6 +100,7 @@ const Sidebar = () => {
                 <SidebarGroup title="System">
                     <SidebarItem to="/env" icon={Globe} label="Environment" />
                     <SidebarItem to="/docker" icon={Container} label="Docker Services" />
+                    <SidebarItem to="/asterisk" icon={Phone} label="Asterisk" />
                     <SidebarItem to="/models" icon={HardDrive} label="Models" />
                     <SidebarItem to="/updates" icon={ArrowUpCircle} label="Updates" />
                     <SidebarItem to="/logs" icon={FileText} label="Logs" />
