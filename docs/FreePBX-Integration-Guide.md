@@ -503,7 +503,21 @@ curl http://127.0.0.1:15000/health
 }
 ```
 
-### 5.2 Test Call
+### 5.2 Admin UI Asterisk Status
+
+The Admin UI includes a dedicated **System → Asterisk** page that shows:
+
+- **ARI connection status** (version, uptime, last reload)
+- **Required modules** (`app_audiosocket`, `res_ari`, `res_stasis`, `chan_pjsip`, `res_http_websocket`) with live status
+- **Configuration checklist** from the last `./preflight.sh` run (ARI enabled, ARI user, HTTP server, dialplan context)
+- **App registration** (whether the Stasis application is registered)
+- **Guided fix snippets** for any failed checks (copy-paste commands)
+
+The Dashboard also shows an Asterisk connection pill (green/red) that links to this page.
+
+> **Tip**: Run `./preflight.sh` on the host before checking the Admin UI to populate the configuration checklist. For remote Asterisk deployments, the live ARI checks still work — only the file-based config checks require local Asterisk.
+
+### 5.3 Test Call
 
 1. **Dial your Custom Destination** from a phone
 2. **Expected behavior**:

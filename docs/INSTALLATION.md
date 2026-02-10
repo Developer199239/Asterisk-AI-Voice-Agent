@@ -113,6 +113,10 @@ Preflight ensures required host directories exist with correct permissions, incl
 - `./models/{stt,tts,llm,kroko}` (mounted into `ai_engine` and `local_ai_server` as `/app/models`)
 - `./asterisk_media/ai-generated` (mounted as `/mnt/asterisk_media/ai-generated` for generated audio)
 
+Preflight also audits Asterisk configuration (when Asterisk is on the same host):
+- Checks ARI enabled, ARI user, HTTP server, dialplan context, and required modules
+- Writes results to `data/asterisk_status.json` — the Admin UI **System → Asterisk** page reads this manifest to display a configuration checklist with guided fix commands
+
 > Note: Admin UI health checks validate the media directory from within the `admin_ui` container.
 > On some systems Asterisk uses a non-default group ID; newer releases auto-detect this at `admin_ui` startup so the UI doesn't incorrectly warn after reboot.
 

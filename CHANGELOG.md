@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GPU Host/Runtime Indicators**: Runtime GPU probe details in local AI server status with CUDA guard for STT/TTS backend selection and CPU fallback when GPU is unavailable.
 - **GPU-Aware Compatibility Checks**: Force rebuild flow for incompatible runtime/device combinations with `force_incompatible_apply` flag for intentional overrides.
 - **Local-Hybrid Wizard Persistence**: Setup wizard correctly persists `local_hybrid` pipeline, local STT/TTS backend selections, and model mappings through env and YAML config.
+- **Asterisk Config Discovery (Admin UI)**: New **System → Asterisk** page with live ARI connection status, required module checklist, configuration audit from preflight, and guided fix snippets. Dashboard pill shows Asterisk connection state (green/red) with click-through. Supports both local and remote Asterisk deployments.
+- **Preflight Asterisk Config Audit**: `preflight.sh` now audits `ari.conf`, `http.conf`, `extensions_custom.conf`, and 4 key Asterisk modules (`app_audiosocket`, `res_ari`, `res_stasis`, `chan_pjsip`), writing results to `data/asterisk_status.json` for the Admin UI.
 
 ### Changed
 
