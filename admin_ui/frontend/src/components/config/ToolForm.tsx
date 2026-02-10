@@ -555,11 +555,11 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                {/* Extensions (basic editor) */}
 	                <div className="border border-border rounded-lg p-4 bg-card/50">
 	                    <div className="flex justify-between items-center mb-4">
-	                        <FormLabel>Extensions (Internal)</FormLabel>
+	                        <FormLabel>Live Agents</FormLabel>
 	                        <button
-                            onClick={() => {
-                                const existing = config.extensions?.internal || {};
-                                let idx = Object.keys(existing).length + 1;
+	                            onClick={() => {
+	                                const existing = config.extensions?.internal || {};
+	                                let idx = Object.keys(existing).length + 1;
                                 let key = `ext_${idx}`;
 	                                while (Object.prototype.hasOwnProperty.call(existing, key)) {
 	                                    idx += 1;
@@ -571,7 +571,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                            }}
 	                            className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors"
 	                        >
-	                            <Plus className="w-3 h-3 mr-1" /> Add Extension
+	                            <Plus className="w-3 h-3 mr-1" /> Add Live Agent
 	                        </button>
 	                    </div>
 	                    <div className="space-y-2">
@@ -707,14 +707,14 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                                    >
                                         <Trash2 className="w-4 h-4" />
                                     </button>
-                                </div>
-                            </div>
-                        ))}
-                        {Object.keys(config.extensions?.internal || {}).length === 0 && (
-                            <div className="text-sm text-muted-foreground">No internal extensions configured.</div>
-                        )}
-                    </div>
-                </div>
+	                                </div>
+	                            </div>
+	                        ))}
+	                        {Object.keys(config.extensions?.internal || {}).length === 0 && (
+	                            <div className="text-sm text-muted-foreground">No live agents configured.</div>
+	                        )}
+	                    </div>
+	                </div>
             </div>
 
             {/* Business Tools */}
