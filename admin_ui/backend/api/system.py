@@ -2895,10 +2895,10 @@ async def test_ari_connection(request: AriTestRequest):
                 "success": False,
                 "error": "SSL certificate verification failed - uncheck 'Verify SSL Certificate' for self-signed certs or hostname mismatches."
             }
-	        return {
-	            "success": False,
-	            "error": "Connection failed - check host/port/scheme and credentials."
-	        }
+        return {
+            "success": False,
+            "error": "Connection failed - check host/port/scheme and credentials."
+        }
 
 
 @router.get("/ari/extension-status", response_model=AriExtensionStatusResponse)
