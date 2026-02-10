@@ -46,6 +46,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
         // Keep a stable React key per internal extension row so key renames don't blow away focus/cursor.
         const internalExtRowIdsRef = useRef<Record<string, string>>({});
         const internalExtRowIdCounterRef = useRef(0);
+        const internalExtRowMetaRef = useRef<Record<string, { autoDerivedKey: boolean }>>({});
         const internalExtRenameToastKeyRef = useRef<string>('');
 
         const isNumericKey = (k: string) => /^\d+$/.test((k || '').trim());
@@ -68,7 +69,18 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                 internalExtRowIdCounterRef.current += 1;
                 map[configKey] = `internal-ext-row-${internalExtRowIdCounterRef.current}`;
             }
-            return map[configKey];
+            const rowId = map[configKey];
+            if (!internalExtRowMetaRef.current[rowId]) {
+                internalExtRowMetaRef.current[rowId] = { autoDerivedKey: false };
+            }
+            return rowId;
+        };
+
+        const getInternalExtRowMeta = (rowId: string) => {
+            if (!internalExtRowMetaRef.current[rowId]) {
+                internalExtRowMetaRef.current[rowId] = { autoDerivedKey: false };
+            }
+            return internalExtRowMetaRef.current[rowId];
         };
 
         const moveInternalExtRowId = (fromKey: string, toKey: string) => {
@@ -84,6 +96,10 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
         };
 
         const deleteInternalExtRowId = (k: string) => {
+            const rowId = internalExtRowIdsRef.current[k];
+            if (rowId) {
+                delete internalExtRowMetaRef.current[rowId];
+            }
             delete internalExtRowIdsRef.current[k];
         };
 
@@ -549,6 +565,8 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                                    idx += 1;
 	                                    key = `ext_${idx}`;
 	                                }
+                                    const rowId = getInternalExtRowId(key);
+                                    getInternalExtRowMeta(rowId).autoDerivedKey = true;
 	                                updateNestedConfig('extensions', 'internal', { ...existing, [key]: { name: '', description: '', dial_string: '', transfer: true, device_state_tech: 'auto' } });
 	                            }}
 	                            className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors"
@@ -597,25 +615,33 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                                            const existing = { ...(config.extensions?.internal || {}) };
 	                                            existing[key] = { ...ext, dial_string: nextDial };
 
-                                                if (!isNumericKey(key)) {
-                                                    const derivedKey = extractNumericExtensionKeyFromDialString(nextDial);
-                                                    if (derivedKey && derivedKey !== key) {
-                                                        if (Object.prototype.hasOwnProperty.call(existing, derivedKey)) {
-                                                            const toastKey = `internal-ext-rename-conflict:${key}->${derivedKey}`;
-                                                            if (internalExtRenameToastKeyRef.current !== toastKey) {
-                                                                internalExtRenameToastKeyRef.current = toastKey;
-                                                                toast.error(`An extension with key '${derivedKey}' already exists.`);
-                                                            }
-                                                        } else {
-                                                            const renamed: Record<string, any> = {};
-                                                            Object.entries(existing).forEach(([k, v]) => {
-                                                                if (k === key) renamed[derivedKey] = v;
-                                                                else renamed[k] = v;
-                                                            });
-                                                            moveInternalExtRowId(key, derivedKey);
-                                                            updateNestedConfig('extensions', 'internal', renamed);
-                                                            return;
+                                                const rowId = getInternalExtRowId(key);
+                                                const meta = getInternalExtRowMeta(rowId);
+
+                                                const derivedKey = extractNumericExtensionKeyFromDialString(nextDial);
+                                                const canAutoRename =
+                                                    Boolean(derivedKey) &&
+                                                    derivedKey !== key &&
+                                                    // Always allow placeholder keys to be renamed.
+                                                    (!isNumericKey(key) || meta.autoDerivedKey);
+
+                                                if (canAutoRename) {
+                                                    if (Object.prototype.hasOwnProperty.call(existing, derivedKey)) {
+                                                        const toastKey = `internal-ext-rename-conflict:${rowId}:${derivedKey}`;
+                                                        if (internalExtRenameToastKeyRef.current !== toastKey) {
+                                                            internalExtRenameToastKeyRef.current = toastKey;
+                                                            toast.error(`An extension with key '${derivedKey}' already exists.`);
                                                         }
+                                                    } else {
+                                                        meta.autoDerivedKey = true;
+                                                        const renamed: Record<string, any> = {};
+                                                        Object.entries(existing).forEach(([k, v]) => {
+                                                            if (k === key) renamed[derivedKey] = v;
+                                                            else renamed[k] = v;
+                                                        });
+                                                        moveInternalExtRowId(key, derivedKey);
+                                                        updateNestedConfig('extensions', 'internal', renamed);
+                                                        return;
                                                     }
                                                 }
 
