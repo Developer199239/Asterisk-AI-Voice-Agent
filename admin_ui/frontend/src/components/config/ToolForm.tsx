@@ -48,6 +48,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
         const internalExtRowIdCounterRef = useRef(0);
         const internalExtRowMetaRef = useRef<Record<string, { autoDerivedKey: boolean }>>({});
         const internalExtRenameToastKeyRef = useRef<string>('');
+        const [internalExtStatusByRowId, setInternalExtStatusByRowId] = useState<Record<string, any>>({});
 
         const isNumericKey = (k: string) => /^\d+$/.test((k || '').trim());
 
@@ -101,6 +102,56 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                 delete internalExtRowMetaRef.current[rowId];
             }
             delete internalExtRowIdsRef.current[k];
+        };
+
+        const _statusDotClass = (status: string, loading: boolean) => {
+            if (loading) return 'bg-muted animate-pulse';
+            if (status === 'available') return 'bg-emerald-500';
+            if (status === 'busy') return 'bg-red-500';
+            return 'bg-amber-500';
+        };
+
+        const checkLiveAgentStatus = async (rowId: string, key: string, ext: any) => {
+            const dialString = String(ext?.dial_string || '');
+            const tech = String(ext?.device_state_tech || 'auto');
+            if (!dialString.trim() && !String(key || '').trim()) {
+                toast.error('Set a dial string (e.g. PJSIP/2765) before checking status.');
+                return;
+            }
+
+            setInternalExtStatusByRowId((prev) => ({
+                ...prev,
+                [rowId]: { ...(prev[rowId] || {}), loading: true, error: '' },
+            }));
+
+            try {
+                const res = await axios.get('/api/system/ari/extension-status', {
+                    params: { key, device_state_tech: tech, dial_string: dialString },
+                });
+                const data = res?.data || {};
+                setInternalExtStatusByRowId((prev) => ({
+                    ...prev,
+                    [rowId]: {
+                        loading: false,
+                        success: Boolean(data.success),
+                        status: String(data.status || 'unknown'),
+                        state: String(data.state || ''),
+                        source: String(data.source || ''),
+                        checkedAt: new Date().toISOString(),
+                        error: String(data.error || ''),
+                    },
+                }));
+                if (!data.success && data.error) {
+                    toast.error(String(data.error));
+                }
+            } catch (e: any) {
+                const err = e?.response?.data?.detail || e?.message || 'Status check failed.';
+                setInternalExtStatusByRowId((prev) => ({
+                    ...prev,
+                    [rowId]: { ...(prev[rowId] || {}), loading: false, success: false, status: 'unknown', error: String(err) },
+                }));
+                toast.error(String(err));
+            }
         };
 
     const updateConfig = (field: string, value: any) => {
@@ -576,19 +627,41 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
 	                    </div>
 	                    <div className="space-y-2">
 	                        {Object.entries(config.extensions?.internal || {}).map(([key, ext]: [string, any]) => (
-	                            <div key={getInternalExtRowId(key)} className="grid grid-cols-1 md:grid-cols-12 gap-2 p-3 border rounded bg-background/50 items-center">
+                                (() => {
+                                    const rowId = getInternalExtRowId(key);
+                                    const st = internalExtStatusByRowId[rowId] || {};
+                                    const status = String(st.status || 'unknown');
+                                    const loading = Boolean(st.loading);
+                                    const dotClass = _statusDotClass(status, loading);
+                                    const titleParts: string[] = [];
+                                    titleParts.push('Click to check status via ARI');
+                                    if (st.source) titleParts.push(`source=${st.source}`);
+                                    if (st.state) titleParts.push(`state=${st.state}`);
+                                    if (st.error) titleParts.push(`error=${st.error}`);
+                                    const title = titleParts.join(' • ');
+
+                                    return (
+	                            <div key={rowId} className="grid grid-cols-1 md:grid-cols-12 gap-2 p-3 border rounded bg-background/50 items-center">
 	                                <div className="md:col-span-1">
                                         {(() => {
                                             const derived = extractNumericExtensionKeyFromDialString(ext?.dial_string || '');
                                             const displayKey = isNumericKey(key) ? key : derived;
                                             return (
-	                                    <input
-	                                        className="w-full border rounded px-2 py-1 text-sm bg-muted text-muted-foreground"
-	                                        placeholder="Auto"
-                                            value={displayKey || ''}
-                                            disabled
-	                                        title="Auto-derived from dial string (e.g. PJSIP/2765 -> 2765). Numeric keys are locked to prevent accidental renames."
-	                                    />
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        className={`w-3 h-3 rounded-full ${dotClass} ring-1 ring-border`}
+                                                        title={title}
+                                                        onClick={() => checkLiveAgentStatus(rowId, key, ext)}
+                                                    />
+	                                                <input
+	                                                    className="w-full border rounded px-2 py-1 text-sm bg-muted text-muted-foreground"
+	                                                    placeholder="Auto"
+	                                                    value={displayKey || ''}
+	                                                    disabled
+	                                                    title="Auto-derived from dial string (e.g. PJSIP/2765 -> 2765). Numeric keys are locked to prevent accidental renames."
+	                                                />
+                                                </div>
                                             );
                                         })()}
 	                                </div>
@@ -709,6 +782,8 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                     </button>
 	                                </div>
 	                            </div>
+                                    );
+                                })()
 	                        ))}
 	                        {Object.keys(config.extensions?.internal || {}).length === 0 && (
 	                            <div className="text-sm text-muted-foreground">No live agents configured.</div>
