@@ -1110,7 +1110,11 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
             self._mark_ws_disconnected()
             try:
-                await self._emit_provider_disconnected(code=close_code, reason=close_reason)
+                # Only treat abnormal closes as a "disconnect" signal for the engine.
+                # Normal closure (1000) can occur during expected teardown and should not
+                # force an immediate hangup (would cut off farewell audio / cleanup flows).
+                if close_code != 1000:
+                    await self._emit_provider_disconnected(code=close_code, reason=close_reason)
             except Exception:
                 logger.debug(
                     "Failed to emit ProviderDisconnected event",
