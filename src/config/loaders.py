@@ -128,7 +128,9 @@ def deep_merge_dicts(base: dict, override: dict) -> dict:
     Recursively deep-merge *override* into a copy of *base*.
 
     - Dict values are merged recursively.
-    - All other types (lists, scalars, None) in *override* replace the base value.
+    - If *override* explicitly sets a key to None, that key is deleted from the merged output.
+      This allows operator-local overrides to remove upstream defaults.
+    - All other types (lists, scalars) in *override* replace the base value.
     - Keys only in *base* are preserved (new upstream defaults propagate automatically).
 
     Args:
@@ -140,6 +142,9 @@ def deep_merge_dicts(base: dict, override: dict) -> dict:
     """
     merged = dict(base)
     for key, override_val in override.items():
+        if override_val is None:
+            merged.pop(key, None)
+            continue
         base_val = merged.get(key)
         if isinstance(base_val, dict) and isinstance(override_val, dict):
             merged[key] = deep_merge_dicts(base_val, override_val)

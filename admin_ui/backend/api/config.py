@@ -101,15 +101,70 @@ def _safe_load_no_duplicates(content: str):
 
 
 def _deep_merge_dicts(base: dict, override: dict) -> dict:
-    """Recursively deep-merge *override* into a copy of *base*."""
+    """
+    Recursively deep-merge *override* into a copy of *base*.
+
+    Deletion semantics:
+    - If the override explicitly sets a key to null/None, that key is removed from
+      the merged output. This is important because our operator override file is
+      merged on top of a git-tracked base file and needs a way to represent
+      "delete this upstream default".
+    """
     merged = dict(base)
     for key, override_val in override.items():
+        if override_val is None:
+            merged.pop(key, None)
+            continue
         base_val = merged.get(key)
         if isinstance(base_val, dict) and isinstance(override_val, dict):
             merged[key] = _deep_merge_dicts(base_val, override_val)
         else:
             merged[key] = override_val
     return merged
+
+
+def _read_base_config_dict() -> dict:
+    """Read base config/ai-agent.yaml as a dict (no local overrides)."""
+    if not os.path.exists(settings.CONFIG_PATH):
+        return {}
+    with open(settings.CONFIG_PATH, "r") as f:
+        base = _safe_load_no_duplicates(f.read()) or {}
+    return base if isinstance(base, dict) else {}
+
+
+def _compute_local_override(base: dict, desired: dict) -> dict:
+    """
+    Compute a minimal operator-local override that, when merged over *base*,
+    yields *desired* (including deletions via null tombstones).
+    """
+    if not isinstance(base, dict) or not isinstance(desired, dict):
+        # Defensive: treat the desired value as a full replacement.
+        return desired
+
+    override: dict = {}
+
+    # Include updates/additions.
+    for key, desired_val in desired.items():
+        if key not in base:
+            override[key] = desired_val
+            continue
+
+        base_val = base.get(key)
+        if isinstance(base_val, dict) and isinstance(desired_val, dict):
+            child = _compute_local_override(base_val, desired_val)
+            if child:
+                override[key] = child
+            continue
+
+        if base_val != desired_val:
+            override[key] = desired_val
+
+    # Include deletions (tombstones).
+    for key in base.keys():
+        if key not in desired:
+            override[key] = None
+
+    return override
 
 
 def _read_merged_config_dict() -> dict:
@@ -426,8 +481,18 @@ async def update_yaml_config(update: ConfigUpdate):
         # Snapshot current merged config for hot-reload comparison
         old_merged = _read_merged_config_dict()
 
+        # Parse desired merged config content from UI.
+        new_parsed = _safe_load_no_duplicates(update.content) or {}
+        if not isinstance(new_parsed, dict):
+            raise HTTPException(status_code=400, detail="Config YAML must be a mapping at the top level")
+
+        # Convert desired merged config into a minimal local override (supports deletions).
+        base = _read_base_config_dict()
+        local_override = _compute_local_override(base, new_parsed)
+        local_content = yaml.dump(local_override or {}, default_flow_style=False, sort_keys=False)
+
         # Write to LOCAL override file (keeps base ai-agent.yaml clean for git)
-        _write_local_config(update.content)
+        _write_local_config(local_content)
         
         # Determine recommended apply method based on what changed
         # hot_reload: contexts, MCP servers, greetings/instructions only
@@ -437,8 +502,6 @@ async def update_yaml_config(update: ConfigUpdate):
         
         # Check if change is limited to hot-reloadable sections
         try:
-            new_parsed = _safe_load_no_duplicates(update.content) or {}
-            
             if old_merged:
                 # Keys that can be hot-reloaded
                 hot_reload_keys = {'contexts', 'profiles', 'mcp'}
