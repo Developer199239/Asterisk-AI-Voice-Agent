@@ -42,6 +42,7 @@ const LogsPage = lazy(() => import('./pages/System/LogsPage'));
 const TerminalPage = lazy(() => import('./pages/System/TerminalPage'));
 const ModelsPage = lazy(() => import('./pages/System/ModelsPage'));
 const UpdatesPage = lazy(() => import('./pages/System/UpdatesPage'));
+const AsteriskPage = lazy(() => import('./pages/System/AsteriskPage'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -157,6 +158,7 @@ function App() {
                                             {/* System Management */}
                                             <Route path="/env" element={<EnvPage />} />
                                             <Route path="/docker" element={<DockerPage />} />
+                                            <Route path="/asterisk" element={<AsteriskPage />} />
                                             <Route path="/logs" element={<LogsPage />} />
                                             <Route path="/terminal" element={<TerminalPage />} />
                                             <Route path="/models" element={<ModelsPage />} />

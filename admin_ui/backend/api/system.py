@@ -4257,3 +4257,140 @@ async def updates_job(job_id: str):
         tail = _tail_text_file(log_path, max_lines=250)
 
     return UpdateJobResponse(job=job, log_tail=tail)
+
+
+# ============================================================================
+# Asterisk Config Discovery (AAVA: Asterisk Setup Page)
+# ============================================================================
+
+_REQUIRED_MODULES = [
+    "app_audiosocket",
+    "res_ari",
+    "res_stasis",
+    "chan_pjsip",
+    "res_http_websocket",
+]
+
+
+def _resolve_app_name() -> str:
+    """Resolve the ARI app name from YAML config, env, or default."""
+    try:
+        config_path = os.path.join(os.getenv("PROJECT_ROOT", "/app/project"), "config", "ai-agent.yaml")
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            ast_cfg = cfg.get("asterisk") or {}
+            if isinstance(ast_cfg, dict) and ast_cfg.get("app_name"):
+                return str(ast_cfg["app_name"]).strip()
+    except Exception:
+        pass
+    return (
+        os.environ.get("ASTERISK_APP_NAME")
+        or os.environ.get("ASTERISK_ARI_APP")
+        or _dotenv_value("ASTERISK_APP_NAME")
+        or _dotenv_value("ASTERISK_ARI_APP")
+        or "asterisk-ai-voice-agent"
+    )
+
+
+@router.get("/asterisk-status")
+async def asterisk_status():
+    """
+    Combined Asterisk config status for the Admin UI Asterisk Setup page.
+
+    Returns:
+      - mode: "local" or "remote" based on ASTERISK_HOST
+      - manifest: contents of data/asterisk_status.json (from preflight.sh) or null
+      - live: real-time ARI checks (info, modules, app registration)
+    """
+    import httpx
+    import json as _json
+
+    settings = _ari_env_settings()
+    host = settings["host"]
+
+    # Determine mode
+    mode = "local" if host in ("127.0.0.1", "localhost", "", "::1") else "remote"
+
+    # --- Read preflight manifest ---
+    manifest = None
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    manifest_path = os.path.join(project_root, "data", "asterisk_status.json")
+    try:
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r") as f:
+                manifest = _json.load(f)
+    except Exception as e:
+        logger.debug("Could not read asterisk manifest: %s", e)
+
+    # --- Live ARI checks ---
+    live = {
+        "ari_reachable": False,
+        "asterisk_version": None,
+        "uptime": None,
+        "last_reload": None,
+        "app_registered": False,
+        "app_name": _resolve_app_name(),
+        "modules": {},
+    }
+
+    if not settings.get("username") or not settings.get("password"):
+        return {"mode": mode, "manifest": manifest, "live": live}
+
+    base_url = f"{settings['scheme']}://{host}:{settings['port']}"
+    verify = settings["ssl_verify"] if settings["scheme"] == "https" else True
+    auth = (settings["username"], settings["password"])
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0, verify=verify) as client:
+            # 1. Asterisk info
+            try:
+                resp = await client.get(f"{base_url}/ari/asterisk/info", auth=auth)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    live["ari_reachable"] = True
+                    live["asterisk_version"] = (data.get("system") or {}).get("version")
+                    live["uptime"] = (data.get("status") or {}).get("startup_time")
+                    live["last_reload"] = (data.get("status") or {}).get("last_reload_time")
+            except Exception:
+                pass
+
+            if not live["ari_reachable"]:
+                return {"mode": mode, "manifest": manifest, "live": live}
+
+            # 2. Modules check
+            try:
+                resp = await client.get(f"{base_url}/ari/asterisk/modules", auth=auth)
+                if resp.status_code == 200:
+                    all_modules = resp.json()
+                    for req_mod in _REQUIRED_MODULES:
+                        matched = None
+                        for m in all_modules:
+                            name = m.get("name", "")
+                            if req_mod in name:
+                                matched = m
+                                break
+                        if matched:
+                            live["modules"][req_mod] = matched.get("status", "Unknown")
+                        else:
+                            live["modules"][req_mod] = "Not Found"
+            except Exception:
+                pass
+
+            # 3. App registration check
+            try:
+                resp = await client.get(f"{base_url}/ari/applications", auth=auth)
+                if resp.status_code == 200:
+                    apps = resp.json()
+                    app_name = live["app_name"]
+                    for app in apps:
+                        if app.get("name") == app_name:
+                            live["app_registered"] = True
+                            break
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.debug("Live ARI checks failed: %s", e)
+
+    return {"mode": mode, "manifest": manifest, "live": live}

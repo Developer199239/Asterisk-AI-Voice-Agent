@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle, type LucideIcon } from 'lucide-react';
+import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, Wrench, Globe, Tag, Box, CheckCircle2, XCircle, Phone, type LucideIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { SystemTopology } from '../components/SystemTopology';
@@ -88,6 +89,8 @@ const Dashboard = () => {
     const [metricsError, setMetricsError] = useState<ApiErrorInfo | null>(null);
     const [platformData, setPlatformData] = useState<PlatformResponse | null>(null);
     const [platformLoadFailed, setPlatformLoadFailed] = useState(false);
+    const [ariConnected, setAriConnected] = useState<boolean | null>(null);
+    const navigate = useNavigate();
 
     const fetchData = async () => {
         setContainersError(null);
@@ -98,9 +101,10 @@ const Dashboard = () => {
             axios.get('/api/system/metrics'),
             axios.get('/api/system/directories'),
             axios.get('/api/system/platform'),
+            axios.get('/api/system/asterisk-status'),
         ]);
 
-        const [containersRes, metricsRes, dirHealthRes, platformRes] = results;
+        const [containersRes, metricsRes, dirHealthRes, platformRes, asteriskRes] = results;
 
         if (containersRes.status === 'fulfilled') {
             setContainers(containersRes.value.data);
@@ -131,6 +135,12 @@ const Dashboard = () => {
             console.error('Failed to fetch platform info:', platformRes.reason);
             setPlatformData(null);
             setPlatformLoadFailed(true);
+        }
+
+        if (asteriskRes.status === 'fulfilled') {
+            setAriConnected(asteriskRes.value.data?.live?.ari_reachable ?? false);
+        } else {
+            setAriConnected(null);
         }
 
         setLoading(false);
@@ -327,7 +337,7 @@ const Dashboard = () => {
                 </div>
                 
                 {/* Row 2: Resource Metrics */}
-                <div className="grid grid-cols-4 divide-x divide-border">
+                <div className="grid grid-cols-5 divide-x divide-border">
                     <CompactMetric
                         title="CPU"
                         value={metrics?.cpu?.percent != null ? `${metrics.cpu.percent.toFixed(1)}%` : '--'}
@@ -349,6 +359,26 @@ const Dashboard = () => {
                         icon={HardDrive}
                         color="text-orange-500"
                     />
+                    {/* Asterisk Connection */}
+                    <div
+                        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-accent/50 transition-colors"
+                        onClick={() => navigate('/asterisk')}
+                        title="View Asterisk Setup"
+                    >
+                        <Phone className={`w-5 h-5 flex-shrink-0 ${
+                            ariConnected === true ? 'text-green-500' :
+                            ariConnected === false ? 'text-red-500' : 'text-muted-foreground'
+                        }`} />
+                        <div className="min-w-0">
+                            <div className="text-xs text-muted-foreground">Asterisk</div>
+                            <div className={`text-sm font-semibold ${
+                                ariConnected === true ? 'text-green-500' :
+                                ariConnected === false ? 'text-red-500' : 'text-muted-foreground'
+                            }`}>
+                                {ariConnected === true ? 'Connected' : ariConnected === false ? 'Disconnected' : 'Loading...'}
+                            </div>
+                        </div>
+                    </div>
                     {/* Compact Directory Health */}
                     <div className="flex items-center gap-3 px-4 py-3">
                         <FolderCheck className={`w-4 h-4 flex-shrink-0 ${
