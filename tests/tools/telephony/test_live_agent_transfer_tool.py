@@ -206,3 +206,50 @@ class TestLiveAgentTransferTool:
         call_args = mock_ari_client.send_command.call_args.kwargs
         assert call_args["resource"] == f"channels/{tool_context.caller_channel_id}/continue"
         assert call_args["params"]["extension"] == "6000"
+
+    @pytest.mark.asyncio
+    async def test_misconfigured_destination_override_does_not_prevent_destination_fallback_scan(
+        self, tool, tool_context, mock_ari_client
+    ):
+        tool_context.config["tools"]["transfer"] = {
+            "enabled": True,
+            # Misconfigured: points to non-live destination.
+            "live_agent_destination_key": "support_agent",
+            "destinations": {
+                "support_agent": {"type": "extension", "target": "2765", "description": "Support agent"},
+                "tier2_live": {"type": "extension", "target": "6000", "description": "Tier 2", "live_agent": True},
+            },
+        }
+        # Ensure no Live Agents are configured so destination fallback can be exercised.
+        tool_context.config["tools"]["extensions"] = {"internal": {}}
+
+        result = await tool.execute({}, tool_context)
+
+        assert result["status"] == "success"
+        assert result["destination"] == "6000"
+        call_args = mock_ari_client.send_command.call_args.kwargs
+        assert call_args["resource"] == f"channels/{tool_context.caller_channel_id}/continue"
+        assert call_args["params"]["extension"] == "6000"
+
+    @pytest.mark.asyncio
+    async def test_fails_when_internal_live_agents_are_ambiguous_even_if_destination_live_agent_exists(
+        self, tool, tool_context, mock_ari_client
+    ):
+        tool_context.config["tools"]["transfer"] = {
+            "enabled": True,
+            "destinations": {
+                "tier2_live": {"type": "extension", "target": "6000", "description": "Tier 2", "live_agent": True},
+            },
+        }
+        tool_context.config["tools"]["extensions"] = {
+            "internal": {
+                "7007": {"name": "Live Agent", "dial_string": "PJSIP/7007", "description": "Escalation desk", "transfer": True},
+                "7008": {"name": "Live Agent", "dial_string": "PJSIP/7008", "description": "Backup desk", "transfer": True},
+            }
+        }
+
+        result = await tool.execute({}, tool_context)
+
+        assert result["status"] == "failed"
+        assert "Multiple Live Agents" in result["message"]
+        mock_ari_client.send_command.assert_not_called()

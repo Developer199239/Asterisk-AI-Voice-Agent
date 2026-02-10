@@ -55,6 +55,24 @@ class LiveAgentTransferTool(Tool):
                 return configured_key, "config.live_agent_destination_key"
             return None, "configured_key_missing"
 
+        return LiveAgentTransferTool._resolve_live_agent_destination_key_from_destinations(transfer_cfg)
+
+    @staticmethod
+    def _resolve_live_agent_destination_key_from_destinations(
+        transfer_cfg: Dict[str, Any],
+    ) -> Tuple[Optional[str], str]:
+        """
+        Resolve a live-agent destination from `tools.transfer.destinations` without considering
+        `tools.transfer.live_agent_destination_key`.
+
+        This is used for legacy fallback when operators did not configure Live Agents.
+        It intentionally bypasses the configured override so a misconfigured override doesn't
+        prevent finding a valid `destinations.<key>.live_agent: true` entry.
+        """
+        destinations = (transfer_cfg.get("destinations") or {}) if isinstance(transfer_cfg, dict) else {}
+        if not isinstance(destinations, dict) or not destinations:
+            return None, "no_destinations"
+
         live_agent_keys: List[str] = []
         for key, cfg in destinations.items():
             if isinstance(cfg, dict) and bool(cfg.get("live_agent")):
@@ -158,6 +176,7 @@ class LiveAgentTransferTool(Tool):
 
     async def execute(self, parameters: Dict[str, Any], context: ToolExecutionContext) -> Dict[str, Any]:
         _ = parameters
+        unified = UnifiedTransferTool()
         transfer_cfg = context.get_config_value("tools.transfer") or {}
         if isinstance(transfer_cfg, dict) and transfer_cfg.get("enabled") is False:
             return {"status": "failed", "message": "Transfer service is disabled"}
@@ -173,7 +192,7 @@ class LiveAgentTransferTool(Tool):
                     destination_key=destination_key,
                     resolution_source=source,
                 )
-                return await UnifiedTransferTool().execute({"destination": destination_key}, context)
+                return await unified.execute({"destination": destination_key}, context)
             logger.warning(
                 "Live agent destination override misconfigured; falling back to Live Agents",
                 call_id=context.call_id,
@@ -195,10 +214,25 @@ class LiveAgentTransferTool(Tool):
                 extension=extension,
                 resolution_source=ext_source,
             )
-            return await UnifiedTransferTool()._transfer_to_extension(context, extension, description)
+            return await unified._transfer_to_extension(context, extension, description)
+
+        if ext_source.endswith("_ambiguous"):
+            logger.warning(
+                "Live agent transfer ambiguous; refusing to fall back to transfer destinations",
+                call_id=context.call_id,
+                resolution_source=ext_source,
+            )
+            return {
+                "status": "failed",
+                "message": (
+                    "Multiple Live Agents appear configured, but there is no single default. "
+                    "Either leave only one Live Agent enabled, or set tools.transfer.live_agent_destination_key "
+                    "to explicitly route live-agent requests via a transfer destination."
+                ),
+            }
 
         # 3) Fallback (legacy): if no Live Agents are configured, allow transfer-destination based routing.
-        destination_key, source = self._resolve_live_agent_destination_key(transfer_cfg)
+        destination_key, source = self._resolve_live_agent_destination_key_from_destinations(transfer_cfg)
         if destination_key:
             logger.info(
                 "Executing live agent transfer via destination fallback",
@@ -206,7 +240,7 @@ class LiveAgentTransferTool(Tool):
                 destination_key=destination_key,
                 resolution_source=source,
             )
-            return await UnifiedTransferTool().execute({"destination": destination_key}, context)
+            return await unified.execute({"destination": destination_key}, context)
 
         logger.warning(
             "Live agent transfer not configured",
