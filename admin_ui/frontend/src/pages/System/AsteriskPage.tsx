@@ -60,7 +60,7 @@ const CONFIG_CHECK_LABELS: Record<string, { label: string; fixHint: string }> = 
     },
     dialplan_context: {
         label: 'Dialplan Context',
-        fixHint: 'Add a context in /etc/asterisk/extensions_custom.conf:\n\n[from-ai-agent]\nexten => s,1,NoOp(AI Agent)\n same => n,Stasis(asterisk-ai-voice-agent)\n same => n,Hangup()',
+        fixHint: 'Add a context in /etc/asterisk/extensions_custom.conf:\n\n[from-ai-agent]\nexten => s,1,NoOp(AI Agent)\n same => n,Stasis({APP_NAME})\n same => n,Hangup()',
     },
 };
 
@@ -158,6 +158,7 @@ const AsteriskPage = () => {
     const live = status?.live;
     const manifest = status?.manifest;
     const mode = status?.mode || 'unknown';
+    const appName = live?.app_name || 'asterisk-ai-voice-agent';
 
     return (
         <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -275,7 +276,7 @@ const AsteriskPage = () => {
                         <div className="flex items-center gap-3">
                             <AppWindow className="w-4 h-4 text-muted-foreground" />
                             <div>
-                                <span className="text-sm font-medium">{live?.app_name || 'asterisk-ai-voice-agent'}</span>
+                                <span className="text-sm font-medium">{appName}</span>
                                 <p className="text-xs text-muted-foreground">Stasis application</p>
                             </div>
                         </div>
@@ -303,6 +304,7 @@ const AsteriskPage = () => {
                                 const meta = CONFIG_CHECK_LABELS[key];
                                 const label = meta?.label || key.replace(/_/g, ' ').replace(/^module /, '');
                                 const isModule = key.startsWith('module_');
+                                const fixHint = (meta?.fixHint || '').replace('{APP_NAME}', appName);
                                 return (
                                     <div key={key} className="py-2.5 first:pt-0 last:pb-0">
                                         <div className="flex items-center justify-between">
@@ -319,7 +321,7 @@ const AsteriskPage = () => {
                                             </div>
                                             <div className="flex items-center gap-2">
                                                 <StatusBadge ok={check.ok} />
-                                                {!check.ok && meta?.fixHint && (
+                                                {!check.ok && fixHint && (
                                                     <button
                                                         onClick={() => toggleFix(key)}
                                                         className="text-xs text-primary hover:underline"
@@ -329,14 +331,14 @@ const AsteriskPage = () => {
                                                 )}
                                             </div>
                                         </div>
-                                        {!check.ok && meta?.fixHint && expandedFixes[key] && (
+                                        {!check.ok && fixHint && expandedFixes[key] && (
                                             <div className="mt-2 ml-7">
                                                 <div className="relative">
                                                     <pre className="p-3 rounded-md bg-muted text-xs font-mono whitespace-pre-wrap overflow-x-auto">
-                                                        {meta.fixHint}
+                                                        {fixHint}
                                                     </pre>
                                                     <div className="absolute top-2 right-2">
-                                                        <CopyButton text={meta.fixHint} />
+                                                        <CopyButton text={fixHint} />
                                                     </div>
                                                 </div>
                                             </div>
@@ -351,6 +353,14 @@ const AsteriskPage = () => {
                             <div>
                                 <p>No preflight manifest found.</p>
                                 <p className="mt-1">Run <code className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">./preflight.sh</code> on the host to generate it.</p>
+                            </div>
+                        </div>
+                    ) : manifest && manifest.checks && Object.keys(manifest.checks).length === 0 ? (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <AlertCircle className="w-4 h-4 text-amber-500" />
+                            <div>
+                                <p>Preflight checks were not run (or produced no check results).</p>
+                                <p className="mt-1">Run <code className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">./preflight.sh</code> on the host to generate a manifest with checks.</p>
                             </div>
                         </div>
                     ) : (
