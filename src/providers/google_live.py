@@ -116,8 +116,6 @@ class GoogleLiveProvider(AIProviderInterface):
         "gemini-2.5-flash-native-audio-latest": DEFAULT_LIVE_MODEL,
         # Older preview aliases that are no longer available.
         "gemini-live-2.5-flash-preview": DEFAULT_LIVE_MODEL,
-        "gemini-2.0-flash-live-001": DEFAULT_LIVE_MODEL,
-        "gemini-2.0-flash-live-001-preview-09-2025": DEFAULT_LIVE_MODEL,
     }
 
     def __init__(
@@ -259,6 +257,21 @@ class GoogleLiveProvider(AIProviderInterface):
             except Exception:
                 pass
             self._session_gauge_incremented = False
+
+    async def _emit_provider_disconnected(self, *, code: Optional[int], reason: str) -> None:
+        # IMPORTANT: Tell the engine the provider is gone so we don't leave dead air.
+        # The engine can hang up or route to a live agent fallback.
+        if not self.on_event or not self._call_id:
+            return
+        await self.on_event(
+            {
+                "type": "ProviderDisconnected",
+                "call_id": self._call_id,
+                "provider": "google_live",
+                "code": code,
+                "reason": reason,
+            }
+        )
 
     @staticmethod
     def _norm_text(value: str) -> str:
@@ -699,11 +712,16 @@ class GoogleLiveProvider(AIProviderInterface):
             )
             return replacement
 
-        if "native-audio" in m:
+        # Accept both native-audio and legacy Live model names.
+        # v5.x allowed non-native-audio Live models (e.g. `gemini-2.0-flash-live-001`).
+        # Forcing everything to the preview native-audio model can regress stability and blocks
+        # operators from testing alternate Live models for RCA.
+        m_l = m.lower()
+        if ("native-audio" in m_l) or ("live" in m_l):
             return m
 
         logger.warning(
-            "Google Live model is not a native-audio Live model; falling back to default",
+            "Google Live model does not look like a Live-capable model; falling back to default",
             configured_model=m,
             fallback_model=GoogleLiveProvider.DEFAULT_LIVE_MODEL,
         )
@@ -1091,6 +1109,14 @@ class GoogleLiveProvider(AIProviderInterface):
                     outbound_tail=list(self._outbound_summaries),
                 )
             self._mark_ws_disconnected()
+            try:
+                await self._emit_provider_disconnected(code=close_code, reason=close_reason)
+            except Exception:
+                logger.debug(
+                    "Failed to emit ProviderDisconnected event",
+                    call_id=self._call_id,
+                    exc_info=True,
+                )
         except Exception as e:
             logger.error(
                 "Google Live receive loop error",

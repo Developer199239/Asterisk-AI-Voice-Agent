@@ -7543,6 +7543,55 @@ class Engine:
                 logger.info("Provider audio format announced", call_id=call_id, encoding=encoding, sample_rate=sample_rate)
                 return
 
+            # Provider transport died mid-call (e.g. Google Live WebSocket 1008/1011).
+            # Avoid dead air by terminating the call promptly (or allow future live-agent routing).
+            if etype == "ProviderDisconnected":
+                provider = event.get("provider") or session.provider_name
+                code = event.get("code")
+                reason = event.get("reason")
+                logger.error(
+                    "Provider disconnected",
+                    call_id=call_id,
+                    provider=provider,
+                    code=code,
+                    reason=reason,
+                )
+                try:
+                    session.provider_session_active = False
+                    await self._save_session(session)
+                except Exception:
+                    logger.debug("Failed to mark provider_session_active=false", call_id=call_id, exc_info=True)
+
+                # Optional: play configured fallback media (same knob as hangup_call fallback).
+                try:
+                    tools_cfg = getattr(self.config, "tools", {}) or {}
+                    hangup_cfg = tools_cfg.get("hangup_call", {}) if isinstance(tools_cfg, dict) else {}
+                    media_uri = None
+                    if isinstance(hangup_cfg, dict):
+                        media_uri = hangup_cfg.get("fallback_media_uri") or hangup_cfg.get("farewell_fallback_media_uri")
+                    media_uri = (media_uri or "").strip()
+                    if media_uri:
+                        pb = await self.ari_client.play_media(session.caller_channel_id, media_uri)
+                        playback_id = pb.get("id") if isinstance(pb, dict) else None
+                        if playback_id:
+                            waiter = asyncio.get_running_loop().create_future()
+                            self._ari_playback_waiters[playback_id] = waiter
+                            try:
+                                await asyncio.wait_for(waiter, timeout=8.0)
+                            except asyncio.TimeoutError:
+                                pass
+                            finally:
+                                self._ari_playback_waiters.pop(playback_id, None)
+                except Exception:
+                    logger.debug("Provider-disconnect fallback playback failed", call_id=call_id, exc_info=True)
+
+                # Hang up immediately to avoid long dead-air stretches.
+                try:
+                    await self.ari_client.hangup_channel(session.caller_channel_id)
+                except Exception:
+                    logger.debug("Hangup after provider disconnect failed", call_id=call_id, exc_info=True)
+                return
+
             # Downstream strategy: stream provider audio in near-real time via StreamingPlaybackManager
             if etype == "AgentAudio":
                 chunk: bytes = event.get("data") or b""
@@ -10377,8 +10426,9 @@ class Engine:
                 except Exception:
                     gain_max_db = 0.0
                 
-                logger.info(
-                    "🔧 ENCODE CONFIG - Reading provider config",
+                # This function is called per-frame (50x/sec). Keep logs at debug to avoid IO/CPU jitter.
+                logger.debug(
+                    "ENCODE CONFIG",
                     call_id=call_id,
                     provider=provider_name,
                     provider_enc=provider_enc,
@@ -10409,8 +10459,8 @@ class Engine:
             if expected_rate <= 0:
                 expected_rate = pcm_rate
             if pcm_rate != expected_rate and pcm_bytes:
-                logger.info(
-                    "🔧 ENCODE RESAMPLE - Resampling needed",
+                logger.debug(
+                    "ENCODE RESAMPLE - needed",
                     call_id=call_id,
                     provider=provider_name,
                     pcm_rate=pcm_rate,
@@ -10457,8 +10507,8 @@ class Engine:
                         )
                     
                     pcm_rate = expected_rate
-                    logger.info(
-                        "🔧 ENCODE RESAMPLE - Resampling completed (corrected)",
+                    logger.debug(
+                        "ENCODE RESAMPLE - completed",
                         call_id=call_id,
                         provider=provider_name,
                         new_rate=pcm_rate,
@@ -10474,8 +10524,8 @@ class Engine:
                         exc_info=True,
                     )
             else:
-                logger.info(
-                    "🔧 ENCODE RESAMPLE - No resampling needed",
+                logger.debug(
+                    "ENCODE RESAMPLE - skipped",
                     call_id=call_id,
                     provider=provider_name,
                     pcm_rate=pcm_rate,
