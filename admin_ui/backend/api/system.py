@@ -2873,6 +2873,18 @@ class AriExtensionStatusResponse(BaseModel):
     error: str = ""
 
 
+_ALLOWED_ARI_TECHS = {"PJSIP", "SIP", "IAX2", "DAHDI", "LOCAL"}
+
+
+def _normalize_ari_tech(value: str) -> str:
+    tech = (value or "").strip().upper()
+    if not tech or tech == "AUTO":
+        return ""
+    if tech not in _ALLOWED_ARI_TECHS:
+        return ""
+    return tech
+
+
 def _ari_env_settings() -> dict:
     """
     Resolve ARI connection settings.
@@ -2922,10 +2934,10 @@ def _extract_device_state_id(dial_string: str, device_state_tech: str, extension
             tech = str(m.group(1)).upper()
             num = str(m.group(2))
             return f"{tech}/{num}"
-    tech = (device_state_tech or "").strip()
+    tech = _normalize_ari_tech(device_state_tech)
     key = (extension_key or "").strip()
-    if tech and tech.lower() != "auto" and key.isdigit():
-        return f"{tech.upper()}/{key}"
+    if tech and key.isdigit():
+        return f"{tech}/{key}"
     return ""
 
 
@@ -2935,10 +2947,10 @@ def _extract_endpoint(dial_string: str, device_state_tech: str, extension_key: s
         m = re.search(r"(?i)\b(PJSIP|SIP|IAX2|DAHDI|LOCAL)\s*/\s*(\d+)\b", s)
         if m:
             return (str(m.group(1)).upper(), str(m.group(2)))
-    tech = (device_state_tech or "").strip()
+    tech = _normalize_ari_tech(device_state_tech)
     key = (extension_key or "").strip()
-    if tech and tech.lower() != "auto" and key:
-        return (tech.upper(), key)
+    if tech and key.isdigit():
+        return (tech, key)
     return ("", "")
 
 
