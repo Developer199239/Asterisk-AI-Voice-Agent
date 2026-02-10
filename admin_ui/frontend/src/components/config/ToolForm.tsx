@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { Plus, Trash2, Settings } from 'lucide-react';
@@ -42,6 +42,50 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
         const [transcriptAdminVal, setTranscriptAdminVal] = useState('');
         const [transcriptFromCtx, setTranscriptFromCtx] = useState('');
         const [transcriptFromVal, setTranscriptFromVal] = useState('');
+
+        // Keep a stable React key per internal extension row so key renames don't blow away focus/cursor.
+        const internalExtRowIdsRef = useRef<Record<string, string>>({});
+        const internalExtRowIdCounterRef = useRef(0);
+        const internalExtRenameToastKeyRef = useRef<string>('');
+
+        const isNumericKey = (k: string) => /^\d+$/.test((k || '').trim());
+
+        const extractNumericExtensionKeyFromDialString = (raw: string): string => {
+            const s = (raw || '').trim();
+            if (!s) return '';
+
+            const digitsOnly = s.match(/^(\d+)$/);
+            if (digitsOnly) return digitsOnly[1];
+
+            // Common dial-string formats: PJSIP/2765, SIP/6000, Local/2765@from-internal
+            const m = s.match(/(?:^|[^A-Za-z0-9])(?:PJSIP|SIP|IAX2|DAHDI|LOCAL|Local)\/(\d+)/);
+            return m ? (m[1] || '') : '';
+        };
+
+        const getInternalExtRowId = (configKey: string) => {
+            const map = internalExtRowIdsRef.current;
+            if (!map[configKey]) {
+                internalExtRowIdCounterRef.current += 1;
+                map[configKey] = `internal-ext-row-${internalExtRowIdCounterRef.current}`;
+            }
+            return map[configKey];
+        };
+
+        const moveInternalExtRowId = (fromKey: string, toKey: string) => {
+            const map = internalExtRowIdsRef.current;
+            if (fromKey === toKey) return;
+            if (!map[fromKey]) {
+                getInternalExtRowId(fromKey);
+            }
+            if (!map[toKey] && map[fromKey]) {
+                map[toKey] = map[fromKey];
+            }
+            delete map[fromKey];
+        };
+
+        const deleteInternalExtRowId = (k: string) => {
+            delete internalExtRowIdsRef.current[k];
+        };
 
     const updateConfig = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
@@ -213,6 +257,7 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
             if (k === fromKey) renamed[toKey] = v;
             else renamed[k] = v;
         });
+        moveInternalExtRowId(fromKey, toKey);
         updateNestedConfig('extensions', 'internal', renamed);
     };
 
@@ -491,50 +536,48 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                     )}
                 </div>
 
-                {/* Extensions (basic editor) */}
-                <div className="border border-border rounded-lg p-4 bg-card/50">
-                    <div className="flex justify-between items-center mb-4">
-                        <FormLabel>Extensions (Internal)</FormLabel>
-                        <button
+	                {/* Extensions (basic editor) */}
+	                <div className="border border-border rounded-lg p-4 bg-card/50">
+	                    <div className="flex justify-between items-center mb-4">
+	                        <FormLabel>Extensions (Internal)</FormLabel>
+	                        <button
                             onClick={() => {
                                 const existing = config.extensions?.internal || {};
                                 let idx = Object.keys(existing).length + 1;
                                 let key = `ext_${idx}`;
-                                while (Object.prototype.hasOwnProperty.call(existing, key)) {
-                                    idx += 1;
-                                    key = `ext_${idx}`;
-                                }
-                                updateNestedConfig('extensions', 'internal', { ...existing, [key]: { name: '', description: '', dial_string: '', transfer: true, device_state_tech: 'auto' } });
-                            }}
-                            className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors"
-                        >
-                            <Plus className="w-3 h-3 mr-1" /> Add Extension
-                        </button>
-                    </div>
-                    <div className="space-y-2">
-                        {Object.entries(config.extensions?.internal || {}).map(([key, ext]: [string, any]) => (
-                            <div key={key} className="grid grid-cols-1 md:grid-cols-12 gap-2 p-3 border rounded bg-background/50 items-center">
-                                <div className="md:col-span-1">
-                                    <input
-                                        className="w-full border rounded px-2 py-1 text-sm bg-muted"
-                                        placeholder="Key"
-                                        defaultValue={key}
-                                        onBlur={(e) => {
-                                            const nextKey = (e.target as HTMLInputElement).value;
-                                            if (nextKey !== key) renameInternalExtensionKey(key, nextKey);
-                                        }}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                                (e.target as HTMLInputElement).blur();
-                                            }
-                                        }}
-                                        title="Extension key (recommend numeric like 2765). Used for transfers and availability checks."
-                                    />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <input
-                                        className="w-full border rounded px-2 py-1 text-sm"
-                                        placeholder="Name"
+	                                while (Object.prototype.hasOwnProperty.call(existing, key)) {
+	                                    idx += 1;
+	                                    key = `ext_${idx}`;
+	                                }
+	                                updateNestedConfig('extensions', 'internal', { ...existing, [key]: { name: '', description: '', dial_string: '', transfer: true, device_state_tech: 'auto' } });
+	                            }}
+	                            className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors"
+	                        >
+	                            <Plus className="w-3 h-3 mr-1" /> Add Extension
+	                        </button>
+	                    </div>
+	                    <div className="space-y-2">
+	                        {Object.entries(config.extensions?.internal || {}).map(([key, ext]: [string, any]) => (
+	                            <div key={getInternalExtRowId(key)} className="grid grid-cols-1 md:grid-cols-12 gap-2 p-3 border rounded bg-background/50 items-center">
+	                                <div className="md:col-span-1">
+                                        {(() => {
+                                            const derived = extractNumericExtensionKeyFromDialString(ext?.dial_string || '');
+                                            const displayKey = isNumericKey(key) ? key : derived;
+                                            return (
+	                                    <input
+	                                        className="w-full border rounded px-2 py-1 text-sm bg-muted text-muted-foreground"
+	                                        placeholder="Auto"
+                                            value={displayKey || ''}
+                                            disabled
+	                                        title="Auto-derived from dial string (e.g. PJSIP/2765 -> 2765). Numeric keys are locked to prevent accidental renames."
+	                                    />
+                                            );
+                                        })()}
+	                                </div>
+	                                <div className="md:col-span-2">
+	                                    <input
+	                                        className="w-full border rounded px-2 py-1 text-sm"
+	                                        placeholder="Name"
                                         value={ext.name || ''}
                                         onChange={(e) => {
                                             const updated = { ...(config.extensions?.internal || {}) };
@@ -544,19 +587,43 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                         title="Agent Name"
                                     />
                                 </div>
-                                <div className="md:col-span-3">
-                                    <input
-                                        className="w-full border rounded px-2 py-1 text-sm"
-                                        placeholder="Dial String"
-                                        value={ext.dial_string || ''}
-                                        onChange={(e) => {
-                                            const updated = { ...(config.extensions?.internal || {}) };
-                                            updated[key] = { ...ext, dial_string: e.target.value };
-                                            updateNestedConfig('extensions', 'internal', updated);
-                                        }}
-                                        title="PJSIP/..."
-                                    />
-                                </div>
+	                                <div className="md:col-span-3">
+	                                    <input
+	                                        className="w-full border rounded px-2 py-1 text-sm"
+	                                        placeholder="Dial String"
+	                                        value={ext.dial_string || ''}
+	                                        onChange={(e) => {
+                                                const nextDial = e.target.value;
+	                                            const existing = { ...(config.extensions?.internal || {}) };
+	                                            existing[key] = { ...ext, dial_string: nextDial };
+
+                                                if (!isNumericKey(key)) {
+                                                    const derivedKey = extractNumericExtensionKeyFromDialString(nextDial);
+                                                    if (derivedKey && derivedKey !== key) {
+                                                        if (Object.prototype.hasOwnProperty.call(existing, derivedKey)) {
+                                                            const toastKey = `internal-ext-rename-conflict:${key}->${derivedKey}`;
+                                                            if (internalExtRenameToastKeyRef.current !== toastKey) {
+                                                                internalExtRenameToastKeyRef.current = toastKey;
+                                                                toast.error(`An extension with key '${derivedKey}' already exists.`);
+                                                            }
+                                                        } else {
+                                                            const renamed: Record<string, any> = {};
+                                                            Object.entries(existing).forEach(([k, v]) => {
+                                                                if (k === key) renamed[derivedKey] = v;
+                                                                else renamed[k] = v;
+                                                            });
+                                                            moveInternalExtRowId(key, derivedKey);
+                                                            updateNestedConfig('extensions', 'internal', renamed);
+                                                            return;
+                                                        }
+                                                    }
+                                                }
+
+	                                            updateNestedConfig('extensions', 'internal', existing);
+	                                        }}
+	                                        title="PJSIP/..."
+	                                    />
+	                                </div>
                                 <div className="md:col-span-2">
                                     <select
                                         className="w-full border rounded px-2 py-1 text-sm bg-background"
@@ -601,16 +668,17 @@ const ToolForm = ({ config, contexts, onChange, onSaveNow }: ToolFormProps) => {
                                         description=""
                                     />
                                 </div>
-                                <div className="md:col-span-1 flex justify-end">
-                                    <button
-                                        onClick={() => {
-                                            const updated = { ...(config.extensions?.internal || {}) };
-                                            delete updated[key];
-                                            updateNestedConfig('extensions', 'internal', updated);
-                                        }}
-                                        className="p-2 text-destructive hover:bg-destructive/10 rounded"
-                                        title="Delete Extension"
-                                    >
+	                                <div className="md:col-span-1 flex justify-end">
+	                                    <button
+	                                        onClick={() => {
+	                                            const updated = { ...(config.extensions?.internal || {}) };
+	                                            delete updated[key];
+                                                deleteInternalExtRowId(key);
+	                                            updateNestedConfig('extensions', 'internal', updated);
+	                                        }}
+	                                        className="p-2 text-destructive hover:bg-destructive/10 rounded"
+	                                        title="Delete Extension"
+	                                    >
                                         <Trash2 className="w-4 h-4" />
                                     </button>
                                 </div>
