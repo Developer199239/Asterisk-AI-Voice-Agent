@@ -1564,16 +1564,16 @@ exten => s,1,NoOp(AI Agent Call)
                                     <p className="text-xs text-muted-foreground">Required for ElevenLabs Conversational provider.</p>
                                 </div>
 
-                                <div className="bg-amber-50/50 dark:bg-amber-900/10 p-4 rounded-md border border-amber-100 dark:border-amber-900/20">
-                                    <h4 className="font-semibold mb-2 text-amber-800 dark:text-amber-300 text-sm">Setup Requirements</h4>
-                                    <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
-                                        <li>Create an agent at elevenlabs.io/app/agents</li>
-                                        <li>Enable "Require authentication" in security settings</li>
-                                        <li>Add client tools (hangup_call, transfer_call, etc.)</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        )}
+                                        <div className="bg-amber-50/50 dark:bg-amber-900/10 p-4 rounded-md border border-amber-100 dark:border-amber-900/20">
+                                            <h4 className="font-semibold mb-2 text-amber-800 dark:text-amber-300 text-sm">Setup Requirements</h4>
+                                            <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
+                                                <li>Create an agent at elevenlabs.io/app/agents</li>
+                                                <li>Enable "Require authentication" in security settings</li>
+                                                <li>Add client tools (hangup_call, blind_transfer, etc.)</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                )}
 
                         {config.provider === 'local' && (
                             <div className="space-y-6">

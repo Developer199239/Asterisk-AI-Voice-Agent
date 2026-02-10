@@ -3099,7 +3099,7 @@ class Engine:
         """
         Handle agent action channels entering Stasis (direct SIP origination via ARI).
         
-        Channels enter Stasis directly when originated by tool execution (e.g., transfer_call).
+        Channels enter Stasis directly when originated by tool execution (e.g., blind_transfer).
         NO dialplan context is used - channels are originated with app="asterisk-ai-voice-agent".
         
         Args:

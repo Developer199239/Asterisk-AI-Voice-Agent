@@ -38,6 +38,8 @@ class DeepgramToolAdapter:
             List of tool schemas for Deepgram session initialization
         
         Example:
+            Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+            by ToolRegistry before execution.
             [
                 {
                     "name": "transfer_call",
@@ -63,6 +65,8 @@ class DeepgramToolAdapter:
         Handle function call event from Deepgram.
         
         Actual Deepgram format:
+        Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+        by ToolRegistry before execution.
         {
             "type": "FunctionCallRequest",
             "functions": [

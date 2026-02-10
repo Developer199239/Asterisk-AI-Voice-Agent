@@ -38,6 +38,8 @@ class OpenAIToolAdapter:
             List of tool schemas for OpenAI session.update
         
         Example:
+            Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+            by ToolRegistry before execution.
             [
                 {
                     "type": "function",
@@ -64,6 +66,8 @@ class OpenAIToolAdapter:
         Handle function_call event from OpenAI Realtime API.
         
         OpenAI format (from response.output_item.done event):
+        Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+        by ToolRegistry before execution.
         {
             "type": "response.output_item.done",
             "response_id": "resp_123",

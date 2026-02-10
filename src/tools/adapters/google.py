@@ -37,6 +37,8 @@ class GoogleToolAdapter:
         returning all registered tools automatically.
         
         Google format:
+        Note: legacy aliases like "transfer_call" are canonicalized to "blind_transfer"
+        by ToolRegistry before execution.
         [{
             "functionDeclarations": [
                 {

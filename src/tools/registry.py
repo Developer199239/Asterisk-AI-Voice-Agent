@@ -51,7 +51,7 @@ class ToolRegistry:
             tool_class: Tool class (not instance) to register
         
         Example:
-            registry.register(TransferCallTool)
+            registry.register(UnifiedTransferTool)
         """
         tool = tool_class()
         tool_name = tool.definition.name
@@ -77,7 +77,7 @@ class ToolRegistry:
         Get tool by name, with alias support.
         
         Args:
-            name: Tool name (e.g., "transfer_call" or "transfer")
+            name: Tool name (e.g., "blind_transfer" or legacy aliases like "transfer_call")
         
         Returns:
             Tool instance or None if not found

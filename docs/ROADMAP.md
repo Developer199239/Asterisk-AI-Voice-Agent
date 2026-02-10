@@ -257,7 +257,7 @@ Each milestone includes scope, implementation details, and verification criteria
 - **What We Shipped**:
   - **Core Framework** (537 lines): `Tool`, `ToolDefinition`, `ToolRegistry`, `ToolExecutionContext`
   - **Provider Adapters** (417 lines): Deepgram + OpenAI Realtime format translation
-  - **Telephony Tools** (736 lines): `transfer_call`, `cancel_transfer`, `hangup_call`
+  - **Telephony Tools** (736 lines): `blind_transfer` (legacy: `transfer_call`), `cancel_transfer`, `hangup_call`
   - **Business Tools** (822 lines): `request_transcript`, `send_email_summary`
   - **Direct SIP Origination**: Eliminated Local channels for perfect audio
   - **Conversation Tracking**: Real-time turn history in both providers
@@ -619,7 +619,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 **Telephony Tools** (5 tools shipped):
 
-- **`transfer_call`**: Warm/blind transfers with direct SIP origination (504 lines)
+- **`blind_transfer`** (legacy: `transfer_call`): Blind transfers with direct SIP origination (504 lines)
   - Department name resolution ("support" → 6000)
   - Perfect bidirectional audio (eliminated Local channel issues)
   - <150ms execution time validated in production

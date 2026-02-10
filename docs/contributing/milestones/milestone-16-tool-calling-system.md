@@ -108,24 +108,24 @@ class MyTool(Tool):
 ```python
 # Unified Format (Tool Registry)
 {
-    "name": "transfer_call",
-    "description": "Transfer to department",
+    "name": "blind_transfer",
+    "description": "Blind transfer the caller to a configured destination",
     "parameters": {
         "type": "object",
         "properties": {
-            "target": {"type": "string"}
+            "destination": {"type": "string"}
         }
     }
 }
 
 # Deepgram Format
 {
-    "name": "transfer_call",
-    "description": "Transfer to department",
+    "name": "blind_transfer",
+    "description": "Blind transfer the caller to a configured destination",
     "parameters": {
         "type": "object",
         "properties": {
-            "target": {"type": "string"}
+            "destination": {"type": "string"}
         }
     }
 }
@@ -134,12 +134,12 @@ class MyTool(Tool):
 {
     "type": "function",
     "function": {
-        "name": "transfer_call",
-        "description": "Transfer to department",
+        "name": "blind_transfer",
+        "description": "Blind transfer the caller to a configured destination",
         "parameters": {
             "type": "object",
             "properties": {
-                "target": {"type": "string"}
+                "destination": {"type": "string"}
             }
         }
     }
@@ -148,7 +148,7 @@ class MyTool(Tool):
 
 ### 16.3 Telephony Tools
 
-**16.3.1 Transfer Call Tool** (`src/tools/telephony/transfer.py` - 504 lines)
+**16.3.1 Unified Blind Transfer Tool** (`src/tools/telephony/unified_transfer.py` - implements `blind_transfer`)
 
 **Objective**: Enable AI to transfer calls to human agents with perfect audio quality.
 
@@ -364,8 +364,8 @@ async def _handle_agent_action_stasis(self, channel_id: str, channel: dict, args
     """
     Handle agent action channels entering Stasis (direct SIP origination via ARI).
     
-    Channels enter Stasis directly when originated by tool execution (e.g., transfer_call).
-    NO dialplan context is used - channels are originated with app="asterisk-ai-voice-agent".
+Channels enter Stasis directly when originated by tool execution (e.g., blind_transfer).
+NO dialplan context is used - channels are originated with app="asterisk-ai-voice-agent".
     """
     action_type = args[0]  # e.g., "warm-transfer"
     caller_id = args[1]
@@ -624,7 +624,7 @@ Voicemail: Disabled
 
 ## Usage Examples
 
-### Transfer Call Example
+### Transfer Example
 
 ```python
 # AI Agent conversation:
@@ -633,15 +633,14 @@ AI: "I'll transfer you to our support team right away."
 
 # Tool execution (invisible to user):
 {
-  "function_name": "transfer_call",
+  "function_name": "blind_transfer",
   "parameters": {
-    "target": "support",
-    "mode": "warm"
+    "destination": "support_agent"
   }
 }
 
 # Internal resolution:
-"support" → extension 6000 → SIP/6000
+"support_agent" → extension 6000 → SIP/6000
 
 # Result:
 SIP channel originated: SIP/6000-00000410
