@@ -1364,7 +1364,14 @@ class Engine:
                 if isinstance(resp, dict) and ("resource" in resp or "technology" in resp or "state" in resp):
                     self._outbound_pjsip_endpoint_cache[phone] = {"exists": True, "tech": tech, "ts": now}
                     return f"{tech}/{phone}"
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Endpoint probe failed",
+                    tech=tech,
+                    phone=phone,
+                    error=str(exc),
+                    exc_info=True,
+                )
                 continue
 
         self._outbound_pjsip_endpoint_cache[phone] = {"exists": False, "tech": None, "ts": now}

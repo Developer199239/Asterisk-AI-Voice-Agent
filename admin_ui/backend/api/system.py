@@ -4438,13 +4438,26 @@ _REQUIRED_MODULES = [
 def _resolve_app_name() -> str:
     """Resolve the ARI app name from YAML config, env, or default."""
     try:
-        config_path = os.path.join(os.getenv("PROJECT_ROOT", "/app/project"), "config", "ai-agent.yaml")
-        if os.path.exists(config_path):
-            with open(config_path, "r") as f:
-                cfg = yaml.safe_load(f) or {}
-            ast_cfg = cfg.get("asterisk") or {}
-            if isinstance(ast_cfg, dict) and ast_cfg.get("app_name"):
-                return str(ast_cfg["app_name"]).strip()
+        project_root = os.getenv("PROJECT_ROOT", "/app/project")
+        base_path = os.path.join(project_root, "config", "ai-agent.yaml")
+        local_path = os.path.join(project_root, "config", "ai-agent.local.yaml")
+
+        merged_cfg: dict = {}
+        if os.path.exists(base_path):
+            with open(base_path, "r") as f:
+                base_cfg = yaml.safe_load(f) or {}
+            if isinstance(base_cfg, dict):
+                merged_cfg = dict(base_cfg)
+
+        if os.path.exists(local_path):
+            with open(local_path, "r") as f:
+                local_cfg = yaml.safe_load(f) or {}
+            if isinstance(local_cfg, dict):
+                merged_cfg = _deep_merge_dict(merged_cfg, local_cfg)
+
+        ast_cfg = merged_cfg.get("asterisk") or {}
+        if isinstance(ast_cfg, dict) and ast_cfg.get("app_name"):
+            return str(ast_cfg["app_name"]).strip()
     except Exception:
         pass
     return (

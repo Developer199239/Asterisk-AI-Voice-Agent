@@ -213,6 +213,8 @@ def _write_local_config(content: str) -> None:
     """
     import datetime
     dir_path = os.path.dirname(settings.LOCAL_CONFIG_PATH)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
 
     # Backup existing local file
     if os.path.exists(settings.LOCAL_CONFIG_PATH):

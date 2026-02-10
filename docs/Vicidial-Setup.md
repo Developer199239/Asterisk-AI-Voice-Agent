@@ -72,7 +72,9 @@ asterisk -rx "core reload"
 Verify ARI is working:
 
 ```bash
-curl -s -u admin:your_secure_password_here http://127.0.0.1:8088/ari/asterisk/info | head -5
+export ARI_USER="${ASTERISK_ARI_USERNAME}"
+export ARI_PASS="${ASTERISK_ARI_PASSWORD}"
+curl -s -u "$ARI_USER:$ARI_PASS" http://127.0.0.1:8088/ari/asterisk/info | head -5
 ```
 
 ### 2.3 Verify Asterisk Modules

@@ -160,7 +160,7 @@ const AsteriskPage = () => {
 
     const live = status?.live;
     const manifest = status?.manifest;
-    const mode = status?.mode || 'unknown';
+    const mode = status?.mode;
     const appName = live?.app_name || 'asterisk-ai-voice-agent';
 
     return (
@@ -178,10 +178,16 @@ const AsteriskPage = () => {
                     <span className={`ml-2 inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full ${
                         mode === 'local'
                             ? 'bg-blue-500/10 text-blue-500'
-                            : 'bg-purple-500/10 text-purple-500'
+                            : mode === 'remote'
+                                ? 'bg-purple-500/10 text-purple-500'
+                                : 'bg-muted text-muted-foreground'
                     }`}>
-                        {mode === 'local' ? <Monitor className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
-                        {mode === 'local' ? 'Local' : 'Remote'}
+                        {mode === 'local'
+                            ? <Monitor className="w-3 h-3" />
+                            : mode === 'remote'
+                                ? <Globe className="w-3 h-3" />
+                                : <AlertCircle className="w-3 h-3" />}
+                        {mode === 'local' ? 'Local' : mode === 'remote' ? 'Remote' : 'Unknown'}
                     </span>
                 </div>
                 <button

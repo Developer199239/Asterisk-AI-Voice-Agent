@@ -1,5 +1,6 @@
 import docker
 import logging
+import copy
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
@@ -113,6 +114,36 @@ def _disk_preflight(path: str, *, required_bytes: int = 0) -> Tuple[bool, Option
     if free < DISK_WARNING_BYTES:
         return True, f"Low disk space: only {_format_bytes(free)} free (path={path})."
     return True, None
+
+
+def _compute_local_override_fallback(base: Any, merged: Any) -> Any:
+    """
+    Compute a minimal override tree using simple deep-diff semantics.
+
+    `None` in the merged tree acts as a tombstone and is preserved as-is.
+    """
+    if isinstance(base, dict) and isinstance(merged, dict):
+        out: Dict[str, Any] = {}
+
+        for key, merged_val in merged.items():
+            if key not in base:
+                out[key] = merged_val
+                continue
+            child = _compute_local_override_fallback(base[key], merged_val)
+            if child is not _NO_OVERRIDE:
+                out[key] = child
+
+        for key in base.keys() - merged.keys():
+            out[key] = None
+
+        return out
+
+    if base == merged:
+        return _NO_OVERRIDE
+    return merged
+
+
+_NO_OVERRIDE = object()
 
 
 def _detect_host_project_path_via_docker() -> Optional[str]:
@@ -2733,17 +2764,21 @@ async def save_setup_config(config: SetupConfig):
         # If provider doesn't exist, create full config
         # Don't auto-disable other providers (user manages via Dashboard)
         # Read merged config (base + local override) so wizard sees operator changes.
+        compute_local_override_fn = None
         try:
             from api.config import _read_merged_config_dict, _read_base_config_dict, _compute_local_override
             yaml_config = _read_merged_config_dict()
             base_config = _read_base_config_dict()
-        except Exception:
+            compute_local_override_fn = _compute_local_override
+        except Exception as exc:
+            logger.warning("Wizard config helper import failed; using fallback override diff: %s", exc)
             yaml_config = None
             base_config = None
         if not yaml_config and os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
                 yaml_config = yaml.safe_load(f)
         if yaml_config is not None:
+            pre_edit_config = copy.deepcopy(yaml_config) if isinstance(yaml_config, dict) else {}
             
             yaml_config.setdefault("providers", {})
             providers = yaml_config["providers"]
@@ -2942,15 +2977,34 @@ async def save_setup_config(config: SetupConfig):
                 yaml_config.setdefault("external_media", {})["allowed_remote_hosts"] = [config.asterisk_server_ip]
 
             local_override = None
-            try:
-                if isinstance(base_config, dict):
-                    local_override = _compute_local_override(base_config, yaml_config)
-            except Exception:
-                local_override = None
+            if compute_local_override_fn and isinstance(base_config, dict):
+                try:
+                    local_override = compute_local_override_fn(base_config, yaml_config)
+                except Exception as exc:
+                    logger.warning(
+                        "Wizard override diff failed for %s (base_config_present=%s): %s",
+                        LOCAL_CONFIG_PATH,
+                        isinstance(base_config, dict),
+                        exc,
+                    )
+
+            if not isinstance(local_override, dict):
+                fallback_base = pre_edit_config if isinstance(pre_edit_config, dict) else {}
+                try:
+                    fallback_override = _compute_local_override_fallback(fallback_base, yaml_config)
+                    local_override = fallback_override if isinstance(fallback_override, dict) else {}
+                except Exception as exc:
+                    logger.warning(
+                        "Wizard fallback override diff failed for %s (base_config_present=%s): %s",
+                        LOCAL_CONFIG_PATH,
+                        isinstance(base_config, dict),
+                        exc,
+                    )
+                    local_override = {}
 
             atomic_write_text(
                 LOCAL_CONFIG_PATH,
-                yaml.dump(local_override if isinstance(local_override, dict) else yaml_config, default_flow_style=False, sort_keys=False),
+                yaml.dump(local_override, default_flow_style=False, sort_keys=False),
                 mode_from_existing=True,
             )
         
