@@ -27,7 +27,7 @@ Run at least one successful call for each baseline you intend to claim as suppor
 - Provider + transport
 - Config snippet (redacted)
 - Any warnings in logs
-- Matrix row in `docs/baselines/golden/v6.0.0-validation-matrix.md`
+- Matrix row in `docs/baselines/golden/v6.1.1-validation-matrix.md`
 
 ### Providers (AudioSocket)
 

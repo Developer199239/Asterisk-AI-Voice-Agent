@@ -1341,7 +1341,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.1.1...HEAD
+[6.1.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v6.1.1
 [6.0.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v6.0.0
 [5.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.3.1
 [5.2.5]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.2.5

@@ -1790,19 +1790,55 @@ _PLATFORMS_CACHE = None
 _PLATFORMS_CACHE_MTIME = None
 
 
+def _parse_semver(value: str) -> Optional[tuple[int, int, int]]:
+    """Extract first semantic version tuple from a string (vX.Y.Z or X.Y.Z)."""
+    m = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", value or "")
+    if not m:
+        return None
+    try:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
+def _detect_latest_changelog_version(project_root: str) -> Optional[str]:
+    """
+    Parse the first released Keep-a-Changelog heading from CHANGELOG.md.
+
+    Expected format: `## [X.Y.Z] - YYYY-MM-DD`
+    """
+    try:
+        changelog_path = os.path.join(project_root, "CHANGELOG.md")
+        if not os.path.exists(changelog_path):
+            return None
+        with open(changelog_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                m = re.match(r"^## \[(\d+\.\d+\.\d+)\]\s*-\s*\d{4}-\d{2}-\d{2}$", line)
+                if m:
+                    return f"v{m.group(1)}"
+    except Exception:
+        return None
+    return None
+
+
 def _detect_project_version(project_root: str) -> dict:
     """
     Best-effort project version detection for Admin UI.
 
     Preference order:
       1) AAVA_PROJECT_VERSION env var (operator override)
-      2) git describe (when repo checkout is present)
-      3) Parse README.md for a `vX.Y.Z` token
-      4) unknown
+      2) CHANGELOG.md latest release heading (`## [X.Y.Z] - YYYY-MM-DD`)
+      3) git describe (when repo checkout is present)
+      4) Parse README.md for a `vX.Y.Z` token
+      5) unknown
     """
     override = (os.getenv("AAVA_PROJECT_VERSION") or "").strip()
     if override:
         return {"version": override, "source": "env"}
+
+    changelog_version = _detect_latest_changelog_version(project_root)
+    git_version = None
 
     try:
         # Use -c safe.directory to avoid "dubious ownership" failures on some hosts.
@@ -1825,9 +1861,24 @@ def _detect_project_version(project_root: str) -> dict:
         if proc.returncode == 0:
             version = (proc.stdout or "").strip()
             if version:
-                return {"version": version, "source": "git"}
+                git_version = version
     except Exception:
         pass
+
+    if changelog_version:
+        changelog_semver = _parse_semver(changelog_version)
+        git_semver = _parse_semver(git_version or "")
+
+        # Prefer CHANGELOG when git describe is commit-distance/dirty output
+        # or when changelog clearly indicates a newer release series.
+        if not git_version or "-" in git_version:
+            if not git_semver or (changelog_semver and changelog_semver >= git_semver):
+                return {"version": changelog_version, "source": "changelog"}
+        if changelog_semver and git_semver and changelog_semver > git_semver:
+            return {"version": changelog_version, "source": "changelog"}
+
+    if git_version:
+        return {"version": git_version, "source": "git"}
 
     try:
         readme_path = os.path.join(project_root, "README.md")
