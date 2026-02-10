@@ -30,7 +30,9 @@ def _is_prefix(key: str, prefixes: tuple[str, ...]) -> bool:
 
 def _ai_engine_env_key(key: str) -> bool:
     return (
-        _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_"))
+        # Track only .env-owned health settings. HEALTH_BIND_HOST is compose-injected and
+        # should not trigger perpetual "pending restart" drift in Env UI.
+        _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_CHECK_"))
         or key in (
             "OPENAI_API_KEY",
             "GROQ_API_KEY",

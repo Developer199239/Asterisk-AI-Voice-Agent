@@ -86,6 +86,31 @@ def _disk_build_preflight(path: str) -> tuple[bool, Optional[str]]:
     return True, None
 
 
+def _truthy(raw: Optional[str]) -> bool:
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _map_cuda_runtime_issue(raw_reason: Optional[str]) -> str:
+    text = (raw_reason or "").strip()
+    low = text.lower()
+
+    if not text:
+        return "runtime GPU probe unavailable"
+    if "driver version is insufficient" in low:
+        return "CUDA driver/runtime mismatch"
+    if "nvidia-smi not found" in low or "libcuda" in low:
+        return "NVIDIA runtime not available in container"
+    if "no cuda-capable device" in low or "cuda device not available" in low:
+        return "No CUDA-capable device available to container"
+    if "out of memory" in low and "cuda" in low:
+        return "CUDA out of memory"
+    if "cublas" in low or "cudnn" in low:
+        return "CUDA dependency mismatch (cuBLAS/cuDNN)"
+    if "cuda" in low:
+        return "CUDA runtime unavailable"
+    return text
+
+
 class ModelInfo(BaseModel):
     """Information about a single model."""
     id: str
@@ -123,6 +148,8 @@ class SwitchModelRequest(BaseModel):
     kokoro_api_base_url: Optional[str] = None
     kokoro_api_key: Optional[str] = None
     kokoro_api_model: Optional[str] = None
+    # Allow intentional override for incompatible runtime/device combinations.
+    force_incompatible_apply: Optional[bool] = False
 
 
 class SwitchModelResponse(BaseModel):
@@ -736,9 +763,53 @@ async def switch_model(request: SwitchModelRequest):
         "LOCAL_TTS_BACKEND", "LOCAL_TTS_MODEL_PATH",
         "KOKORO_MODE", "KOKORO_VOICE", "KOKORO_MODEL_PATH",
         "KOKORO_API_BASE_URL", "KOKORO_API_KEY", "KOKORO_API_MODEL",
-        "MELOTTS_VOICE", "FASTER_WHISPER_MODEL",
-        "LOCAL_LLM_MODEL_PATH"
+        "MELOTTS_VOICE", "MELOTTS_DEVICE", "FASTER_WHISPER_MODEL", "FASTER_WHISPER_DEVICE",
+        "LOCAL_LLM_MODEL_PATH", "GPU_AVAILABLE"
     ])
+
+    # Guard CUDA-only backend selection when runtime GPU is unavailable.
+    # Default behavior blocks the switch unless explicitly forced by user intent.
+    target_backend = (request.backend or "").strip().lower()
+    is_fw_cuda_selection = (
+        request.model_type == "stt"
+        and target_backend == "faster_whisper"
+        and (previous_env.get("FASTER_WHISPER_DEVICE", "cpu") or "cpu").strip().lower() == "cuda"
+    )
+    is_melotts_cuda_selection = (
+        request.model_type == "tts"
+        and target_backend == "melotts"
+        and (previous_env.get("MELOTTS_DEVICE", "cpu") or "cpu").strip().lower() == "cuda"
+    )
+
+    if is_fw_cuda_selection or is_melotts_cuda_selection:
+        runtime_status: Optional[Dict[str, Any]] = None
+        runtime_fetch_error: Optional[str] = None
+        try:
+            runtime_status = await _fetch_status()
+        except Exception as exc:
+            runtime_fetch_error = str(exc)
+
+        gpu = (runtime_status or {}).get("gpu") or {}
+        runtime_usable = bool(gpu.get("runtime_usable") is True)
+        host_detected = gpu.get("host_preflight_detected")
+        runtime_reason = _map_cuda_runtime_issue(gpu.get("error") or runtime_fetch_error)
+
+        if not runtime_usable and not bool(request.force_incompatible_apply):
+            backend_name = "Faster-Whisper" if is_fw_cuda_selection else "MeloTTS"
+            env_key = "FASTER_WHISPER_DEVICE" if is_fw_cuda_selection else "MELOTTS_DEVICE"
+            host_hint = (
+                "Host preflight reports GPU_AVAILABLE=false. "
+                if host_detected is False or (host_detected is None and not _truthy(previous_env.get("GPU_AVAILABLE")))
+                else ""
+            )
+            return SwitchModelResponse(
+                success=False,
+                requires_restart=False,
+                message=(
+                    f"Blocked {backend_name} CUDA switch: runtime GPU is unavailable ({runtime_reason}). "
+                    f"{host_hint}Set `{env_key}=cpu` in Env page, or force apply this incompatible change."
+                ).strip(),
+            )
     
     env_updates, yaml_updates = _build_local_ai_env_and_yaml_updates(request)
 
@@ -1066,13 +1137,19 @@ async def rebuild_local_ai_server(request: RebuildRequest):
             )
 
         # Run docker compose build in the updater-runner container so relative binds resolve on the host correctly.
-        from api.system import _project_host_root_from_admin_ui_container, _run_updater_ephemeral
+        from api.system import (
+            _compose_files_flags_for_service,
+            _project_host_root_from_admin_ui_container,
+            _run_updater_ephemeral,
+        )
         host_root = _project_host_root_from_admin_ui_container()
         build_args_str = " ".join(build_args)
+        compose_files = _compose_files_flags_for_service("local_ai_server")
+        compose_prefix = f"{compose_files} " if compose_files else ""
         cmd = (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent build {build_args_str} local_ai_server"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent build {build_args_str} local_ai_server"
         )
         code, out = _run_updater_ephemeral(
             host_root,

@@ -14,7 +14,7 @@ import tempfile
 import wave
 import urllib.request
 import urllib.error
-from time import monotonic
+from time import monotonic, time
 from typing import Any, Dict, List, Optional, Tuple
 
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
@@ -726,6 +726,12 @@ class LocalAIServer:
         self._faster_whisper_lock = asyncio.Lock()
         # Component -> last startup error (used for degraded mode status/logging)
         self.startup_errors: Dict[str, str] = {}
+        # Track runtime fallbacks (e.g. CUDA -> CPU) for operator visibility.
+        self.runtime_fallbacks: Dict[str, Dict[str, Any]] = {}
+        # Cached runtime GPU probe for status responses (avoid probing every request).
+        self._gpu_runtime_status_cache: Dict[str, Any] = {}
+        self._gpu_runtime_status_checked_mono: float = 0.0
+        self._gpu_runtime_status_ttl_sec: float = 15.0
 
         # Runtime backend instances (loaded/unloaded over time)
         self.kroko_backend: Optional[KrokoSTTBackend] = None
@@ -749,6 +755,115 @@ class LocalAIServer:
         self.buffer_size_bytes = PCM16_TARGET_RATE * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
         # Process buffer after N ms of silence (idle finalizer).
         self.buffer_timeout_ms = self.config.stt_idle_ms
+
+    @staticmethod
+    def _parse_optional_bool(raw: Optional[str]) -> Optional[bool]:
+        if raw is None:
+            return None
+        value = str(raw).strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        return None
+
+    def get_gpu_runtime_status(self, refresh: bool = False) -> Dict[str, Any]:
+        """
+        Report GPU runtime availability from inside local_ai_server.
+
+        Returned fields are additive and intended for operator visibility:
+        - host_preflight_detected: bool|None (from GPU_AVAILABLE env if present)
+        - runtime_detected: bool
+        - runtime_usable: bool
+        - source: nvidia-smi|torch|none
+        - name: GPU name if available
+        - memory_gb: VRAM in GB if available
+        - error: best-effort reason when runtime GPU is unavailable
+        """
+        now_mono = monotonic()
+        if (
+            not refresh
+            and self._gpu_runtime_status_cache
+            and (now_mono - self._gpu_runtime_status_checked_mono) < self._gpu_runtime_status_ttl_sec
+        ):
+            return dict(self._gpu_runtime_status_cache)
+
+        host_preflight_raw = os.getenv("GPU_AVAILABLE")
+        status: Dict[str, Any] = {
+            "host_preflight_detected": self._parse_optional_bool(host_preflight_raw),
+            "host_preflight_raw": host_preflight_raw,
+            "runtime_detected": False,
+            "runtime_usable": False,
+            "source": "none",
+            "name": None,
+            "memory_gb": None,
+            "error": None,
+            "checked_at_epoch_ms": int(time() * 1000),
+        }
+
+        nvidia_error: Optional[str] = None
+        try:
+            nvidia_smi = shutil.which("nvidia-smi")
+            if not nvidia_smi:
+                raise FileNotFoundError("nvidia-smi not found on PATH")
+            query = subprocess.run(
+                [nvidia_smi, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if query.returncode == 0 and query.stdout.strip():
+                first_line = query.stdout.strip().splitlines()[0]
+                gpu_name, _, gpu_mem_raw = first_line.partition(",")
+                gpu_name = gpu_name.strip() or "NVIDIA GPU"
+                gpu_mem_mb = int((gpu_mem_raw or "0").strip() or "0")
+                status.update(
+                    {
+                        "runtime_detected": True,
+                        "runtime_usable": True,
+                        "source": "nvidia-smi",
+                        "name": gpu_name,
+                        "memory_gb": round(gpu_mem_mb / 1024, 2) if gpu_mem_mb > 0 else None,
+                        "error": None,
+                    }
+                )
+                self._gpu_runtime_status_cache = dict(status)
+                self._gpu_runtime_status_checked_mono = now_mono
+                return dict(status)
+            nvidia_error = (query.stderr or "").strip() or "nvidia-smi returned no GPU rows"
+        except Exception as exc:
+            nvidia_error = str(exc)
+
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                status.update(
+                    {
+                        "runtime_detected": True,
+                        "runtime_usable": True,
+                        "source": "torch",
+                        "name": gpu_name,
+                        "memory_gb": round(gpu_mem_gb, 2),
+                        "error": None,
+                    }
+                )
+            else:
+                status["error"] = self._classify_cuda_failure(nvidia_error or "torch reports CUDA unavailable")
+        except ImportError:
+            status["error"] = self._classify_cuda_failure(
+                nvidia_error or "No CUDA probe available (torch not installed)"
+            )
+        except Exception as exc:
+            merged = f"{nvidia_error}; torch probe failed: {exc}" if nvidia_error else str(exc)
+            status["error"] = self._classify_cuda_failure(merged)
+
+        self._gpu_runtime_status_cache = dict(status)
+        self._gpu_runtime_status_checked_mono = now_mono
+        return status
 
     def _apply_config(self, config: LocalAIConfig) -> None:
         # Optional WebSocket auth token for local-ai-server. If set, clients must
@@ -836,6 +951,7 @@ class LocalAIServer:
         logging.info("🚀 Initializing enhanced AI models for MVP...")
 
         self.startup_errors = {}
+        self.runtime_fallbacks = {}
 
         if self.mock_models:
             logging.warning(
@@ -979,8 +1095,20 @@ class LocalAIServer:
 
     async def _load_faster_whisper_backend(self):
         """Initialize Faster-Whisper STT backend for high-accuracy transcription."""
-        try:
+        requested_device = (self.faster_whisper_device or "cpu").strip().lower()
+        requested_compute = (self.faster_whisper_compute or "int8").strip()
+
+        def _build_backend(device: str, compute_type: str):
             from stt_backends import FasterWhisperSTTBackend
+            return FasterWhisperSTTBackend(
+                model_size=self.faster_whisper_model,
+                device=device,
+                compute_type=compute_type,
+                language=self.faster_whisper_language,
+                sample_rate=PCM16_TARGET_RATE,
+            )
+
+        try:
             from optional_imports import FasterWhisperModel
             
             if FasterWhisperModel is None:
@@ -992,27 +1120,73 @@ class LocalAIServer:
             logging.info(
                 "🎤 STT backend: Faster-Whisper (model=%s, device=%s, compute=%s)",
                 self.faster_whisper_model,
-                self.faster_whisper_device,
-                self.faster_whisper_compute,
+                requested_device,
+                requested_compute,
             )
 
-            self.faster_whisper_backend = FasterWhisperSTTBackend(
-                model_size=self.faster_whisper_model,
-                device=self.faster_whisper_device,
-                compute_type=self.faster_whisper_compute,
-                language=self.faster_whisper_language,
-                sample_rate=PCM16_TARGET_RATE,
-            )
+            self.faster_whisper_backend = _build_backend(requested_device, requested_compute)
 
             if not self.faster_whisper_backend.initialize():
-                raise RuntimeError("Failed to initialize Faster-Whisper")
+                raise RuntimeError(
+                    f"Failed to initialize Faster-Whisper (device={requested_device}, compute={requested_compute})"
+                )
 
             logging.info("✅ STT backend: Faster-Whisper initialized")
 
         except Exception as exc:
-            logging.error("❌ Failed to initialize Faster-Whisper STT backend: %s", exc)
+            primary_error = self._classify_cuda_failure(str(exc))
+            should_try_cpu_fallback = requested_device == "cuda"
+            if should_try_cpu_fallback:
+                fallback_compute = requested_compute
+                if "float16" in fallback_compute.lower():
+                    fallback_compute = "int8"
+                logging.warning(
+                    "⚠️ Faster-Whisper CUDA init failed (%s). Attempting CPU fallback (compute=%s).",
+                    primary_error,
+                    fallback_compute,
+                )
+                try:
+                    fallback_backend = _build_backend("cpu", fallback_compute)
+                    if not fallback_backend.initialize():
+                        raise RuntimeError(
+                            f"CPU fallback failed to initialize Faster-Whisper (compute={fallback_compute})"
+                        )
+
+                    self.faster_whisper_backend = fallback_backend
+                    self.faster_whisper_device = "cpu"
+                    self.faster_whisper_compute = fallback_compute
+                    self.startup_errors.pop("stt", None)
+                    self._record_runtime_fallback(
+                        component="stt",
+                        backend="faster_whisper",
+                        from_device=requested_device,
+                        to_device="cpu",
+                        reason=primary_error,
+                    )
+                    logging.warning(
+                        "✅ STT backend: Faster-Whisper recovered via CPU fallback (model=%s, compute=%s).",
+                        self.faster_whisper_model,
+                        fallback_compute,
+                    )
+                    return
+                except Exception as fallback_exc:
+                    combined_error = (
+                        f"{primary_error}. CPU fallback also failed: "
+                        f"{self._classify_cuda_failure(str(fallback_exc))}"
+                    )
+                    logging.error(
+                        "❌ Failed to initialize Faster-Whisper STT backend (CUDA + CPU fallback): %s",
+                        combined_error,
+                    )
+                    self.faster_whisper_backend = None
+                    self.startup_errors["stt"] = combined_error
+                    if self.fail_fast:
+                        raise
+                    return
+
+            logging.error("❌ Failed to initialize Faster-Whisper STT backend: %s", primary_error)
             self.faster_whisper_backend = None
-            self.startup_errors["stt"] = str(exc)
+            self.startup_errors["stt"] = primary_error
             if self.fail_fast:
                 raise
 
@@ -1137,6 +1311,46 @@ class LocalAIServer:
             logging.debug("GPU detection via torch failed: %s", exc)
         
         return 0  # Default to CPU
+
+    @staticmethod
+    def _classify_cuda_failure(error_text: str) -> str:
+        """
+        Convert low-level CUDA errors into actionable operator messages.
+        """
+        text = (error_text or "").strip()
+        low = text.lower()
+
+        if "driver version is insufficient" in low:
+            return "CUDA driver/runtime mismatch. Update NVIDIA driver or run CPU mode."
+        if "nvidia-smi not found" in low:
+            return "NVIDIA runtime not available in container (nvidia-smi missing)."
+        if "libcuda" in low or "cuda not found" in low:
+            return "CUDA runtime not available inside container. Ensure NVIDIA container runtime is enabled."
+        if "no cuda-capable device" in low or "cuda device not available" in low:
+            return "No CUDA-capable device available to the container."
+        if "out of memory" in low and "cuda" in low:
+            return "CUDA out of memory. Use a smaller model, lower settings, or CPU mode."
+        if "cublas" in low or "cudnn" in low:
+            return "CUDA dependency mismatch (cuBLAS/cuDNN). Validate container/runtime compatibility."
+        if "cuda" in low:
+            return "CUDA initialization failed. Verify NVIDIA runtime/driver compatibility or use CPU mode."
+        return text or "Initialization failed"
+
+    def _record_runtime_fallback(
+        self,
+        component: str,
+        backend: str,
+        from_device: str,
+        to_device: str,
+        reason: str,
+    ) -> None:
+        self.runtime_fallbacks[component] = {
+            "backend": backend,
+            "from_device": from_device,
+            "to_device": to_device,
+            "reason": reason,
+            "at_epoch_ms": int(time() * 1000),
+        }
 
     async def _load_llm_model(self):
         """Load LLM model with optimized parameters for faster inference"""
@@ -1350,6 +1564,7 @@ class LocalAIServer:
 
     async def _load_melotts_backend(self):
         """Initialize MeloTTS backend for lightweight CPU-optimized TTS."""
+        requested_device = (self.melotts_device or "cpu").strip().lower()
         try:
             from tts_backends import MeloTTSBackend
             from optional_imports import MeloTTS
@@ -1363,25 +1578,71 @@ class LocalAIServer:
             logging.info(
                 "🎙️ TTS backend: MeloTTS (voice=%s, device=%s, speed=%.1f)",
                 self.melotts_voice,
-                self.melotts_device,
+                requested_device,
                 self.melotts_speed,
             )
 
             self.melotts_backend = MeloTTSBackend(
                 voice=self.melotts_voice,
-                device=self.melotts_device,
+                device=requested_device,
                 speed=self.melotts_speed,
             )
 
             if not self.melotts_backend.initialize():
-                raise RuntimeError("Failed to initialize MeloTTS")
+                raise RuntimeError(f"Failed to initialize MeloTTS (device={requested_device})")
 
             logging.info("✅ TTS backend: MeloTTS initialized (44100Hz native)")
 
         except Exception as exc:
-            logging.error("❌ Failed to initialize MeloTTS backend: %s", exc)
+            primary_error = self._classify_cuda_failure(str(exc))
+            should_try_cpu_fallback = requested_device == "cuda"
+            if should_try_cpu_fallback:
+                logging.warning(
+                    "⚠️ MeloTTS CUDA init failed (%s). Attempting CPU fallback.",
+                    primary_error,
+                )
+                try:
+                    fallback_backend = MeloTTSBackend(
+                        voice=self.melotts_voice,
+                        device="cpu",
+                        speed=self.melotts_speed,
+                    )
+                    if not fallback_backend.initialize():
+                        raise RuntimeError("CPU fallback failed to initialize MeloTTS")
+
+                    self.melotts_backend = fallback_backend
+                    self.melotts_device = "cpu"
+                    self.startup_errors.pop("tts", None)
+                    self._record_runtime_fallback(
+                        component="tts",
+                        backend="melotts",
+                        from_device=requested_device,
+                        to_device="cpu",
+                        reason=primary_error,
+                    )
+                    logging.warning(
+                        "✅ TTS backend: MeloTTS recovered via CPU fallback (voice=%s).",
+                        self.melotts_voice,
+                    )
+                    return
+                except Exception as fallback_exc:
+                    combined_error = (
+                        f"{primary_error}. CPU fallback also failed: "
+                        f"{self._classify_cuda_failure(str(fallback_exc))}"
+                    )
+                    logging.error(
+                        "❌ Failed to initialize MeloTTS backend (CUDA + CPU fallback): %s",
+                        combined_error,
+                    )
+                    self.melotts_backend = None
+                    self.startup_errors["tts"] = combined_error
+                    if self.fail_fast:
+                        raise
+                    return
+
+            logging.error("❌ Failed to initialize MeloTTS backend: %s", primary_error)
             self.melotts_backend = None
-            self.startup_errors["tts"] = str(exc)
+            self.startup_errors["tts"] = primary_error
             if self.fail_fast:
                 raise
 

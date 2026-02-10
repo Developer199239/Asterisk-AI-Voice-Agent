@@ -93,6 +93,10 @@ const EnvPage = () => {
 
     const kokoroMode = (env['KOKORO_MODE'] || 'local').toLowerCase();
     const showHfKokoroMode = showAdvancedKokoro || kokoroMode === 'hf';
+    const gpuAvailable = (() => {
+        const raw = (env['GPU_AVAILABLE'] || '').trim().toLowerCase();
+        return ['1', 'true', 'yes', 'on'].includes(raw);
+    })();
 
     useEffect(() => {
         if (!authLoading && token) {
@@ -1199,7 +1203,7 @@ const EnvPage = () => {
                                     onChange={(e) => updateEnv('FASTER_WHISPER_DEVICE', e.target.value)}
                                     options={[
                                         { value: 'cpu', label: 'CPU' },
-                                        { value: 'cuda', label: 'CUDA (GPU)' },
+                                        ...(gpuAvailable ? [{ value: 'cuda', label: 'CUDA (GPU)' }] : []),
                                         { value: 'auto', label: 'Auto' },
                                     ]}
                                 />
@@ -1340,7 +1344,7 @@ const EnvPage = () => {
                                     onChange={(e) => updateEnv('MELOTTS_DEVICE', e.target.value)}
                                     options={[
                                         { value: 'cpu', label: 'CPU' },
-                                        { value: 'cuda', label: 'CUDA (GPU)' },
+                                        ...(gpuAvailable ? [{ value: 'cuda', label: 'CUDA (GPU)' }] : []),
                                     ]}
                                 />
                                 <FormInput

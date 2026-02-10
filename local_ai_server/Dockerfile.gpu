@@ -29,6 +29,7 @@ WORKDIR /usr/src/app
 # Create virtual environment
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+ENV NLTK_DATA="/opt/venv/nltk_data"
 ENV CUDA_HOME=/usr/local/cuda
 ENV LIBRARY_PATH="${CUDA_HOME}/lib64/stubs:${LIBRARY_PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64/stubs:${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
@@ -73,7 +74,7 @@ RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
 RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         pip install --no-cache-dir "git+https://github.com/myshell-ai/MeloTTS.git@${MELOTTS_GIT_REF}" && \
         python -m unidic download && \
-        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')" && \
+        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" && \
         python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" && \
         python -c "from melo.api import TTS; tts = TTS(language='EN', device='cpu'); print('MeloTTS ready')"; \
     fi
@@ -155,6 +156,7 @@ COPY --chown=appuser:appuser . .
 
 # Set PATH for virtual environment
 ENV PATH="/opt/venv/bin:$PATH"
+ENV NLTK_DATA="/opt/venv/nltk_data"
 
 # Run the application
 CMD ["python", "main.py"]

@@ -33,6 +33,7 @@ RUN apt-get -o Acquire::Retries=5 update && \
 # Create virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+ENV NLTK_DATA="/opt/venv/nltk_data"
 
 # Copy requirements first for optimal caching
 COPY requirements.txt .
@@ -76,7 +77,7 @@ RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         echo "📦 Installing MeloTTS..." && \
         pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git && \
         python -m unidic download && \
-        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')" && \
+        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" && \
         echo "📦 Pre-downloading MeloTTS BERT model..." && \
         python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" && \
         python -c "from melo.api import TTS; tts = TTS(language='EN', device='cpu'); print('MeloTTS ready')"; \
@@ -174,6 +175,7 @@ COPY --chown=appuser:appuser . .
 
 # Set PATH for virtual environment
 ENV PATH="/opt/venv/bin:$PATH"
+ENV NLTK_DATA="/opt/venv/nltk_data"
 
 # Run the application
 CMD ["python", "main.py"]

@@ -76,6 +76,44 @@ def _dotenv_value(key: str) -> Optional[str]:
         return None
 
 
+def _is_truthy_env(value: Optional[str]) -> bool:
+    raw = (value or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _compose_files_flags_for_service(service_name: str) -> str:
+    """
+    Return compose file flags for service operations.
+
+    local_ai_server must include docker-compose.gpu.yml when GPU_AVAILABLE=true,
+    otherwise UI-triggered recreate/start can silently drop GPU device requests.
+    """
+    # Normalize legacy service names.
+    svc = {
+        "local-ai-server": "local_ai_server",
+        "ai-engine": "ai_engine",
+        "admin-ui": "admin_ui",
+    }.get(service_name, service_name)
+
+    if svc != "local_ai_server":
+        return ""
+
+    if not _is_truthy_env(_dotenv_value("GPU_AVAILABLE")):
+        return ""
+
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    gpu_compose = os.path.join(project_root, "docker-compose.gpu.yml")
+    if not os.path.exists(gpu_compose):
+        logger.warning(
+            "GPU_AVAILABLE=true but %s not found; falling back to base compose for %s",
+            _sanitize_for_log(gpu_compose),
+            _sanitize_for_log(svc),
+        )
+        return ""
+
+    return "-f docker-compose.yml -f docker-compose.gpu.yml"
+
+
 def _sanitize_for_log(value: str) -> str:
     """Best-effort: prevent log injection via control characters."""
     try:
@@ -142,6 +180,41 @@ class ContainerInfo(BaseModel):
     status: str
     state: str
 
+
+def _safe_container_image_name(container) -> str:
+    """
+    Resolve a human-readable image name without failing the whole containers endpoint.
+
+    Docker can return ImageNotFound for stale image IDs after prune/rebuild windows.
+    """
+    try:
+        image = container.image
+        tags = getattr(image, "tags", None) or []
+        if tags:
+            return tags[0]
+        short_id = getattr(image, "short_id", "")
+        if short_id:
+            return short_id
+    except docker.errors.ImageNotFound:
+        pass
+    except Exception as e:
+        logger.debug("Error resolving image object for container %s: %s", getattr(container, "name", "<unknown>"), e)
+
+    try:
+        config_image = str((container.attrs.get("Config", {}) or {}).get("Image") or "").strip()
+        if config_image:
+            return f"{config_image} (missing locally)"
+        image_id = str(container.attrs.get("Image") or "").strip()
+        if image_id:
+            if image_id.startswith("sha256:") and len(image_id) > 19:
+                return f"{image_id[:19]}... (missing locally)"
+            return f"{image_id} (missing locally)"
+    except Exception:
+        pass
+
+    return "unknown (image unavailable)"
+
+
 @router.get("/containers")
 async def get_containers():
     try:
@@ -152,7 +225,7 @@ async def get_containers():
         result = []
         for c in containers:
             # Get image name
-            image_name = c.image.tags[0] if c.image.tags else c.image.short_id
+            image_name = _safe_container_image_name(c)
             
             # Calculate uptime from StartedAt
             uptime = None
@@ -214,7 +287,7 @@ async def get_containers():
                 "name": c.name,
                 "image": image_name,
                 "status": c.status,
-                "state": c.attrs['State']['Status'],
+                "state": c.attrs.get("State", {}).get("Status", c.status),
                 "uptime": uptime,
                 "started_at": started_at,
                 "ports": ports,
@@ -271,10 +344,12 @@ async def start_container(container_id: str):
 
     def _compose_up_cmd(svc: str, *, build: bool) -> str:
         flag = "--build" if build else "--no-build"
+        compose_files = _compose_files_flags_for_service(svc)
+        compose_prefix = f"{compose_files} " if compose_files else ""
         return (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent up -d {flag} {svc}"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d {flag} {svc}"
         )
 
     try:
@@ -502,10 +577,12 @@ async def _start_via_compose(container_id: str, service_map: dict):
         host_root = _project_host_root_from_admin_ui_container()
         build_flag = "--build" if service_name == "local_ai_server" else "--no-build"
         timeout_sec = 1800 if service_name == "local_ai_server" else 300
+        compose_files = _compose_files_flags_for_service(service_name)
+        compose_prefix = f"{compose_files} " if compose_files else ""
         cmd = (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent up -d {build_flag} {service_name}"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d {build_flag} {service_name}"
         )
 
         code, out = _run_updater_ephemeral(
@@ -586,10 +663,12 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
             logger.warning("Error stopping container %s", safe_container_name, exc_info=True)
         
         # Run compose in updater-runner so relative binds resolve on the host correctly.
+        compose_files = _compose_files_flags_for_service(service_name)
+        compose_prefix = f"{compose_files} " if compose_files else ""
         cmd = (
             "set -euo pipefail; "
             "cd \"$PROJECT_ROOT\"; "
-            f"docker compose -p asterisk-ai-voice-agent up -d --force-recreate --no-build {service_name}"
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d --force-recreate --no-build {service_name}"
         )
         timeout_sec = 600 if service_name == "local_ai_server" else 300
         code, out = _run_updater_ephemeral(

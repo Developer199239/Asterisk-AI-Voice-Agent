@@ -87,7 +87,7 @@ WebSocket: client_tool_call event
     ↓
 AI Engine receives tool call
     ↓
-Engine executes tool locally (transfer_call)
+Engine executes tool locally (transfer)
     ↓
 WebSocket: client_tool_result response
     ↓
@@ -212,7 +212,7 @@ contexts:
     profile: telephony_ulaw_8k
     tools:
       - hangup_call
-      - transfer_call
+      - transfer
       - send_email_summary
       - request_transcript
 ```
@@ -251,10 +251,10 @@ Tools must be added to the ElevenLabs dashboard as "Client Tools":
 }
 ```
 
-### transfer_call
+### transfer
 ```json
 {
-  "name": "transfer_call",
+  "name": "transfer",
   "description": "Transfer call to destination",
   "parameters": {
     "type": "object",
