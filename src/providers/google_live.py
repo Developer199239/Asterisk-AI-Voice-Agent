@@ -21,6 +21,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import time
 import struct
 import audioop
@@ -128,6 +129,8 @@ class GoogleLiveProvider(AIProviderInterface):
         super().__init__(on_event)
         self.config = config
         self._hangup_policy = normalize_hangup_policy(hangup_policy or {})
+        # Google Live only: allow disabling marker-based hangup heuristics to isolate provider disconnects.
+        self._hangup_markers_enabled: bool = bool(getattr(config, "hangup_markers_enabled", True))
         self.websocket: Optional[ClientConnection] = None
         self._receive_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
@@ -194,6 +197,17 @@ class GoogleLiveProvider(AIProviderInterface):
         # Diagnostics: keep a small ring buffer of outbound message summaries
         # to help explain server-initiated closes (e.g., 1008 policy violations).
         self._outbound_summaries: deque[Dict[str, Any]] = deque(maxlen=12)
+        # WebSocket keepalive telemetry (ping/pong frames are not part of the JSON protocol payload).
+        # We track them explicitly so 1008/1011 closes can be correlated to keepalive timing.
+        self._ws_ping_seq: int = 0
+        self._ws_pong_seq: int = 0
+        self._last_ws_ping_monotonic: Optional[float] = None
+        self._last_ws_pong_monotonic: Optional[float] = None
+        self._last_ws_ping_rtt_ms: Optional[float] = None
+        self._last_ws_ping_error: Optional[str] = None
+        # When `realtimeInput` is continuously streaming, WebSocket pings are redundant (and may trigger 1008
+        # policy closes on some accounts). Track last `realtimeInput` send time so keepalive only fires on idle.
+        self._last_realtime_input_sent_monotonic: Optional[float] = None
 
     def _summarize_outbound(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -257,6 +271,13 @@ class GoogleLiveProvider(AIProviderInterface):
             except Exception:
                 pass
             self._session_gauge_incremented = False
+        # Keepalive telemetry should not leak across sessions.
+        self._ws_ping_seq = 0
+        self._ws_pong_seq = 0
+        self._last_ws_ping_monotonic = None
+        self._last_ws_pong_monotonic = None
+        self._last_ws_ping_rtt_ms = None
+        self._last_ws_ping_error = None
 
     async def _emit_provider_disconnected(self, *, code: Optional[int], reason: str) -> None:
         # IMPORTANT: Tell the engine the provider is gone so we don't leave dead air.
@@ -328,6 +349,8 @@ class GoogleLiveProvider(AIProviderInterface):
         return re.sub(r"\s+", " ", (value or "").strip().lower())
 
     def _detect_user_end_intent(self, text: str) -> Optional[str]:
+        if not self._hangup_markers_enabled:
+            return None
         t = self._norm_text(text)
         if not t:
             return None
@@ -338,6 +361,8 @@ class GoogleLiveProvider(AIProviderInterface):
         return None
 
     def _detect_assistant_farewell(self, text: str) -> Optional[str]:
+        if not self._hangup_markers_enabled:
+            return None
         t = self._norm_text(text)
         if not t:
             return None
@@ -658,6 +683,11 @@ class GoogleLiveProvider(AIProviderInterface):
             call_id=call_id,
             model=self._normalize_model_name(self.config.llm_model),
         )
+        if not self._hangup_markers_enabled:
+            logger.warning(
+                "Google Live marker-based hangup heuristics are disabled",
+                call_id=call_id,
+            )
 
         # Build WebSocket URL with API key
         api_key = self.config.api_key or ""
@@ -691,11 +721,15 @@ class GoogleLiveProvider(AIProviderInterface):
                 ws_url,
                 subprotocols=["gemini-live"],
                 max_size=10 * 1024 * 1024,  # 10MB max message size
+                # Disable library-level ping frames. We implement our own keepalive behavior
+                # in `_keepalive_loop()` and have seen 1008 closes correlated with ping activity.
+                ping_interval=None,
+                ping_timeout=None,
             )
-            
+
             _GOOGLE_LIVE_SESSIONS.inc()
             self._session_gauge_incremented = True
-             
+
             logger.info(
                 "Google Live WebSocket connected",
                 call_id=call_id,
@@ -703,24 +737,24 @@ class GoogleLiveProvider(AIProviderInterface):
 
             # Create ACK event BEFORE sending setup (like Deepgram pattern)
             self._setup_ack_event = asyncio.Event()
-            
+
             # Start receive loop FIRST (so it can catch setupComplete)
             self._receive_task = asyncio.create_task(
                 self._receive_loop(),
                 name=f"google-live-receive-{call_id}",
             )
-            
+
             # Send setup message to configure session
             await self._send_setup(context)
-            
+
             # Wait for setup acknowledgment
             logger.debug("Waiting for Google Live setupComplete...", call_id=self._call_id)
             await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
             logger.info("Google Live setup complete (ACK received)", call_id=self._call_id)
-        
+
             # Note: Greeting is sent by _handle_setup_complete() to avoid race condition
             # Do NOT send greeting here as it would duplicate the greeting
-            
+
             self._keepalive_task = asyncio.create_task(
                 self._keepalive_loop(),
                 name=f"google-live-keepalive-{call_id}",
@@ -897,6 +931,9 @@ class GoogleLiveProvider(AIProviderInterface):
             summary_with_ts = dict(summary)
             summary_with_ts["ts_monotonic"] = round(time.monotonic(), 3)
             self._outbound_summaries.append(summary_with_ts)
+            # Track continuous audio traffic to avoid unnecessary WS pings.
+            if summary_with_ts.get("type") == "realtimeInput":
+                self._last_realtime_input_sent_monotonic = float(summary_with_ts["ts_monotonic"])
         except Exception:
             pass
 
@@ -1143,6 +1180,22 @@ class GoogleLiveProvider(AIProviderInterface):
                 meaning=close_meaning,
                 reason=close_reason,
                 outbound_tail=list(self._outbound_summaries),
+                ws_keepalive={
+                    "ping_seq": self._ws_ping_seq,
+                    "pong_seq": self._ws_pong_seq,
+                    "last_ping_age_sec": (
+                        round(time.monotonic() - self._last_ws_ping_monotonic, 3)
+                        if self._last_ws_ping_monotonic is not None
+                        else None
+                    ),
+                    "last_pong_age_sec": (
+                        round(time.monotonic() - self._last_ws_pong_monotonic, 3)
+                        if self._last_ws_pong_monotonic is not None
+                        else None
+                    ),
+                    "last_ping_rtt_ms": (round(self._last_ws_ping_rtt_ms, 2) if self._last_ws_ping_rtt_ms else None),
+                    "last_ping_error": self._last_ws_ping_error,
+                },
             )
             
             # Specific guidance for common errors
@@ -1157,6 +1210,22 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     hint=hint,
                     outbound_tail=list(self._outbound_summaries),
+                    ws_keepalive={
+                        "ping_seq": self._ws_ping_seq,
+                        "pong_seq": self._ws_pong_seq,
+                        "last_ping_age_sec": (
+                            round(time.monotonic() - self._last_ws_ping_monotonic, 3)
+                            if self._last_ws_ping_monotonic is not None
+                            else None
+                        ),
+                        "last_pong_age_sec": (
+                            round(time.monotonic() - self._last_ws_pong_monotonic, 3)
+                            if self._last_ws_pong_monotonic is not None
+                            else None
+                        ),
+                        "last_ping_rtt_ms": (round(self._last_ws_ping_rtt_ms, 2) if self._last_ws_ping_rtt_ms else None),
+                        "last_ping_error": self._last_ws_ping_error,
+                    },
                 )
             # Persist any pending transcription buffers before we signal the engine to tear down.
             try:
@@ -1403,6 +1472,9 @@ class GoogleLiveProvider(AIProviderInterface):
         speaks a farewell. To keep call teardown reliable, detect obvious end-of-call turns and set
         `cleanup_after_tts=True` so the engine hangs up after audio playback completes.
         """
+        # Marker-driven heuristic; keep tool-driven hangups working even when markers are disabled.
+        if not self._hangup_markers_enabled:
+            return
         if not self._call_id:
             return
         session_store = getattr(self, "_session_store", None)
@@ -1965,24 +2037,70 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive messages."""
+        try:
+            interval_sec = float(
+                getattr(self.config, "ws_keepalive_interval_sec", _KEEPALIVE_INTERVAL_SEC) or _KEEPALIVE_INTERVAL_SEC
+            )
+        except (TypeError, ValueError):
+            interval_sec = float(_KEEPALIVE_INTERVAL_SEC)
+        try:
+            idle_sec = float(getattr(self.config, "ws_keepalive_idle_sec", 5.0) or 5.0)
+        except (TypeError, ValueError):
+            idle_sec = 5.0
+        enabled = bool(getattr(self.config, "ws_keepalive_enabled", False))
+
+        if not enabled:
+            return
+
+        # Guard against bad config values that could cause a tight loop.
+        if (not math.isfinite(interval_sec)) or interval_sec < 1.0:
+            interval_sec = float(_KEEPALIVE_INTERVAL_SEC) if float(_KEEPALIVE_INTERVAL_SEC) >= 1.0 else 1.0
+        if (not math.isfinite(idle_sec)) or idle_sec < 0.0:
+            idle_sec = 0.0
+
         while self._ws_is_open():
             try:
-                await asyncio.sleep(_KEEPALIVE_INTERVAL_SEC)
+                await asyncio.sleep(interval_sec)
                 # Use WebSocket ping frames (protocol-level) rather than undocumented API messages.
                 # The Live API docs require `realtimeInput` messages to have a valid payload; sending
                 # `{ "realtimeInput": {} }` can be treated as an unsupported operation (observed as
                 # 1008 close + 501 NotImplemented in dashboards).
                 if self._setup_complete and self.websocket:
+                    # If we're actively streaming audio, don't send pings. Some accounts appear to
+                    # close connections (1008) after repeated ping frames even when audio is flowing.
+                    last_audio = getattr(self, "_last_realtime_input_sent_monotonic", None)
+                    if isinstance(last_audio, (int, float)) and (time.monotonic() - float(last_audio)) < idle_sec:
+                        continue
                     ping = getattr(self.websocket, "ping", None)
                     if callable(ping):
+                        t0 = time.monotonic()
+                        self._ws_ping_seq += 1
+                        self._last_ws_ping_monotonic = t0
+                        self._last_ws_ping_error = None
+                        try:
+                            # Add to outbound tail so close diagnostics show ping timing too.
+                            self._outbound_summaries.append(
+                                {
+                                    "type": "ws_ping",
+                                    "seq": self._ws_ping_seq,
+                                    "ts_monotonic": round(t0, 3),
+                                }
+                            )
+                        except (AttributeError, TypeError, ValueError):
+                            pass
                         pong_waiter = ping()
                         if asyncio.iscoroutine(pong_waiter):
                             pong_waiter = await pong_waiter
                         if pong_waiter is not None:
                             await asyncio.wait_for(pong_waiter, timeout=5.0)
+                        t1 = time.monotonic()
+                        self._ws_pong_seq += 1
+                        self._last_ws_pong_monotonic = t1
+                        self._last_ws_ping_rtt_ms = (t1 - t0) * 1000.0
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                self._last_ws_ping_error = str(e)
                 logger.error(
                     "Keepalive error",
                     call_id=self._call_id,

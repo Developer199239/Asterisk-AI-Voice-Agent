@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import HelpTooltip from '../../ui/HelpTooltip';
 
 interface GoogleLiveProviderFormProps {
     config: any;
@@ -25,6 +27,23 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
     const handleChange = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
     };
+
+    const expertStorageKey = `providers.google_live.expert.keepalive.v1`;
+    const [expertEnabled, setExpertEnabled] = useState<boolean>(() => {
+        try {
+            return window.localStorage.getItem(expertStorageKey) === 'true';
+        } catch {
+            return false;
+        }
+    });
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(expertStorageKey, expertEnabled ? 'true' : 'false');
+        } catch {
+            // ignore
+        }
+    }, [expertEnabled]);
 
     const selectedModel = (() => {
         const raw = (config.llm_model || '').toString().trim();
@@ -386,6 +405,22 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                     <p className="text-xs text-muted-foreground">
                         Used when Google Live does not emit a reliable turn-complete event after a hangup farewell.
                     </p>
+                    <div className="space-y-3 border border-amber-300/40 rounded-lg p-3 bg-amber-500/5">
+                        <div className="flex items-center space-x-2">
+                            <input
+                                type="checkbox"
+                                id="hangup_markers_enabled"
+                                className="rounded border-input"
+                                checked={config.hangup_markers_enabled ?? false}
+                                onChange={(e) => handleChange('hangup_markers_enabled', e.target.checked)}
+                            />
+                            <label htmlFor="hangup_markers_enabled" className="text-sm font-medium">Enable Marker-Based Hangup Heuristics</label>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Advanced: uses transcript marker matching (end_call / assistant_farewell) to arm <code>cleanup_after_tts</code> when a toolCall is missing.
+                            Recommended off for production; rely on <code>hangup_call</code> to end calls gracefully.
+                        </p>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Audio Idle Timeout (sec)</label>
@@ -426,6 +461,83 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 value={config.hangup_fallback_turn_complete_timeout_sec ?? 2.5}
                                 onChange={(e) => handleChange('hangup_fallback_turn_complete_timeout_sec', e.target.value ? parseFloat(e.target.value) : null)}
                             />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <h4 className="font-semibold text-sm border-b pb-2">Expert Settings</h4>
+                    <div className="space-y-3 border border-amber-300/40 rounded-lg p-3 bg-amber-500/5">
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-start gap-2">
+                                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5" />
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium">WebSocket Keepalive (Advanced)</span>
+                                        <HelpTooltip content="These settings control provider-level WebSocket keepalive behavior. Only change if you are troubleshooting disconnects. Some Google Live accounts/models may close the connection (1008) when keepalives are enabled." />
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        Warning: enabling keepalive can materially change connection stability. Validate with real test calls before production.
+                                    </p>
+                                </div>
+                            </div>
+                            <input
+                                type="checkbox"
+                                className="rounded border-input"
+                                checked={expertEnabled}
+                                onChange={(e) => {
+                                    setExpertEnabled(e.target.checked);
+                                }}
+                            />
+                        </div>
+
+                        <div className={`grid grid-cols-1 md:grid-cols-3 gap-4 ${expertEnabled ? '' : 'opacity-60 pointer-events-none'}`}>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium flex items-center gap-1">
+                                    Keepalive Enabled
+                                    <HelpTooltip content="Sends protocol-level WebSocket ping frames when the connection is idle. If disabled, the provider only relies on normal audio traffic to keep the session alive." />
+                                </label>
+                                <input
+                                    type="checkbox"
+                                    className="rounded border-input"
+                                    checked={config.ws_keepalive_enabled ?? false}
+                                    onChange={(e) => handleChange('ws_keepalive_enabled', e.target.checked)}
+                                    disabled={!expertEnabled}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Default: off. Turn on only if you see idle disconnects.
+                                </p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium flex items-center gap-1">
+                                    Keepalive Interval (sec)
+                                    <HelpTooltip content="How often to send ping frames (when idle). Lower values increase ping traffic; higher values reduce traffic but may not prevent idle timeouts." />
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.5"
+                                    className="w-full p-2 rounded border border-input bg-background"
+                                    value={config.ws_keepalive_interval_sec ?? 15.0}
+                                    onChange={(e) => handleChange('ws_keepalive_interval_sec', e.target.value ? parseFloat(e.target.value) : null)}
+                                    disabled={!expertEnabled}
+                                />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium flex items-center gap-1">
+                                    Idle Threshold (sec)
+                                    <HelpTooltip content="Only send keepalive pings if we haven't sent any realtime audio to Google in the last N seconds. Prevents pinging while audio is actively flowing." />
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.5"
+                                    className="w-full p-2 rounded border border-input bg-background"
+                                    value={config.ws_keepalive_idle_sec ?? 5.0}
+                                    onChange={(e) => handleChange('ws_keepalive_idle_sec', e.target.value ? parseFloat(e.target.value) : null)}
+                                    disabled={!expertEnabled}
+                                />
+                            </div>
                         </div>
                     </div>
                 </div>
