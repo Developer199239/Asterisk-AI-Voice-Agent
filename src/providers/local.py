@@ -389,6 +389,7 @@ class LocalProvider(AIProviderInterface):
 
                 # Convert and send one aggregated message
                 import audioop
+                from ..audio.resampler import resample_audio as _resample
                 # Handle different input modes
                 if self.input_mode == 'pcm16_16k':
                     # Already 16kHz PCM, just concatenate
@@ -396,11 +397,11 @@ class LocalProvider(AIProviderInterface):
                 elif self.input_mode == 'pcm16_8k':
                     # 8kHz PCM, resample to 16kHz
                     pcm8k = b"".join(batch)
-                    pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+                    pcm16k, _ = _resample(pcm8k, 8000, 16000)
                 else:
                     # µ-law 8kHz, convert to PCM then resample
                     pcm8k = b"".join(audioop.ulaw2lin(b, 2) for b in batch)
-                    pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+                    pcm16k, _ = _resample(pcm8k, 8000, 16000)
                 
                 # Process audio batch for STT
                 total_bytes = sum(len(b) for b in batch)

@@ -16,6 +16,8 @@ import logging
 import os
 import audioop
 import struct
+
+from ..audio.resampler import resample_audio as _resample
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass
 
@@ -327,8 +329,8 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         # Resample to 16kHz if needed
         target_rate = self.config.provider_input_sample_rate_hz
         if in_rate != target_rate:
-            pcm16_audio, self._resample_state_in = audioop.ratecv(
-                pcm16_audio, 2, 1, in_rate, target_rate, self._resample_state_in
+            pcm16_audio, self._resample_state_in = _resample(
+                pcm16_audio, in_rate, target_rate, state=self._resample_state_in
             )
         
         # Encode to base64
@@ -567,8 +569,8 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         
         # Resample if needed
         if source_rate != target_rate:
-            output, self._resample_state_out = audioop.ratecv(
-                output, 2, 1, source_rate, target_rate, self._resample_state_out
+            output, self._resample_state_out = _resample(
+                output, source_rate, target_rate, state=self._resample_state_out
             )
         
         # Encode to μ-law or a-law if needed

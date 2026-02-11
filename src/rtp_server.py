@@ -8,6 +8,8 @@ import socket
 import struct
 import audioop
 import time
+
+from .audio.resampler import resample_audio as _resample
 import random
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Callable, Any, Tuple, Iterable
@@ -445,7 +447,7 @@ class RTPServer:
             # CRITICAL: Must match what engine expects based on config
             if self.sample_rate != self.SAMPLE_RATE:
                 # Resample from codec rate to configured engine rate
-                pcm_resampled, state = audioop.ratecv(pcm_decoded, 2, 1, self.SAMPLE_RATE, self.sample_rate, session.resample_state)
+                pcm_resampled, state = _resample(pcm_decoded, self.SAMPLE_RATE, self.sample_rate, state=session.resample_state)
                 session.resample_state = state
             else:
                 # No resampling needed

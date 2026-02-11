@@ -47,6 +47,7 @@ from .pipelines import PipelineOrchestrator, PipelineOrchestratorError, Pipeline
 from .logging_config import get_logger, configure_logging
 from .rtp_server import RTPServer
 from .audio.audiosocket_server import AudioSocketServer
+from .audio.resampler import resample_audio as _resample
 from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
@@ -5359,7 +5360,7 @@ class Engine:
                         if pcm16 and pcm_rate != 16000:
                             try:
                                 state = self._resample_state_pipeline16k.get(caller_channel_id)
-                                pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
+                                pcm16, state = _resample(pcm16, pcm_rate, 16000, state=state)
                                 self._resample_state_pipeline16k[caller_channel_id] = state
                             except Exception:
                                 pcm16 = pcm_bytes
@@ -5938,7 +5939,7 @@ class Engine:
                         if pcm16 and pcm_rate != 16000:
                             try:
                                 state = self._resample_state_pipeline16k.get(caller_channel_id)
-                                pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
+                                pcm16, state = _resample(pcm16, pcm_rate, 16000, state=state)
                                 self._resample_state_pipeline16k[caller_channel_id] = state
                             except Exception:
                                 pcm16 = pcm_bytes
@@ -6141,7 +6142,7 @@ class Engine:
             if src_rate != 8000:
                 try:
                     state = self._resample_state_vad8k.get(session.call_id)
-                    pcm16, state = audioop.ratecv(pcm_src, 2, 1, src_rate, 8000, state)
+                    pcm16, state = _resample(pcm_src, src_rate, 8000, state=state)
                     self._resample_state_vad8k[session.call_id] = state
                 except Exception:
                     pcm16 = pcm_src
@@ -6202,7 +6203,7 @@ class Engine:
         try:
             if src_rate != 8000:
                 state = self._resample_state_vad8k.get(session.call_id)
-                pcm16_8k, state = audioop.ratecv(pcm16_bytes, 2, 1, src_rate, 8000, state)
+                pcm16_8k, state = _resample(pcm16_bytes, src_rate, 8000, state=state)
                 self._resample_state_vad8k[session.call_id] = state
             else:
                 pcm16_8k = pcm16_bytes
@@ -7655,7 +7656,7 @@ class Engine:
                 out_chunk = chunk
                 if enc in ("linear16", "pcm16", "slin", "slin16") and rate and wire_rate and rate != wire_rate:
                     try:
-                        out_chunk, _ = audioop.ratecv(chunk, 2, 1, rate, wire_rate, None)
+                        out_chunk, _ = _resample(chunk, rate, wire_rate)
                         seq = self._provider_chunk_seq.get(call_id, 0) + 1
                         self._provider_chunk_seq[call_id] = seq
                         logger.info(
@@ -8417,7 +8418,7 @@ class Engine:
             try:
                 # Use pipeline16k resample state under synthetic key 'pipeline'
                 state = self._resample_state_pipeline16k.get('pipeline')
-                pcm16, state = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, state)
+                pcm16, state = _resample(pcm8k, 8000, 16000, state=state)
                 self._resample_state_pipeline16k['pipeline'] = state
             except Exception:
                 pcm16 = pcm8k
@@ -10383,52 +10384,14 @@ class Engine:
                     pcm_bytes=len(pcm_bytes),
                 )
                 try:
-                    # CRITICAL FIX: audioop.ratecv() produces incorrect output sizes
-                    # Example: 320 bytes @ 8kHz → 638 bytes @ 16kHz (should be 640)
-                    # This 2-byte misalignment corrupts streaming for Google Live
-                    input_bytes = len(pcm_bytes)
-                    pcm_bytes, _ = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, None)
-                    
-                    # Calculate expected output size based on sample rate ratio
-                    # input_samples = input_bytes // 2 (2 bytes per sample)
-                    # output_samples = input_samples * (expected_rate / pcm_rate)
-                    # output_bytes = output_samples * 2
-                    expected_bytes = int((input_bytes // 2) * (expected_rate / pcm_rate) * 2)
-                    
-                    # Force exact size by padding or trimming
-                    if len(pcm_bytes) < expected_bytes:
-                        # Pad with zeros (silence)
-                        padding = expected_bytes - len(pcm_bytes)
-                        pcm_bytes += b'\x00' * padding
-                        logger.debug(
-                            "🔧 ENCODE RESAMPLE - Padded to exact size",
-                            call_id=call_id,
-                            provider=provider_name,
-                            before=len(pcm_bytes) - padding,
-                            after=len(pcm_bytes),
-                            padding_bytes=padding,
-                        )
-                    elif len(pcm_bytes) > expected_bytes:
-                        # Trim excess
-                        excess = len(pcm_bytes) - expected_bytes
-                        pcm_bytes = pcm_bytes[:expected_bytes]
-                        logger.debug(
-                            "🔧 ENCODE RESAMPLE - Trimmed to exact size",
-                            call_id=call_id,
-                            provider=provider_name,
-                            before=len(pcm_bytes) + excess,
-                            after=len(pcm_bytes),
-                            trimmed_bytes=excess,
-                        )
-                    
+                    pcm_bytes, _ = _resample(pcm_bytes, pcm_rate, expected_rate)
                     pcm_rate = expected_rate
                     logger.info(
-                        "🔧 ENCODE RESAMPLE - Resampling completed (corrected)",
+                        "🔧 ENCODE RESAMPLE - Resampling completed",
                         call_id=call_id,
                         provider=provider_name,
                         new_rate=pcm_rate,
                         new_bytes=len(pcm_bytes),
-                        expected_bytes=expected_bytes,
                     )
                 except Exception as e:
                     logger.error(
@@ -10508,7 +10471,7 @@ class Engine:
             if pcm_rate != expected_rate and working:
                 try:
                     state = prov_states.get(state_key)
-                    working, state = audioop.ratecv(working, 2, 1, pcm_rate, expected_rate, state)
+                    working, state = _resample(working, pcm_rate, expected_rate, state=state)
                     prov_states[state_key] = state
                 except Exception:
                     working = pcm_bytes
