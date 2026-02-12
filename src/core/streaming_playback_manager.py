@@ -580,7 +580,9 @@ class StreamingPlaybackManager:
             # Set TTS gating before starting stream
             # Skip gating for full agent providers that handle turn-taking internally
             # These providers have server-side VAD and don't need client-side audio gating
-            FULL_AGENT_PROVIDERS = {'deepgram', 'openai_realtime', 'elevenlabs_agent', 'google_live'}
+            # NOTE: google_live is intentionally EXCLUDED — it lacks server-side echo cancellation,
+            # so engine-side gating is required to prevent echoed model audio from confusing its VAD.
+            FULL_AGENT_PROVIDERS = {'deepgram', 'openai_realtime', 'elevenlabs_agent'}
             provider_name = getattr(session, 'provider_name', None) if session else None
             skip_gating = provider_name in FULL_AGENT_PROVIDERS
             
