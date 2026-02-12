@@ -20,6 +20,7 @@ import GoogleLiveProviderForm from '../components/config/providers/GoogleLivePro
 import OpenAIProviderForm from '../components/config/providers/OpenAIProviderForm';
 import ElevenLabsProviderForm from '../components/config/providers/ElevenLabsProviderForm';
 import { Capability, capabilityFromKey, ensureModularKey, isFullAgentProvider } from '../utils/providerNaming';
+import { GOOGLE_LIVE_DEFAULT_MODEL } from '../utils/googleLiveModels';
 
 const stripModularSuffix = (name: string): string => (name || '').replace(/_(stt|llm|tts)$/i, '');
 
@@ -199,7 +200,7 @@ const ProvidersPage: React.FC = () => {
                 type: 'full',
                 capabilities: ['stt', 'llm', 'tts'],
                 api_key: '${GOOGLE_API_KEY}',
-                llm_model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+                llm_model: GOOGLE_LIVE_DEFAULT_MODEL,
                 input_encoding: 'ulaw',
                 input_sample_rate_hz: 8000,
                 target_encoding: 'ulaw',
@@ -1005,7 +1006,7 @@ const ProvidersPage: React.FC = () => {
                         {[
                             { id: 'openai_realtime', name: 'OpenAI Realtime', desc: 'GPT-4o real-time voice agent' },
                             { id: 'deepgram', name: 'Deepgram', desc: 'Nova-2 STT + Aura TTS voice agent' },
-                            { id: 'google_live', name: 'Google Live', desc: 'Gemini 2.0 Flash real-time agent' },
+                            { id: 'google_live', name: 'Google Live', desc: 'Gemini 2.5 Native Audio real-time agent' },
                             { id: 'elevenlabs_agent', name: 'ElevenLabs Agent', desc: 'ElevenLabs conversational AI' },
                         ].map(template => (
                             <label key={template.id} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-accent/50 cursor-pointer">
