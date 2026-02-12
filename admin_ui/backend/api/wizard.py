@@ -35,6 +35,7 @@ router = APIRouter()
 DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 DISK_BLOCK_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB (hard stop for downloads)
 GOOGLE_LIVE_DEFAULT_MODEL = "gemini-2.5-flash-native-audio-latest"
+GOOGLE_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GOOGLE_LIVE_PREFERRED_MODELS = [
     GOOGLE_LIVE_DEFAULT_MODEL,
     "gemini-2.5-flash-native-audio-preview-12-2025",
@@ -72,7 +73,8 @@ async def _discover_google_live_model(api_key: str) -> Optional[str]:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                GOOGLE_MODELS_URL,
+                params={"key": api_key},
                 timeout=10.0,
             )
             if response.status_code != 200:
@@ -2456,7 +2458,8 @@ async def validate_api_key(validation: ApiKeyValidation):
                     
             elif provider == "google":
                 response = await client.get(
-                    f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                    GOOGLE_MODELS_URL,
+                    params={"key": api_key},
                     timeout=10.0
                 )
                 if response.status_code == 200:
