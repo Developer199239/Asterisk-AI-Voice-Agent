@@ -1953,7 +1953,9 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _maybe_force_farewell_after_hangup(self) -> None:
         try:
             # Grace window: if the model starts speaking, don't send a duplicate farewell request.
-            await asyncio.sleep(0.9)
+            # Google Live models typically need 2-2.5s to produce first audio after a tool response;
+            # 3.0s avoids firing before the model naturally begins its farewell.
+            await asyncio.sleep(3.0)
             if not self._call_id or not self._setup_complete or not self._ws_is_open():
                 return
             if not self._hangup_after_response:
