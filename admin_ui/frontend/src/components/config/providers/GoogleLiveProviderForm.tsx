@@ -1,27 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import HelpTooltip from '../../ui/HelpTooltip';
+import {
+    GOOGLE_LIVE_MODEL_GROUPS,
+    GOOGLE_LIVE_SUPPORTED_MODELS,
+    normalizeGoogleLiveModelForUi,
+} from '../../../utils/googleLiveModels';
 
 interface GoogleLiveProviderFormProps {
     config: any;
     onChange: (newConfig: any) => void;
 }
-
-const DEFAULT_LIVE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
-const LEGACY_LIVE_MODEL_MAP: Record<string, string> = {
-    'gemini-2.5-flash-native-audio-latest': DEFAULT_LIVE_MODEL,
-    'gemini-live-2.5-flash-preview': DEFAULT_LIVE_MODEL,
-    'gemini-2.0-flash-live-001': DEFAULT_LIVE_MODEL,
-    'gemini-2.0-flash-live-001-preview-09-2025': DEFAULT_LIVE_MODEL,
-    'gemini-2.5-flash-preview-native-audio-dialog': DEFAULT_LIVE_MODEL,
-    'gemini-2.5-flash-exp-native-audio-thinking-dialog': DEFAULT_LIVE_MODEL,
-};
-const SUPPORTED_LIVE_MODELS = [
-    'gemini-2.5-flash-native-audio-preview-12-2025',
-    'gemini-2.5-flash-native-audio-preview-09-2025',
-    'gemini-live-2.5-flash-native-audio',
-    'gemini-live-2.5-flash-preview-native-audio-09-2025',
-];
 
 const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config, onChange }) => {
     const handleChange = (field: string, value: any) => {
@@ -45,19 +34,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
         }
     }, [expertEnabled]);
 
-    const selectedModel = (() => {
-        const raw = (config.llm_model || '').toString().trim();
-        if (!raw) {
-            return DEFAULT_LIVE_MODEL;
-        }
-        if (raw in LEGACY_LIVE_MODEL_MAP) {
-            return LEGACY_LIVE_MODEL_MAP[raw];
-        }
-        if (raw.includes('native-audio')) {
-            return raw;
-        }
-        return DEFAULT_LIVE_MODEL;
-    })();
+    const selectedModel = normalizeGoogleLiveModelForUi(config.llm_model);
 
     return (
         <div className="space-y-6">
@@ -93,15 +70,16 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             value={selectedModel}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
-                            <optgroup label="Gemini Developer API">
-                                <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
-                                <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
-                            </optgroup>
-                            <optgroup label="Vertex AI Live API">
-                                <option value="gemini-live-2.5-flash-native-audio">Gemini Live 2.5 Flash Native Audio (GA)</option>
-                                <option value="gemini-live-2.5-flash-preview-native-audio-09-2025">Gemini Live 2.5 Flash Native Audio (Preview 09-2025)</option>
-                            </optgroup>
-                            {!SUPPORTED_LIVE_MODELS.includes(selectedModel) && (
+                            {GOOGLE_LIVE_MODEL_GROUPS.map((group) => (
+                                <optgroup key={group.label} label={group.label}>
+                                    {group.options.map((modelOption) => (
+                                        <option key={modelOption.value} value={modelOption.value}>
+                                            {modelOption.label}
+                                        </option>
+                                    ))}
+                                </optgroup>
+                            ))}
+                            {!GOOGLE_LIVE_SUPPORTED_MODELS.includes(selectedModel) && (
                                 <optgroup label="Custom">
                                     <option value={selectedModel}>{selectedModel}</option>
                                 </optgroup>

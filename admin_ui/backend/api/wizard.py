@@ -34,6 +34,15 @@ router = APIRouter()
 
 DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 DISK_BLOCK_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB (hard stop for downloads)
+GOOGLE_LIVE_DEFAULT_MODEL = "gemini-2.5-flash-native-audio-latest"
+GOOGLE_LIVE_PREFERRED_MODELS = [
+    GOOGLE_LIVE_DEFAULT_MODEL,
+    "gemini-2.5-flash-native-audio-preview-12-2025",
+    "gemini-2.5-flash-native-audio-preview-09-2025",
+    "gemini-live-2.5-flash-native-audio",
+    "gemini-live-2.5-flash-preview-native-audio-09-2025",
+    "gemini-live-2.5-flash-preview",
+]
 
 
 def _parse_optional_bool(raw: Optional[str]) -> Optional[bool]:
@@ -2429,13 +2438,7 @@ async def validate_api_key(validation: ApiKeyValidation):
                         }
                     
                     # Check if our preferred models are available (in order of preference)
-                    preferred_models = [
-                        "gemini-2.5-flash-native-audio-preview-12-2025",  # Latest native audio model
-                        "gemini-2.0-flash-live-001",  # Stable live model
-                        "gemini-2.0-flash-exp",  # Experimental
-                    ]
-                    
-                    for preferred_model in preferred_models:
+                    for preferred_model in GOOGLE_LIVE_PREFERRED_MODELS:
                         if preferred_model in live_models:
                             return {
                                 "valid": True, 
@@ -2835,7 +2838,7 @@ async def save_setup_config(config: SetupConfig):
                 if not provider_exists("google_live"):
                     providers["google_live"].update({
                         "api_key": "${GOOGLE_API_KEY}",
-                        "llm_model": "gemini-2.5-flash-native-audio-preview-12-2025",
+                        "llm_model": GOOGLE_LIVE_DEFAULT_MODEL,
                         "input_encoding": "ulaw",
                         "input_sample_rate_hz": 8000,
                         "provider_input_encoding": "linear16",
