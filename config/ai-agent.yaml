@@ -1002,11 +1002,11 @@ providers:
     input_gain_max_db: 0
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
-    llm_max_output_tokens: 768
-    llm_model: gemini-2.5-flash-native-audio-latest
-    llm_temperature: 0.4
-    llm_top_k: 20
-    llm_top_p: 0.9
+    llm_max_output_tokens: 8192
+    llm_model: gemini-2.5-flash-native-audio-preview-12-2025
+    llm_temperature: 0.8
+    llm_top_k: 40
+    llm_top_p: 0.95
     # Google Live: prefer tool-driven hangup. Marker-driven cleanup_after_tts can cause premature teardown
     # during transcript/email capture flows.
     hangup_markers_enabled: false
