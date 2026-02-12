@@ -2210,4 +2210,3 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
 
             logger.info("Google Live session stopped")
-            self._clear_metrics(previous_call_id)
