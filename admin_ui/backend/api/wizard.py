@@ -2130,7 +2130,8 @@ async def start_local_ai_server():
 
             return {
                 "success": True,
-                "message": f"Local AI Server build/start initiated in background; this can take several minutes. See {log_path} or container logs once created.",
+                "building": True,
+                "message": f"Local AI Server image is being built in the background (this can take 10-60 minutes for GPU builds). See {log_path} or container logs once created.",
                 "media_setup": media_setup,
             }
 
