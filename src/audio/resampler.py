@@ -47,6 +47,8 @@ def resample_audio(
     channels: int = 1,
     state: Optional[tuple] = None,
 ) -> Tuple[bytes, Optional[tuple]]:
+    # NOTE: sample_width and channels are kept for API compatibility
+    # but are not used by the NumPy interpolation implementation.
     """
     Resample PCM audio between sample rates.
 
@@ -73,7 +75,7 @@ def resample_audio(
         try:
             if isinstance(state, tuple) and len(state) > 0:
                 prev_last = float(state[0])
-        except Exception:
+        except (TypeError, ValueError, IndexError):
             prev_last = None
 
     # Exact step between output samples in input-sample units.
