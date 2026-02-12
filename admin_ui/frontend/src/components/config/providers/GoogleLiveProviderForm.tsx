@@ -444,6 +444,71 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                 </div>
 
                 <div className="space-y-4">
+                    <h4 className="font-semibold text-sm border-b pb-2">Voice Activity Detection (VAD)</h4>
+                    <p className="text-xs text-muted-foreground">
+                        Controls Google's server-side speech detection. Higher sensitivity catches shorter utterances but may trigger on background noise.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                Start of Speech Sensitivity
+                                <HelpTooltip content="How aggressively Google detects the START of speech. HIGH catches short utterances (1-2 words) better but may false-trigger on noise. LOW requires more confident speech onset." />
+                            </label>
+                            <select
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.vad_start_of_speech_sensitivity || 'START_SENSITIVITY_HIGH'}
+                                onChange={(e) => handleChange('vad_start_of_speech_sensitivity', e.target.value)}
+                            >
+                                <option value="START_SENSITIVITY_LOW">Low</option>
+                                <option value="START_SENSITIVITY_MEDIUM">Medium</option>
+                                <option value="START_SENSITIVITY_HIGH">High (Recommended)</option>
+                            </select>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                End of Speech Sensitivity
+                                <HelpTooltip content="How aggressively Google detects the END of speech. HIGH means faster turn-taking (shorter silence = end of utterance). LOW waits longer before deciding the user stopped talking." />
+                            </label>
+                            <select
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.vad_end_of_speech_sensitivity || 'END_SENSITIVITY_HIGH'}
+                                onChange={(e) => handleChange('vad_end_of_speech_sensitivity', e.target.value)}
+                            >
+                                <option value="END_SENSITIVITY_LOW">Low</option>
+                                <option value="END_SENSITIVITY_MEDIUM">Medium</option>
+                                <option value="END_SENSITIVITY_HIGH">High (Recommended)</option>
+                            </select>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                Prefix Padding (ms)
+                                <HelpTooltip content="Milliseconds of audio to include BEFORE detected speech start. Lower values reduce latency; higher values capture soft speech onsets. Telephony default: 20ms." />
+                            </label>
+                            <input
+                                type="number"
+                                step="10"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.vad_prefix_padding_ms ?? 20}
+                                onChange={(e) => handleChange('vad_prefix_padding_ms', e.target.value ? parseInt(e.target.value) : null)}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                Silence Duration (ms)
+                                <HelpTooltip content="Milliseconds of silence required to mark the end of an utterance. Lower = faster responses but may cut off mid-sentence pauses. Higher = more natural pauses but slower turn-taking. Telephony default: 500ms." />
+                            </label>
+                            <input
+                                type="number"
+                                step="50"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.vad_silence_duration_ms ?? 500}
+                                onChange={(e) => handleChange('vad_silence_duration_ms', e.target.value ? parseInt(e.target.value) : null)}
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
                     <h4 className="font-semibold text-sm border-b pb-2">Expert Settings</h4>
                     <div className="space-y-3 border border-amber-300/40 rounded-lg p-3 bg-amber-500/5">
                         <div className="flex items-center justify-between gap-3">

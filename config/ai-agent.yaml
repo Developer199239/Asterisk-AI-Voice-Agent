@@ -206,6 +206,12 @@ providers:
     target_sample_rate_hz: 8000
     tts_voice_name: Aoede
     type: full
+    # Server-side VAD tuning (realtimeInputConfig.automaticActivityDetection)
+    # Controls how Google detects speech start/end in the audio stream.
+    vad_start_of_speech_sensitivity: START_SENSITIVITY_HIGH
+    vad_end_of_speech_sensitivity: END_SENSITIVITY_HIGH
+    vad_prefix_padding_ms: 20
+    vad_silence_duration_ms: 500
   local:
     # Local AI Server WebSocket URL. Default deployment uses host networking, so 127.0.0.1 is correct.
     # If you run containers on a user-defined bridge network (no host networking), use ws://local_ai_server:8765.
