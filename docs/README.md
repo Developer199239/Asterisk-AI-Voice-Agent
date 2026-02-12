@@ -42,7 +42,7 @@
 ## Project Information
 
 - **[Roadmap](ROADMAP.md)** - What's next and how to contribute
-- **[Milestone History](MILESTONE_HISTORY.md)** - Completed milestones 1-21
+- **[Milestone History](MILESTONE_HISTORY.md)** - Completed milestones 1-24
 - **[Release Checklist](RELEASE_CHECKLIST.md)** - Manual golden-baseline gate
 - **[Changelog](../CHANGELOG.md)** - Version history and release notes
 - **[Security](../SECURITY.md)** - Security policy and vulnerability reporting

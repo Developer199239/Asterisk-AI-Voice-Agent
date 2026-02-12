@@ -28,6 +28,8 @@ Archive of completed development milestones for the Asterisk AI Voice Agent. For
 | 19 | [Admin UI Implementation](contributing/milestones/milestone-19-admin-ui-implementation.md) | Dec 2025 | Production-ready Admin UI: setup wizard, dashboard, config editor, live logs |
 | 20 | [ElevenLabs Provider](contributing/milestones/milestone-20-elevenlabs.md) | Dec 2025 | ElevenLabs Conversational AI with premium voice quality and tool calling |
 | 21 | [Call History & Analytics](contributing/milestones/milestone-21-call-history.md) | Dec 2025 | Persistent call records with transcripts, debugging, and export |
+| 23 | [NAT/Advertise Host](contributing/milestones/milestone-23-nat-advertise-host.md) | Feb 2026 | Separate bind vs advertise host for NAT/VPN/hybrid cloud deployments |
+| 24 | [Phase Tools & Tool Enhancements](contributing/milestones/milestone-24-tools-enhancements.md) | Feb 2026 | Pre-call HTTP lookups, in-call HTTP tools, post-call webhooks, extension status checking |
 
 ---
 

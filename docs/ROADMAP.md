@@ -74,7 +74,7 @@ Longer-term goals that will shape the project's direction:
 
 ## References
 
-- **[Milestone History](MILESTONE_HISTORY.md)** — Completed milestones 1-21
+- **[Milestone History](MILESTONE_HISTORY.md)** — Completed milestones 1-24
 - **[CHANGELOG.md](../CHANGELOG.md)** — Detailed release notes
 - **[Milestone Specs](contributing/milestones/)** — Technical specifications for each milestone
 - **[Contributing Guide](../CONTRIBUTING.md)** — How to contribute code
