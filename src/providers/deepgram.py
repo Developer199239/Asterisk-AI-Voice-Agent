@@ -26,6 +26,16 @@ from src.tools.adapters.deepgram import DeepgramToolAdapter
 
 logger = get_logger(__name__)
 
+
+def _log_provider_task_exception(task: asyncio.Task) -> None:
+    """Done-callback: log exceptions from fire-and-forget provider tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error("Provider background task failed", task_name=task.get_name(), error=str(exc), exc_info=exc)
+
+
 _DEEPGRAM_INPUT_RATE = Gauge(
     "ai_agent_deepgram_input_sample_rate_hz",
     "Configured Deepgram input sample rate per call",
@@ -1218,7 +1228,8 @@ class DeepgramProvider(AIProviderInterface):
                                     request_id=getattr(self, "request_id", None),
                                 )
                                 # Handle function call via tool adapter
-                                asyncio.create_task(self._handle_function_call(event_data))
+                                _t = asyncio.create_task(self._handle_function_call(event_data))
+                                _t.add_done_callback(_log_provider_task_exception)
                             elif et == "ConnectionClosed":
                                 logger.info(
                                     "🔌 Deepgram ConnectionClosed",
@@ -1407,7 +1418,8 @@ class DeepgramProvider(AIProviderInterface):
                                             logger.debug("Session not found for latency tracking", call_id=call_id_copy)
                                     except Exception as e:
                                         logger.debug("Failed to save turn latency", call_id=call_id_copy, error=str(e))
-                                asyncio.create_task(save_latency())
+                                _t = asyncio.create_task(save_latency())
+                                _t.add_done_callback(_log_provider_task_exception)
                             except Exception as e:
                                 logger.debug("Failed to create latency save task", error=str(e))
                         logger.info("Turn latency recorded", call_id=self.call_id, latency_ms=round(turn_latency_ms, 1))

@@ -39,6 +39,16 @@ from src.tools.adapters.openai import OpenAIToolAdapter
 
 logger = get_logger(__name__)
 
+
+def _log_provider_task_exception(task: asyncio.Task) -> None:
+    """Done-callback: log exceptions from fire-and-forget provider tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error("Provider background task failed", task_name=task.get_name(), error=str(exc), exc_info=exc)
+
+
 _COMMIT_INTERVAL_SEC = 0.2
 _KEEPALIVE_INTERVAL_SEC = 15.0
 
@@ -1044,7 +1054,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         
         # FALLBACK: Re-enable VAD after timeout in case response.done doesn't fire correctly
         # This ensures two-way conversation can proceed even if greeting tracking fails
-        asyncio.create_task(self._greeting_vad_fallback())
+        _t = asyncio.create_task(self._greeting_vad_fallback())
+        _t.add_done_callback(_log_provider_task_exception)
 
     async def _greeting_vad_fallback(self):
         """Fallback to re-enable VAD if greeting completion detection fails."""
@@ -1917,7 +1928,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     function_name=function_name,
                 )
                 # Handle function call via tool adapter
-                asyncio.create_task(self._handle_function_call(event))
+                _t = asyncio.create_task(self._handle_function_call(event))
+                _t.add_done_callback(_log_provider_task_exception)
             return
 
         logger.debug("Unhandled OpenAI Realtime event", event_type=event_type)

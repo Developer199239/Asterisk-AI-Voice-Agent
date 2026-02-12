@@ -483,6 +483,8 @@ class Engine:
         # Pipeline runtime structures (Milestone 7): per-call audio queues and runner tasks
         self._pipeline_queues: Dict[str, asyncio.Queue] = {}
         self._pipeline_tasks: Dict[str, asyncio.Task] = {}
+        # Per-call background tasks (fire-and-forget) that should be cancelled on cleanup
+        self._call_bg_tasks: Dict[str, Set[asyncio.Task]] = {}
         # Track calls where a pipeline was explicitly requested via AI_PROVIDER
         self._pipeline_forced: Dict[str, bool] = {}
         # Cache for called_number variables (DIALED_NUMBER, __FROM_DID) from ChannelVarSet events
@@ -507,6 +509,35 @@ class Engine:
         # channel playback, where ExternalMedia RTP can be paused/altered.
         self.ari_client.on_event("ChannelTalkingStarted", self._handle_channel_talking_started)
         self.ari_client.on_event("ChannelTalkingFinished", self._handle_channel_talking_finished)
+
+    @staticmethod
+    def _log_task_exception(task: asyncio.Task) -> None:
+        """Done-callback for fire-and-forget tasks: log exceptions instead of swallowing them."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error(
+                "Background task failed",
+                task_name=task.get_name(),
+                error=str(exc),
+                exc_info=exc,
+            )
+
+    def _fire_and_forget(self, coro, *, name: str = None) -> asyncio.Task:
+        """Create a fire-and-forget task with exception logging."""
+        task = asyncio.create_task(coro, name=name)
+        task.add_done_callback(self._log_task_exception)
+        return task
+
+    def _fire_and_forget_for_call(self, call_id: str, coro, *, name: str = None) -> asyncio.Task:
+        """Create a per-call fire-and-forget task: logged and cancelled on call cleanup."""
+        task = asyncio.create_task(coro, name=name or f"bg-{call_id}")
+        task.add_done_callback(self._log_task_exception)
+        task_set = self._call_bg_tasks.setdefault(call_id, set())
+        task_set.add(task)
+        task.add_done_callback(lambda t: task_set.discard(t))
+        return task
 
     async def on_rtp_packet(self, packet: bytes, addr: tuple):
         """Handle incoming RTP packets from the UDP server."""
@@ -2329,7 +2360,7 @@ class Engine:
                     "ExternalMedia channel entered Stasis but no caller found (will retry attach)",
                     external_media_id=external_media_id,
                 )
-                asyncio.create_task(self._retry_attach_external_media_channel(external_media_id))
+                self._fire_and_forget(self._retry_attach_external_media_channel(external_media_id), name=f"retry-extmedia-{external_media_id}")
                 return
             
             caller_channel_id = session.caller_channel_id
@@ -2351,7 +2382,7 @@ class Engine:
                     # Without this, Asterisk won't send RTP to ExternalMedia until audio
                     # flows through the bridge (which may not happen for external trunk calls
                     # until the caller starts speaking). This fixes greeting cutoff issues.
-                    asyncio.create_task(self._kick_rtp_flow(bridge_id, caller_channel_id))
+                    self._fire_and_forget_for_call(caller_channel_id, self._kick_rtp_flow(bridge_id, caller_channel_id), name=f"kick-rtp-{caller_channel_id}")
                     
                     # Start the provider session now that media path is connected
                     if not session.provider_session_active:
@@ -2455,7 +2486,7 @@ class Engine:
                             attempt=attempt,
                         )
                         # Kick RTP flow for retry path as well
-                        asyncio.create_task(self._kick_rtp_flow(session.bridge_id, session.caller_channel_id))
+                        self._fire_and_forget_for_call(session.caller_channel_id, self._kick_rtp_flow(session.bridge_id, session.caller_channel_id), name=f"kick-rtp-retry-{session.caller_channel_id}")
                         if not session.provider_session_active:
                             await self._ensure_provider_session_started(session.caller_channel_id)
                         return
@@ -3289,7 +3320,7 @@ class Engine:
     def start_attended_transfer_timeout_guard(self, call_id: str, agent_channel_id: str, *, timeout_sec: float) -> None:
         """Ensure MOH/action state is cleaned up if the agent leg never answers."""
         try:
-            asyncio.create_task(self._attended_transfer_timeout_guard(call_id, agent_channel_id, timeout_sec=float(timeout_sec)))
+            self._fire_and_forget_for_call(call_id, self._attended_transfer_timeout_guard(call_id, agent_channel_id, timeout_sec=float(timeout_sec)), name=f"transfer-timeout-{call_id}")
         except Exception:
             logger.debug("Failed to schedule attended transfer timeout guard", call_id=call_id, exc_info=True)
 
@@ -4407,6 +4438,12 @@ class Engine:
             except Exception:
                 logger.debug("Background music stop failed during cleanup", call_id=call_id, exc_info=True)
 
+            # Cancel per-call background tasks (delayed hangups, transfer guards, etc.)
+            bg_tasks = self._call_bg_tasks.pop(call_id, set())
+            for t in bg_tasks:
+                if not t.done():
+                    t.cancel()
+
             # Stop the active provider session if one exists (per-call instance).
             try:
                 start_task = self._provider_start_tasks.pop(call_id, None)
@@ -4617,8 +4654,9 @@ class Engine:
                                             call_id
                                         )
                                         # Send asynchronously (don't block cleanup)
-                                        asyncio.create_task(
-                                            transcript_tool._send_transcript_async(email_data, call_id, transcript_tool_config)
+                                        self._fire_and_forget(
+                                            transcript_tool._send_transcript_async(email_data, call_id, transcript_tool_config),
+                                            name=f"transcript-email-{call_id}"
                                         )
                                         logger.info(
                                             "📧 Sent end-of-call transcript",
@@ -11743,7 +11781,7 @@ class Engine:
                                 except Exception as e:
                                     logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
 
-                            asyncio.create_task(delayed_hangup())
+                            self._fire_and_forget_for_call(call_id, delayed_hangup(), name=f"delayed-hangup-{call_id}")
                 else:
                     logger.warning(
                         "Tool not found in registry",
@@ -12063,7 +12101,7 @@ class Engine:
             
             # Create fire-and-forget tasks for all post-call tools
             for tool in tools_to_run:
-                asyncio.create_task(
+                self._fire_and_forget(
                     run_post_call_tool(tool),
                     name=f"post-call-{tool.definition.name}-{call_id}"
                 )
