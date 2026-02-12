@@ -2836,11 +2836,11 @@ async def save_setup_config(config: SetupConfig):
                 discovered_model = await _discover_google_live_model(config.google_key)
                 if discovered_model:
                     selected_google_live_model = discovered_model
-                    logger.info("Resolved Google Live model for setup", model=selected_google_live_model)
+                    logger.info("Resolved Google Live model for setup: %s", selected_google_live_model)
                 else:
                     logger.warning(
-                        "Could not resolve Google Live model during setup; falling back to default",
-                        fallback_model=selected_google_live_model,
+                        "Could not resolve Google Live model during setup; falling back to default: %s",
+                        selected_google_live_model,
                     )
             
             # Full agent providers - clear active_pipeline when setting as default
