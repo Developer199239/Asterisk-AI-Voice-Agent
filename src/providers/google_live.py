@@ -1885,7 +1885,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 # so the model doesn't echo the farewell and then also generate its own,
                 # which produces a duplicate farewell.
                 if func_name == "hangup_call" and isinstance(safe_result, dict):
-                    safe_result["message"] = "Call ending. Say a brief goodbye to the caller."
+                    safe_result["message"] = "Acknowledged. Call will disconnect after your response."
                 tool_response = {
                     "toolResponse": {
                         "functionResponses": [
