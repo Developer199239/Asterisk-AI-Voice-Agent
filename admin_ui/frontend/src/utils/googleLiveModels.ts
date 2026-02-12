@@ -51,9 +51,8 @@ export function normalizeGoogleLiveModelForUi(model: unknown): string {
         return GOOGLE_LIVE_LEGACY_MODEL_MAP[raw];
     }
 
-    if (raw.includes('native-audio') || raw.includes('live')) {
-        return raw;
-    }
-
-    return GOOGLE_LIVE_DEFAULT_MODEL;
+    // Always preserve the operator-configured model name.
+    // Unknown models render in the "Custom" optgroup so the user
+    // can see exactly what is configured and change it if needed.
+    return raw;
 }
