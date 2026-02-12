@@ -1873,6 +1873,11 @@ class GoogleLiveProvider(AIProviderInterface):
 
                 # Send tool response (camelCase per official API)
                 safe_result = self._build_tool_response_payload(func_name, result)
+                # For hangup_call, replace the farewell text with a neutral confirmation
+                # so the model doesn't echo the farewell and then also generate its own,
+                # which produces a duplicate farewell.
+                if func_name == "hangup_call" and isinstance(safe_result, dict):
+                    safe_result["message"] = "Call ending. Say a brief goodbye to the caller."
                 tool_response = {
                     "toolResponse": {
                         "functionResponses": [
