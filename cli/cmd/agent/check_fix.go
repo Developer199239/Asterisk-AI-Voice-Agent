@@ -465,9 +465,26 @@ func hasConflictMarkers(path string) bool {
 	if err != nil {
 		return false
 	}
+	hasOpen := false
+	hasSep := false
+	hasClose := false
 	for _, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "<<<<<<<") || strings.HasPrefix(trimmed, "=======") || strings.HasPrefix(trimmed, ">>>>>>>") {
+		if strings.HasPrefix(trimmed, "<<<<<<<") {
+			hasOpen = true
+		} else if strings.HasPrefix(trimmed, "=======") {
+			hasSep = true
+		} else if strings.HasPrefix(trimmed, ">>>>>>>") {
+			hasClose = true
+		}
+
+		// Only signal a conflict when the marker pattern is plausibly present.
+		// A standalone "=======" line can occur legitimately (e.g., separators in YAML),
+		// but Git conflicts require marker combinations.
+		if hasOpen && (hasSep || hasClose) {
+			return true
+		}
+		if hasSep && hasClose {
 			return true
 		}
 	}
