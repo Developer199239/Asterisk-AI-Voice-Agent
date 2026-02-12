@@ -907,6 +907,24 @@ class GoogleLiveProvider(AIProviderInterface):
         if self.config.enable_output_transcription:
             setup_msg["setup"]["outputAudioTranscription"] = {}
 
+        # Configure server-side VAD for turn detection (realtimeInputConfig)
+        # Higher startOfSpeechSensitivity = catches shorter utterances
+        # Lower silenceDurationMs = faster response after user stops talking
+        # Configurable via YAML: providers.google_live.vad_*
+        vad_eos = getattr(self.config, "vad_end_of_speech_sensitivity", "END_SENSITIVITY_HIGH")
+        vad_sos = getattr(self.config, "vad_start_of_speech_sensitivity", "START_SENSITIVITY_HIGH")
+        vad_prefix_ms = int(getattr(self.config, "vad_prefix_padding_ms", 20))
+        vad_silence_ms = int(getattr(self.config, "vad_silence_duration_ms", 500))
+        setup_msg["setup"]["realtimeInputConfig"] = {
+            "automaticActivityDetection": {
+                "disabled": False,
+                "startOfSpeechSensitivity": vad_sos,
+                "endOfSpeechSensitivity": vad_eos,
+                "prefixPaddingMs": vad_prefix_ms,
+                "silenceDurationMs": vad_silence_ms,
+            }
+        }
+
         # Debug: Log setup message structure
         logger.debug(
             "Sending Google Live setup message",
