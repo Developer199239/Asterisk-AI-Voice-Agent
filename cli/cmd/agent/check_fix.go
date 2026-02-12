@@ -28,7 +28,7 @@ type backupRestoreResult struct {
 	warnings      []string
 }
 
-func runCheckWithFix() error {
+func runCheckWithFix() (int, error) {
 	// 1) Baseline diagnostics first (always show operators what failed before fix).
 	runner := check.NewRunner(verbose, version, buildTime)
 	before, beforeErr := runner.Run()
@@ -42,7 +42,12 @@ func runCheckWithFix() error {
 					Name:    "agent check",
 					Status:  check.StatusFail,
 					Message: "failed to generate diagnostics report",
-					Details: "unknown error",
+					Details: func() string {
+						if beforeErr != nil {
+							return beforeErr.Error()
+						}
+						return "unknown error"
+					}(),
 				},
 			},
 		}
@@ -52,7 +57,7 @@ func runCheckWithFix() error {
 	noIssues := beforeErr == nil && before.FailCount == 0 && before.WarnCount == 0
 	if noIssues {
 		fmt.Println("No issues detected. No recovery actions needed.")
-		return nil
+		return 0, nil
 	}
 
 	fmt.Println("Attempting automatic recovery from recent backups...")
@@ -61,7 +66,7 @@ func runCheckWithFix() error {
 		printFixSummary(summary)
 	}
 	if fixErr != nil {
-		return fixErr
+		return 2, fixErr
 	}
 
 	// Give services a moment to transition after compose restart/up.
@@ -71,17 +76,17 @@ func runCheckWithFix() error {
 	fmt.Println("Re-running diagnostics after fix...")
 	after, afterErr := runner.Run()
 	if after == nil {
-		return errors.New("post-fix diagnostics failed: report unavailable")
+		return 2, errors.New("post-fix diagnostics failed: report unavailable")
 	}
 	after.OutputText(os.Stdout)
 
 	if afterErr != nil || after.FailCount > 0 {
-		os.Exit(2)
+		return 2, nil
 	}
 	if after.WarnCount > 0 {
-		os.Exit(1)
+		return 1, nil
 	}
-	return nil
+	return 0, nil
 }
 
 func runBackupRecovery() (*fixSummary, error) {
@@ -186,9 +191,9 @@ func restoreFromUpdateBackups() (int, string, []string, []string, error) {
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mt.After(dirs[j].mt) })
 
 	var warnings []string
-	seenPartial := false
+	restoreBase := shouldRestoreBaseConfig()
 	for _, candidate := range dirs {
-		result := restoreFromSingleBackupDir(candidate.path)
+		result := restoreFromSingleBackupDir(candidate.path, restoreBase)
 		warnings = append(warnings, result.warnings...)
 		if result.restored == 0 {
 			continue
@@ -196,22 +201,31 @@ func restoreFromUpdateBackups() (int, string, []string, []string, error) {
 		if result.coreRestored {
 			return result.restored, candidate.path, result.restoredPaths, warnings, nil
 		}
-		seenPartial = true
-		warnings = append(warnings, fmt.Sprintf("Skipping partial restore from %s: missing core files", candidate.path))
-	}
-	if seenPartial {
-		return 0, "", nil, warnings, errors.New("no usable update backup directory found (partial backups skipped)")
 	}
 	return 0, "", nil, warnings, errors.New("no usable update backup directory found")
 }
 
-func restoreFromSingleBackupDir(backupDir string) backupRestoreResult {
+func restoreFromSingleBackupDir(backupDir string, restoreBase bool) backupRestoreResult {
 	result := backupRestoreResult{}
-	var restoredEnv bool
-	var restoredLocalConfig bool
-	var restoredBaseConfig bool
 
-	restoreFile := func(rel string, validate func(string) error, allow bool, markRestored *bool) {
+	needEnv := !fileValid(".env", validateEnvBackup)
+	needLocal := !fileValid(filepath.Join("config", "ai-agent.local.yaml"), validateYAMLMappingBackup)
+	needBase := restoreBase && !fileValid(filepath.Join("config", "ai-agent.yaml"), validateYAMLMappingBackup)
+
+	backupEnvOK := backupFileValid(backupDir, ".env", validateEnvBackup)
+	backupLocalOK := backupFileValid(backupDir, filepath.Join("config", "ai-agent.local.yaml"), validateYAMLMappingBackup)
+	backupBaseOK := backupFileValid(backupDir, filepath.Join("config", "ai-agent.yaml"), validateYAMLMappingBackup)
+
+	envOkAfter := !needEnv || backupEnvOK
+	localOkAfter := !needLocal || backupLocalOK
+	baseOkAfter := !needBase || backupBaseOK
+
+	// Avoid partial writes: only restore from this candidate when it can produce a viable core config.
+	if !envOkAfter || !(localOkAfter || baseOkAfter) {
+		return result
+	}
+
+	restoreFile := func(rel string, validate func(string) error, allow bool) {
 		if !allow {
 			return
 		}
@@ -231,32 +245,22 @@ func restoreFromSingleBackupDir(backupDir string) backupRestoreResult {
 		}
 		result.restored++
 		result.restoredPaths = append(result.restoredPaths, rel)
-		if markRestored != nil {
-			*markRestored = true
-		}
 	}
 
-	restoreBase := shouldRestoreBaseConfig()
-	restoreFile(".env", validateEnvBackup, true, &restoredEnv)
-	restoreFile(filepath.Join("config", "ai-agent.local.yaml"), validateYAMLMappingBackup, true, &restoredLocalConfig)
-	restoreFile(filepath.Join("config", "users.json"), nil, true, nil)
-	restoreFile(filepath.Join("config", "ai-agent.yaml"), validateYAMLMappingBackup, restoreBase, &restoredBaseConfig)
+	restoreFile(".env", validateEnvBackup, needEnv)
+	restoreFile(filepath.Join("config", "ai-agent.local.yaml"), validateYAMLMappingBackup, needLocal)
+	restoreFile(filepath.Join("config", "ai-agent.yaml"), validateYAMLMappingBackup, needBase)
+	restoreFile(filepath.Join("config", "users.json"), nil, !fileExists(filepath.Join("config", "users.json")))
 
 	srcCtx := filepath.Join(backupDir, "config", "contexts")
 	if info, err := os.Stat(srcCtx); err == nil && info.IsDir() {
 		dstCtx := filepath.Join("config", "contexts")
-		if err := os.RemoveAll(dstCtx); err != nil {
-			result.warnings = append(result.warnings, fmt.Sprintf("Failed to clean existing config/contexts: %v", err))
-		}
-		if err := copyDir(srcCtx, dstCtx); err != nil {
-			result.warnings = append(result.warnings, fmt.Sprintf("Failed to restore config/contexts from %s: %v", backupDir, err))
-		} else {
-			result.restored++
-			result.restoredPaths = append(result.restoredPaths, filepath.Join("config", "contexts"))
-		}
+		restoreContextsAtomic(srcCtx, dstCtx, &result)
 	}
 
-	result.coreRestored = restoredEnv && (restoredLocalConfig || restoredBaseConfig)
+	result.coreRestored = fileValid(".env", validateEnvBackup) &&
+		(fileValid(filepath.Join("config", "ai-agent.local.yaml"), validateYAMLMappingBackup) ||
+			fileValid(filepath.Join("config", "ai-agent.yaml"), validateYAMLMappingBackup))
 	return result
 }
 
@@ -265,27 +269,58 @@ func restoreFromFileBackups() (int, string, []string, []string, error) {
 	restored := 0
 	var restoredPaths []string
 	sources := map[string]bool{}
-	var restoredEnv bool
-	var restoredLocalConfig bool
-	var restoredBaseConfig bool
 
-	restoreLatest := func(rel string, pattern string, validate func(string) error, allow bool, markRestored *bool) {
-		if !allow {
-			return
-		}
+	needEnv := !fileValid(".env", validateEnvBackup)
+	needLocal := !fileValid(filepath.Join("config", "ai-agent.local.yaml"), validateYAMLMappingBackup)
+	restoreBase := shouldRestoreBaseConfig()
+	needBase := restoreBase && !fileValid(filepath.Join("config", "ai-agent.yaml"), validateYAMLMappingBackup)
+	needUsers := !fileExists(filepath.Join("config", "users.json"))
+
+	findLatestValidated := func(rel string, pattern string, validate func(string) error) string {
 		src, err := latestBackupMatch(pattern)
 		if err != nil {
 			warnings = append(warnings, err.Error())
-			return
+			return ""
 		}
 		if src == "" {
-			return
+			return ""
 		}
 		if validate != nil {
 			if err := validate(src); err != nil {
 				warnings = append(warnings, fmt.Sprintf("Skipped %s from %s: %v", rel, src, err))
-				return
+				return ""
 			}
+		}
+		return src
+	}
+
+	envSrc := ""
+	if needEnv {
+		envSrc = findLatestValidated(".env", ".env.bak.*", validateEnvBackup)
+	}
+	localSrc := ""
+	if needLocal {
+		localSrc = findLatestValidated(filepath.Join("config", "ai-agent.local.yaml"), filepath.Join("config", "ai-agent.local.yaml.bak.*"), validateYAMLMappingBackup)
+	}
+	baseSrc := ""
+	if needBase {
+		baseSrc = findLatestValidated(filepath.Join("config", "ai-agent.yaml"), filepath.Join("config", "ai-agent.yaml.bak.*"), validateYAMLMappingBackup)
+	}
+	usersSrc := ""
+	if needUsers {
+		usersSrc = findLatestValidated(filepath.Join("config", "users.json"), filepath.Join("config", "users.json.bak.*"), nil)
+	}
+
+	envOkAfter := !needEnv || envSrc != ""
+	localOkAfter := !needLocal || localSrc != ""
+	baseOkAfter := !needBase || baseSrc != ""
+	if !envOkAfter || !(localOkAfter || baseOkAfter) {
+		return 0, "", nil, warnings, errors.New("no usable backup files found (missing core files)")
+	}
+
+	restoreFromSrc := func(src string, rel string) {
+		if src == "" {
+			return
 		}
 		if err := copyFile(src, rel); err != nil {
 			warnings = append(warnings, fmt.Sprintf("Failed to restore %s from %s: %v", rel, src, err))
@@ -293,25 +328,83 @@ func restoreFromFileBackups() (int, string, []string, []string, error) {
 		}
 		restored++
 		restoredPaths = append(restoredPaths, rel)
-		if markRestored != nil {
-			*markRestored = true
-		}
 		sources[filepath.Dir(src)] = true
 	}
 
-	restoreLatest(".env", ".env.bak.*", validateEnvBackup, true, &restoredEnv)
-	restoreLatest(filepath.Join("config", "ai-agent.local.yaml"), filepath.Join("config", "ai-agent.local.yaml.bak.*"), validateYAMLMappingBackup, true, &restoredLocalConfig)
-	restoreLatest(filepath.Join("config", "users.json"), filepath.Join("config", "users.json.bak.*"), nil, true, nil)
-	restoreLatest(filepath.Join("config", "ai-agent.yaml"), filepath.Join("config", "ai-agent.yaml.bak.*"), validateYAMLMappingBackup, shouldRestoreBaseConfig(), &restoredBaseConfig)
+	restoreFromSrc(envSrc, ".env")
+	restoreFromSrc(localSrc, filepath.Join("config", "ai-agent.local.yaml"))
+	restoreFromSrc(baseSrc, filepath.Join("config", "ai-agent.yaml"))
+	restoreFromSrc(usersSrc, filepath.Join("config", "users.json"))
 
 	if restored == 0 {
 		return 0, "", nil, warnings, errors.New("no usable backup files found")
 	}
-	if !(restoredEnv && (restoredLocalConfig || restoredBaseConfig)) {
+	if !(fileValid(".env", validateEnvBackup) &&
+		(fileValid(filepath.Join("config", "ai-agent.local.yaml"), validateYAMLMappingBackup) ||
+			fileValid(filepath.Join("config", "ai-agent.yaml"), validateYAMLMappingBackup))) {
 		return 0, "", nil, warnings, errors.New("no usable backup files found (missing core files)")
 	}
 	sourceList := sortedKeys(sources)
 	return restored, strings.Join(sourceList, ", "), restoredPaths, warnings, nil
+}
+
+func fileExists(rel string) bool {
+	_, err := os.Stat(rel)
+	return err == nil
+}
+
+func fileValid(rel string, validate func(string) error) bool {
+	if validate == nil {
+		return fileExists(rel)
+	}
+	if _, err := os.Stat(rel); err != nil {
+		return false
+	}
+	return validate(rel) == nil
+}
+
+func backupFileValid(backupDir string, rel string, validate func(string) error) bool {
+	src := filepath.Join(backupDir, rel)
+	if _, err := os.Stat(src); err != nil {
+		return false
+	}
+	if validate == nil {
+		return true
+	}
+	return validate(src) == nil
+}
+
+func restoreContextsAtomic(srcCtx string, dstCtx string, result *backupRestoreResult) {
+	tmpCtx := filepath.Join("config", fmt.Sprintf(".contexts.restore.tmp.%d", time.Now().UnixNano()))
+	backupCtx := filepath.Join("config", fmt.Sprintf("contexts.pre_restore.%d", time.Now().UnixNano()))
+
+	if err := copyDir(srcCtx, tmpCtx); err != nil {
+		result.warnings = append(result.warnings, fmt.Sprintf("Failed to stage config/contexts restore from %s: %v", srcCtx, err))
+		_ = os.RemoveAll(tmpCtx)
+		return
+	}
+
+	if info, err := os.Stat(dstCtx); err == nil && info.IsDir() {
+		if err := os.Rename(dstCtx, backupCtx); err != nil {
+			result.warnings = append(result.warnings, fmt.Sprintf("Failed to backup existing config/contexts before restore: %v", err))
+			_ = os.RemoveAll(tmpCtx)
+			return
+		}
+		result.warnings = append(result.warnings, fmt.Sprintf("Moved existing config/contexts to %s", backupCtx))
+	}
+
+	if err := os.Rename(tmpCtx, dstCtx); err != nil {
+		result.warnings = append(result.warnings, fmt.Sprintf("Failed to activate restored config/contexts: %v", err))
+		if info, err2 := os.Stat(backupCtx); err2 == nil && info.IsDir() {
+			_ = os.Rename(backupCtx, dstCtx)
+		}
+		_ = os.RemoveAll(tmpCtx)
+		return
+	}
+
+	result.restored++
+	result.restoredPaths = append(result.restoredPaths, filepath.Join("config", "contexts"))
+	result.warnings = append(result.warnings, fmt.Sprintf("Restored config/contexts from %s", srcCtx))
 }
 
 func latestBackupMatch(pattern string) (string, error) {
@@ -322,15 +415,23 @@ func latestBackupMatch(pattern string) (string, error) {
 	if len(matches) == 0 {
 		return "", nil
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		iInfo, iErr := os.Stat(matches[i])
-		jInfo, jErr := os.Stat(matches[j])
-		if iErr != nil || jErr != nil {
-			return matches[i] > matches[j]
+	type matchInfo struct {
+		path string
+		mt   time.Time
+	}
+	infos := make([]matchInfo, 0, len(matches))
+	for _, m := range matches {
+		st, statErr := os.Stat(m)
+		if statErr != nil {
+			continue
 		}
-		return iInfo.ModTime().After(jInfo.ModTime())
-	})
-	return matches[0], nil
+		infos = append(infos, matchInfo{path: m, mt: st.ModTime()})
+	}
+	if len(infos) == 0 {
+		return "", nil
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].mt.After(infos[j].mt) })
+	return infos[0].path, nil
 }
 
 func validateYAMLMappingBackup(path string) error {

@@ -39,7 +39,14 @@ Exit codes:
 			if checkJSON {
 				return errors.New("--fix cannot be combined with --json")
 			}
-			return runCheckWithFix()
+			exitCode, err := runCheckWithFix()
+			if err != nil {
+				return err
+			}
+			if exitCode != 0 {
+				os.Exit(exitCode)
+			}
+			return nil
 		}
 
 		runner := check.NewRunner(verbose, version, buildTime)
