@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import websockets
 import time
@@ -137,6 +138,7 @@ class DeepgramProvider(AIProviderInterface):
         self.llm_config = llm_config
         self.websocket: Optional[ClientConnection] = None
         self._keep_alive_task: Optional[asyncio.Task] = None
+        self._receive_task: Optional[asyncio.Task] = None
         self._is_audio_flowing = False
         self.request_id: Optional[str] = None
         self.session_id: Optional[str] = None
@@ -369,7 +371,7 @@ class DeepgramProvider(AIProviderInterface):
 
             # Prepare ACK gate and start receiver early to catch server responses
             self._ack_event = asyncio.Event()
-            asyncio.create_task(self._receive_loop())
+            self._receive_task = asyncio.create_task(self._receive_loop())
 
             await self._configure_agent()
             self._keep_alive_task = asyncio.create_task(self._keep_alive())
@@ -923,12 +925,17 @@ class DeepgramProvider(AIProviderInterface):
         try:
             if self._keep_alive_task:
                 self._keep_alive_task.cancel()
+            if self._receive_task and not self._receive_task.done():
+                self._receive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._receive_task
             if self.websocket and self.websocket.state.name == "OPEN":
                 await self.websocket.close()
             if not self._closed:
                 logger.info("Disconnected from Deepgram Voice Agent.")
             self._closed = True
         finally:
+            self._receive_task = None
             self._clear_metrics(self.call_id)
             self.call_id = None
             self._closing = False

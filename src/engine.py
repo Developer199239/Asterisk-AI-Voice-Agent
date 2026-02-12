@@ -4477,6 +4477,13 @@ class Engine:
                 except Exception:
                     logger.debug("RTP session cleanup failed during call cleanup", call_id=call_id, exc_info=True)
 
+            # Proactive AudioSocket disconnect (RED-7) — mirrors RTP cleanup above
+            if getattr(self, 'audio_socket_server', None) and session.audiosocket_conn_id:
+                try:
+                    await self.audio_socket_server.disconnect(session.audiosocket_conn_id)
+                except Exception:
+                    logger.debug("AudioSocket disconnect failed during call cleanup", call_id=call_id, conn_id=session.audiosocket_conn_id, exc_info=True)
+
             # Remove residual mappings so new calls don’t inherit.
             self.bridges.pop(session.caller_channel_id, None)
             if session.local_channel_id:
@@ -4493,6 +4500,8 @@ class Engine:
                 task = self._pipeline_tasks.pop(call_id, None)
                 if task:
                     task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                        await asyncio.wait_for(task, timeout=2.0)
                 q = self._pipeline_queues.pop(call_id, None)
                 if q:
                     try:
@@ -4682,16 +4691,6 @@ class Engine:
                     await self.audio_gating_manager.cleanup_call(call_id)
                 except Exception:
                     logger.debug("Audio gating cleanup failed during call cleanup", call_id=call_id, exc_info=True)
-
-            try:
-                # If the session still exists in store (rare race), mark completed; otherwise ignore
-                sess2 = await self.session_store.get_by_call_id(call_id)
-                if sess2:
-                    sess2.cleanup_completed = True
-                    sess2.cleanup_in_progress = False
-                    await self.session_store.upsert_call(sess2)
-            except Exception:
-                pass
 
             # Reset per-call alignment warning state
             self._runtime_alignment_logged.discard(call_id)
@@ -8305,11 +8304,10 @@ class Engine:
                     else:
                         logger.warning("No session found for HangupReady", call_id=call_id)
                 except Exception as e:
-                    logger.error(
-                        "Failed to hangup after farewell",
+                    logger.warning(
+                        "Failed to hangup after farewell (caller may have already disconnected)",
                         call_id=call_id,
                         error=str(e),
-                        exc_info=True
                     )
             
             elif etype == "function_call":

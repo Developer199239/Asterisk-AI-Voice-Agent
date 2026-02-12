@@ -193,6 +193,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._session_gauge_incremented: bool = False
         self._ws_unavailable_logged: bool = False
         self._ws_send_close_logged: bool = False
+        self._closing: bool = False
+        self._closed: bool = False
         # Diagnostics: keep a small ring buffer of outbound message summaries
         # to help explain server-initiated closes (e.g., 1008 policy violations).
         self._outbound_summaries: deque[Dict[str, Any]] = deque(maxlen=12)
@@ -656,6 +658,8 @@ class GoogleLiveProvider(AIProviderInterface):
             context: Optional context including system prompt, tools, etc.
         """
         self._call_id = call_id
+        self._closing = False
+        self._closed = False
         self._session_start_time = time.time()
         self._conversation_history = []
         self._setup_complete = False
@@ -1067,7 +1071,7 @@ class GoogleLiveProvider(AIProviderInterface):
             sample_rate: Sample rate of input audio (default from config)
             encoding: Audio encoding (ulaw/linear16/pcm16)
         """
-        if not self.websocket or not self._setup_complete:
+        if not self.websocket or not self._setup_complete or self._closing:
             return
 
         try:
@@ -1228,8 +1232,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
             # Persist any pending transcription buffers before we signal the engine to tear down.
             try:
-                if close_code != 1000:
-                    await self._flush_pending_transcriptions_on_disconnect(code=close_code, reason=close_reason)
+                await self._flush_pending_transcriptions_on_disconnect(code=close_code, reason=close_reason)
             except Exception:
                 logger.debug(
                     "Failed flushing pending transcriptions on disconnect",
@@ -1554,6 +1557,9 @@ class GoogleLiveProvider(AIProviderInterface):
         if not self._call_id:
             return
         if not self._hangup_fallback_armed:
+            return
+        # If HangupReady was already emitted, disarming is too late — engine already received signal.
+        if self._hangup_fallback_emitted:
             return
         # If hangup_call tool was invoked, keep the hangup flow intact.
         if self._hangup_after_response:
@@ -2121,66 +2127,87 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def stop_session(self) -> None:
         """Stop the Google Live session and cleanup resources."""
+        if self._closing or self._closed:
+            return
         if not self._call_id:
             return
 
-        logger.info(
-            "Stopping Google Live session",
-            call_id=self._call_id,
-        )
-
-        # Cancel background tasks
-        if self._receive_task and not self._receive_task.done():
-            self._receive_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._receive_task
-
-        if self._keepalive_task and not self._keepalive_task.done():
-            self._keepalive_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._keepalive_task
-
-        if self._hangup_fallback_task and not self._hangup_fallback_task.done():
-            self._hangup_fallback_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._hangup_fallback_task
-
-        if self._force_farewell_task and not self._force_farewell_task.done():
-            self._force_farewell_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._force_farewell_task
-
-        # Close WebSocket
-        if self._ws_is_open():
-            await self.websocket.close()
-        self._mark_ws_disconnected()
-
-        # Clear state
-        self._call_id = None
-        self._session_id = None
-        self._input_buffer.clear()  # Clear audio buffer
-        self._conversation_history.clear()
-        self._hangup_after_response = False
-        self._hangup_fallback_armed = False
-        self._hangup_fallback_emitted = False
-        self._hangup_fallback_armed_at = None
-        self._hangup_fallback_audio_started = False
-        self._hangup_fallback_turn_complete_seen = False
-        self._hangup_fallback_wait_logged = False
-        self._force_farewell_text = ""
-        self._force_farewell_sent = False
-        self._last_audio_out_monotonic = None
-        self._user_end_intent = None
-        self._assistant_farewell_intent = None
-        self._model_text_buffer = ""
-        self._input_transcription_buffer = ""
-        self._output_transcription_buffer = ""
-
-        if self._session_start_time:
-            duration = time.time() - self._session_start_time
+        self._closing = True
+        previous_call_id = self._call_id
+        try:
             logger.info(
-                "Google Live session ended",
-                duration_seconds=round(duration, 2),
+                "Stopping Google Live session",
+                call_id=self._call_id,
             )
 
-        logger.info("Google Live session stopped")
+            # Emit final AgentAudioDone if we were mid-burst (RED-4)
+            if self._in_audio_burst and self.on_event:
+                self._in_audio_burst = False
+                try:
+                    await self.on_event({
+                        "type": "AgentAudioDone",
+                        "call_id": self._call_id,
+                        "streaming_done": True,
+                    })
+                except Exception:
+                    logger.debug("Failed to emit AgentAudioDone during stop_session",
+                                 call_id=self._call_id, exc_info=True)
+
+            # Cancel background tasks
+            if self._receive_task and not self._receive_task.done():
+                self._receive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._receive_task
+
+            if self._keepalive_task and not self._keepalive_task.done():
+                self._keepalive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._keepalive_task
+
+            if self._hangup_fallback_task and not self._hangup_fallback_task.done():
+                self._hangup_fallback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._hangup_fallback_task
+
+            if self._force_farewell_task and not self._force_farewell_task.done():
+                self._force_farewell_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._force_farewell_task
+
+            # Close WebSocket
+            if self._ws_is_open():
+                await self.websocket.close()
+            self._mark_ws_disconnected()
+        finally:
+            # Clear state
+            self._call_id = None
+            self._session_id = None
+            self._input_buffer.clear()
+            self._conversation_history.clear()
+            self._hangup_after_response = False
+            self._hangup_fallback_armed = False
+            self._hangup_fallback_emitted = False
+            self._hangup_fallback_armed_at = None
+            self._hangup_fallback_audio_started = False
+            self._hangup_fallback_turn_complete_seen = False
+            self._hangup_fallback_wait_logged = False
+            self._force_farewell_text = ""
+            self._force_farewell_sent = False
+            self._last_audio_out_monotonic = None
+            self._user_end_intent = None
+            self._assistant_farewell_intent = None
+            self._model_text_buffer = ""
+            self._input_transcription_buffer = ""
+            self._output_transcription_buffer = ""
+            self._closing = False
+            self._closed = True
+
+            if self._session_start_time:
+                duration = time.time() - self._session_start_time
+                logger.info(
+                    "Google Live session ended",
+                    duration_seconds=round(duration, 2),
+                )
+
+            logger.info("Google Live session stopped")
+            self._clear_metrics(previous_call_id)
