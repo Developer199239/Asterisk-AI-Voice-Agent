@@ -112,10 +112,9 @@ class GoogleLiveProvider(AIProviderInterface):
     - Input: 8kHz µ-law → 16kHz PCM16 → Gemini Live API
     - Output: 24kHz PCM16 from Gemini → 8kHz µ-law/PCM16 → AudioSocket
     """
-    DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+    DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
     LEGACY_LIVE_MODEL_MAP = {
-        "gemini-2.5-flash-native-audio-latest": DEFAULT_LIVE_MODEL,
-        # Older preview aliases that are no longer available.
+        # Older preview aliases that are no longer preferred.
         "gemini-live-2.5-flash-preview": DEFAULT_LIVE_MODEL,
     }
 
