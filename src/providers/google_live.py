@@ -1863,6 +1863,11 @@ class GoogleLiveProvider(AIProviderInterface):
 
                 # Send tool response (camelCase per official API)
                 safe_result = self._build_tool_response_payload(func_name, result)
+                # For hangup_call, replace the farewell text with a neutral confirmation
+                # so the model doesn't echo the farewell and then also generate its own,
+                # which produces a duplicate farewell.
+                if func_name == "hangup_call" and isinstance(safe_result, dict):
+                    safe_result["message"] = "Call ending. Say a brief goodbye to the caller."
                 tool_response = {
                     "toolResponse": {
                         "functionResponses": [
@@ -1942,7 +1947,9 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _maybe_force_farewell_after_hangup(self) -> None:
         try:
             # Grace window: if the model starts speaking, don't send a duplicate farewell request.
-            await asyncio.sleep(0.9)
+            # Google Live models typically need 2-2.5s to produce first audio after a tool response;
+            # 3.0s avoids firing before the model naturally begins its farewell.
+            await asyncio.sleep(3.0)
             if not self._call_id or not self._setup_complete or not self._ws_is_open():
                 return
             if not self._hangup_after_response:
