@@ -715,7 +715,7 @@ tools:
     extension: '2765'
   request_transcript:
     admin_email: ''
-    api_key: ${RESEND_API_KEY}
+    api_key: ${REQUEST_TRANSCRIPT_API_KEY:-}
     common_domains:
       - gmail.com
       - yahoo.com
@@ -724,20 +724,20 @@ tools:
       - icloud.com
     confirm_email: true
     enabled: false
-    from_email: ava@jugaar.llc
-    from_name: AI Voice Agent
+    from_email: ${REQUEST_TRANSCRIPT_FROM_EMAIL:-noreply@example.com}
+    from_name: ${REQUEST_TRANSCRIPT_FROM_NAME:-Asterisk AI Voice Agent}
     max_attempts: 2
-    provider: resend
+    provider: ${REQUEST_TRANSCRIPT_PROVIDER:-resend}
     validate_domain: false
   send_email_summary:
-    admin_email: haider@jugaar.llc
-    api_key: ${RESEND_API_KEY}
+    admin_email: ${SEND_EMAIL_ADMIN:-}
+    api_key: ${SEND_EMAIL_API_KEY:-}
     enabled: false
-    from_email: ava@jugaar.llc
-    from_name: AI Voice Agent
+    from_email: ${SEND_EMAIL_FROM:-noreply@example.com}
+    from_name: ${SEND_EMAIL_FROM_NAME:-Asterisk AI Voice Agent}
     include_metadata: true
     include_transcript: true
-    provider: resend
+    provider: ${SEND_EMAIL_PROVIDER:-resend}
   transfer:
     technology: PJSIP
     destinations:

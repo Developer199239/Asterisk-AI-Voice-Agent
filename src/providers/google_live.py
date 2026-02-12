@@ -2133,7 +2133,6 @@ class GoogleLiveProvider(AIProviderInterface):
             return
 
         self._closing = True
-        previous_call_id = self._call_id
         try:
             logger.info(
                 "Stopping Google Live session",

@@ -421,8 +421,15 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
                     "audio_sent_bytes": self._session_state.total_audio_sent,
                     "audio_received_bytes": self._session_state.total_audio_received,
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "[elevenlabs] [%s] Failed to emit session_ended (sent=%s, received=%s): %s",
+                    self._call_id,
+                    self._session_state.total_audio_sent,
+                    self._session_state.total_audio_received,
+                    e,
+                    exc_info=True,
+                )
             
             logger.info(f"[elevenlabs] [{previous_call_id}] Session stopped")
         finally:

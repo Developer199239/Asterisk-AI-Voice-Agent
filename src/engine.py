@@ -524,13 +524,13 @@ class Engine:
                 exc_info=exc,
             )
 
-    def _fire_and_forget(self, coro, *, name: str = None) -> asyncio.Task:
+    def _fire_and_forget(self, coro, *, name: Optional[str] = None) -> asyncio.Task:
         """Create a fire-and-forget task with exception logging."""
         task = asyncio.create_task(coro, name=name)
         task.add_done_callback(self._log_task_exception)
         return task
 
-    def _fire_and_forget_for_call(self, call_id: str, coro, *, name: str = None) -> asyncio.Task:
+    def _fire_and_forget_for_call(self, call_id: str, coro, *, name: Optional[str] = None) -> asyncio.Task:
         """Create a per-call fire-and-forget task: logged and cancelled on call cleanup."""
         task = asyncio.create_task(coro, name=name or f"bg-{call_id}")
         task.add_done_callback(self._log_task_exception)
