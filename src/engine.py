@@ -8826,10 +8826,7 @@ class Engine:
                                 if not chunk:
                                     continue
                                 any_audio = True
-                                try:
-                                    q.put_nowait(chunk)
-                                except asyncio.QueueFull:
-                                    logger.debug("Pipeline greeting streaming queue full; dropping chunk", call_id=call_id)
+                                await q.put(chunk)
                             try:
                                 q.put_nowait(None)
                             except asyncio.QueueFull:
@@ -9362,11 +9359,7 @@ class Engine:
                                                 _TURN_STT_TO_TTS.labels(pipeline_label, provider_label).observe(max(0.0, first_tts_ts - t_start))
                                         except Exception:
                                             pass
-                                    try:
-                                        stream_q.put_nowait(tts_chunk)
-                                    except asyncio.QueueFull:
-                                        # Streaming is real-time; drop if we're falling behind.
-                                        logger.debug("Pipeline streaming queue full; dropping TTS chunk", call_id=call_id)
+                                    await stream_q.put(tts_chunk)
 
                                 # End-of-segment sentinel
                                 try:

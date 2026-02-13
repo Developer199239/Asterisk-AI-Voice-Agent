@@ -647,12 +647,20 @@ class StreamingPlaybackManager:
             transport_format = self.audiosocket_format
             if self.audio_transport == "externalmedia":
                 session = await self.session_store.get_by_call_id(call_id)
-                if session and hasattr(session, 'external_media_codec'):
+                if session and hasattr(session, 'external_media_codec') and session.external_media_codec:
                     transport_format = session.external_media_codec
                     logger.debug(
                         "Using ExternalMedia codec for target format",
                         call_id=call_id,
                         codec=transport_format
+                    )
+                else:
+                    # Greeting may fire before ExternalMedia codec is stored;
+                    # default to ulaw which is the standard ExternalMedia codec.
+                    transport_format = "ulaw"
+                    logger.debug(
+                        "ExternalMedia codec not yet available, defaulting to ulaw",
+                        call_id=call_id,
                     )
             
             mulaw_transport = self._is_mulaw(transport_format)
