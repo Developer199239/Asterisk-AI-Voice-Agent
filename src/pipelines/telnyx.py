@@ -9,6 +9,7 @@ This adapter is intentionally separate from OpenAI's adapter to:
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
@@ -41,6 +42,7 @@ class TelnyxLLMAdapter(LLMComponent):
     """Telnyx AI Inference LLM adapter using OpenAI-compatible /chat/completions."""
 
     DEFAULT_CHAT_BASE_URL = "https://api.telnyx.com/v2/ai"
+    _MODELS_CACHE_TTL_SEC = 10 * 60
 
     def __init__(
         self,
@@ -58,6 +60,8 @@ class TelnyxLLMAdapter(LLMComponent):
         self._session_factory = session_factory
         self._session: Optional[aiohttp.ClientSession] = None
         self._default_timeout = float(self._pipeline_defaults.get("response_timeout_sec", provider_config.response_timeout_sec))
+        self._models_cache: Optional[list[str]] = None
+        self._models_cache_at: float = 0.0
 
     async def start(self) -> None:
         logger.debug(
@@ -77,6 +81,55 @@ class TelnyxLLMAdapter(LLMComponent):
             return
         factory = self._session_factory or aiohttp.ClientSession
         self._session = factory()
+
+    async def _fetch_model_ids(self, *, api_key: str, chat_base_url: str) -> list[str]:
+        base = str(chat_base_url or self.DEFAULT_CHAT_BASE_URL).rstrip("/")
+        url = f"{base}/models"
+        headers = _make_http_headers(api_key)
+        await self._ensure_session()
+        assert self._session
+        async with self._session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as resp:
+            body = await resp.text()
+            resp.raise_for_status()
+            data = json.loads(body)
+            items = data.get("data") or []
+            ids: list[str] = []
+            for it in items:
+                if isinstance(it, dict) and it.get("id"):
+                    ids.append(str(it["id"]))
+            return ids
+
+    async def _maybe_resolve_model_id(self, model: str, *, api_key: str, chat_base_url: str) -> str:
+        """
+        Telnyx model IDs are namespaced (e.g., `openai/gpt-4o-mini`).
+        If the user supplies an un-namespaced model (e.g., `gpt-4o-mini`), try to
+        resolve it by suffix match against the account's `/models` list.
+        """
+        raw = str(model or "").strip()
+        if not raw or "/" in raw:
+            return raw
+
+        now = time.time()
+        if not self._models_cache or (now - self._models_cache_at) > self._MODELS_CACHE_TTL_SEC:
+            try:
+                self._models_cache = await self._fetch_model_ids(api_key=api_key, chat_base_url=chat_base_url)
+                self._models_cache_at = now
+            except Exception as exc:
+                logger.debug("Failed to refresh Telnyx model cache", error=str(exc), exc_info=True)
+                return raw
+
+        assert self._models_cache is not None
+        matches = [mid for mid in self._models_cache if str(mid).rsplit("/", 1)[-1] == raw]
+        if len(matches) == 1:
+            resolved = matches[0]
+            logger.info(
+                "Resolved Telnyx model alias",
+                component=self.component_key,
+                requested_model=raw,
+                resolved_model=resolved,
+            )
+            return resolved
+        return raw
 
     def _compose_options(self, runtime_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         runtime_options = runtime_options or {}
@@ -190,6 +243,17 @@ class TelnyxLLMAdapter(LLMComponent):
         await self._ensure_session()
         assert self._session
 
+        # Normalize model ID: allow un-namespaced IDs by resolving to the account's model list.
+        try:
+            merged = dict(merged)
+            merged["chat_model"] = await self._maybe_resolve_model_id(
+                str(merged.get("chat_model") or ""),
+                api_key=str(api_key),
+                chat_base_url=str(merged.get("chat_base_url") or self.DEFAULT_CHAT_BASE_URL),
+            )
+        except Exception:
+            logger.debug("Telnyx model alias resolution failed", call_id=call_id, exc_info=True)
+
         payload = self._build_chat_payload(transcript, context, merged)
 
         tools_list = merged.get("tools")
@@ -302,4 +366,3 @@ class TelnyxLLMAdapter(LLMComponent):
                 return LLMResponse(text=content or "", tool_calls=[], metadata=data.get("usage", {}))
 
         return ""
-

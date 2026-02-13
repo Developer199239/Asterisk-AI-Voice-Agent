@@ -163,8 +163,8 @@ pipelines:
     options:
       llm:
         # Model selection - choose from 53+ available models
-        # Popular options: gpt-4o, gpt-4o-mini, claude-3-5-sonnet, llama-3.1-70b
-        model: "gpt-4o-mini"
+        # Popular options: openai/gpt-4o-mini, anthropic/claude-*, meta-llama/*, mistralai/*
+        model: "openai/gpt-4o-mini"
         temperature: 0.7
         max_tokens: 150
       stt:

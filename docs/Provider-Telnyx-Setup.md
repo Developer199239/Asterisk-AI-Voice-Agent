@@ -65,7 +65,7 @@ pipelines:
     tts: local_tts
     options:
       llm:
-        model: "gpt-4o-mini"  # or claude-3-5-sonnet, llama-3.1-70b, etc.
+        model: "openai/gpt-4o-mini"  # or anthropic/claude-*, meta-llama/*, mistralai/*, etc.
         temperature: 0.7
         max_tokens: 150
       stt:
@@ -119,6 +119,8 @@ Check available models:
 curl -s "https://api.telnyx.com/v2/ai/models" \
   -H "Authorization: Bearer ${TELNYX_API_KEY}" | jq '.data[].id'
 ```
+
+**Important**: Telnyx model IDs are *namespaced* (for example `openai/gpt-4o-mini`, `anthropic/claude-3-7-sonnet-latest`, `meta-llama/Meta-Llama-3.1-70B-Instruct`). Use the exact ID from `/models`.
 
 ### 5. Configure Asterisk Dialplan
 
