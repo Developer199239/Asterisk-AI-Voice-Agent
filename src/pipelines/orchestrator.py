@@ -893,13 +893,20 @@ class PipelineOrchestrator:
         providers = getattr(self.config, "providers", {}) or {}
         raw_config = providers.get("elevenlabs")
         if not raw_config:
-            # Fallback: accept modular elevenlabs_tts provider
+            # Fallback: accept modular elevenlabs_tts provider.
+            # AAVA-181: Skip full-agent type providers (elevenlabs_agent) — they
+            # have their own config path and different voice/model semantics.
             for name, cfg in providers.items():
                 try:
                     lower = str(name).lower()
                 except Exception:
                     lower = ""
-                if lower.startswith("elevenlabs_") or (isinstance(cfg, dict) and str(cfg.get("type", "")).lower() == "elevenlabs"):
+                if not isinstance(cfg, dict):
+                    continue
+                cfg_type = str(cfg.get("type", "")).lower()
+                if cfg_type == "elevenlabs_agent":
+                    continue
+                if lower.startswith("elevenlabs_") or cfg_type == "elevenlabs":
                     raw_config = cfg
                     break
         if not raw_config:
@@ -912,7 +919,18 @@ class PipelineOrchestrator:
             config = raw_config
         elif isinstance(raw_config, dict):
             try:
-                config = ElevenLabsProviderConfig(**raw_config)
+                # AAVA-181: Filter out Admin UI metadata fields (name, type,
+                # capabilities, continuous_input) and empty strings that would
+                # override Pydantic defaults (e.g., base_url: '').
+                el_fields = set(ElevenLabsProviderConfig.model_fields.keys())
+                filtered = {}
+                for k, v in raw_config.items():
+                    if k not in el_fields:
+                        continue
+                    if isinstance(v, str) and v == "":
+                        continue
+                    filtered[k] = v
+                config = ElevenLabsProviderConfig(**filtered)
             except Exception as exc:
                 logger.warning(
                     "Failed to hydrate ElevenLabs provider config for pipelines",
