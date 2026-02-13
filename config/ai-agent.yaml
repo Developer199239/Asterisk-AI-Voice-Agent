@@ -173,6 +173,7 @@ contexts:
       Hi {caller_name}, I'm Multilingual Ava with the Google Gemini Live demo.
       Ask me about the project in your preferred language.
     profile: telephony_ulaw_8k
+    provider: google_live
     prompt: >
       You are Ava (Asterisk Voice Agent) demonstrating the Google Gemini Live
       API configuration.
@@ -994,7 +995,7 @@ providers:
     continuous_input: true
     enable_input_transcription: true
     enable_output_transcription: true
-    enabled: false
+    enabled: true
     greeting: >-
       ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try
       interrupting me!}
@@ -1003,13 +1004,13 @@ providers:
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
     llm_max_output_tokens: 8192
-    llm_model: gemini-2.5-flash-native-audio-preview-12-2025
+    llm_model: gemini-2.5-flash-native-audio-latest
     llm_temperature: 0.4
     llm_top_k: 20
     llm_top_p: 0.9
-    # Google Live: marker-driven hangup detects farewell patterns and hangs up automatically.
-    # Preferred over tool-driven hangup which triggers Google 1008 disconnects with native audio models.
-    hangup_markers_enabled: true
+    # Google Live: marker-driven hangup disabled — using tool-driven hangup (hangup_call) instead.
+    # Tool-driven hangup is more reliable with the CALL ENDING PROTOCOL prompt.
+    hangup_markers_enabled: false
     # Google Live: disable WebSocket keepalive by default. We saw 1008 disconnects correlated with ping/keepalive
     # behavior; opt-in if needed once verified for your account/model.
     ws_keepalive_enabled: false
