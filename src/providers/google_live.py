@@ -1799,6 +1799,16 @@ class GoogleLiveProvider(AIProviderInterface):
             if self._hangup_ready_emitted:
                 self._hangup_after_response = False
                 return
+            # If this turnComplete had no audio, it's the tool-response ack turn
+            # (fires ~200ms after hangup_call), NOT the farewell audio turn.
+            # Wait for a turn that actually carries farewell audio.
+            if not had_audio:
+                logger.info(
+                    "🔚 Hangup pending; ignoring no-audio assistant turnComplete "
+                    "(tool-ack, not farewell)",
+                    call_id=self._call_id,
+                )
+                return
             logger.info(
                 "🔚 Farewell response completed - triggering hangup",
                 call_id=self._call_id,
@@ -1990,10 +2000,8 @@ class GoogleLiveProvider(AIProviderInterface):
             if self._force_farewell_sent:
                 return
             if self._hangup_fallback_audio_started:
-                return
-            if self._post_hangup_output_detected:
                 logger.debug(
-                    "Skipping forced farewell - model already generating post-hangup speech",
+                    "Skipping forced farewell - model already streaming post-hangup audio",
                     call_id=self._call_id,
                 )
                 return
