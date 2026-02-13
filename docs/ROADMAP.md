@@ -14,8 +14,9 @@ Active and upcoming work. Pick something up and [get involved](#how-to-contribut
 
 | # | Milestone | Status | Skills | Difficulty | Details |
 |---|-----------|--------|--------|------------|---------|
-| 14 | Call History-First Monitoring | Iterating | Python | Intermediate | [Spec](contributing/milestones/milestone-14-monitoring-stack.md) |
-| 22 | Outbound Campaign Dialer | In Progress | Python, ARI, React | Advanced | [Spec](contributing/milestones/milestone-22-outbound-campaign-dialer.md) |
+| 22 | Outbound Campaign Dialer | Alpha (hardening) | Python, ARI, React | Advanced | [Spec](contributing/milestones/milestone-22-outbound-campaign-dialer.md) |
+
+Outbound dialer shipped as Alpha in v5.0.0 — core scheduling, AMD, voicemail drop, consent gate, and Admin UI are working. Current focus: DNC, retry automation, outcome classification, and resilience hardening (see Phases 6-8 in spec).
 
 ### Planned Milestones
 

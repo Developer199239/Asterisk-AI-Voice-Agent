@@ -21,6 +21,7 @@ Archive of completed development milestones for the Asterisk AI Voice Agent. For
 | 11 | Post-Call Diagnostics | Oct 2025 | `agent rca` CLI command with AI-powered diagnosis and golden baseline comparison |
 | 12 | [Setup & Validation Tools](contributing/milestones/milestone-12-setup-validation-tools.md) | Oct 2025 | `agent setup`, `agent check`, `agent update` — new operator to first call in <30 minutes |
 | 13 | [Config Cleanup & Migration](contributing/milestones/milestone-13-config-cleanup-migration.md) | Oct 2025 | 49% smaller configs; diagnostic settings moved to environment variables |
+| 14 | [Monitoring, Feedback & Guided Setup](contributing/milestones/milestone-14-monitoring-stack.md) | Dec 2025 | Call History-first debugging model, low-cardinality `/metrics`, BYO Prometheus (bundled stack removed) |
 | 15 | [Groq Speech STT/TTS](contributing/milestones/milestone-15-groq-speech-pipelines.md) | Jan 2026 | Cloud-only Groq pipeline (STT+LLM+TTS) for modular pipelines |
 | 16 | [Tool Calling System](contributing/milestones/milestone-16-tool-calling-system.md) | Nov 2025 | Unified provider-agnostic tool framework: transfers, hangup, email, voicemail (2,500 lines, 111 tests) |
 | 17 | [Google Live Provider](contributing/milestones/milestone-17-google-live.md) | Nov 2025 | Gemini Live as a full-agent provider with <1 second latency |
@@ -28,6 +29,7 @@ Archive of completed development milestones for the Asterisk AI Voice Agent. For
 | 19 | [Admin UI Implementation](contributing/milestones/milestone-19-admin-ui-implementation.md) | Dec 2025 | Production-ready Admin UI: setup wizard, dashboard, config editor, live logs |
 | 20 | [ElevenLabs Provider](contributing/milestones/milestone-20-elevenlabs.md) | Dec 2025 | ElevenLabs Conversational AI with premium voice quality and tool calling |
 | 21 | [Call History & Analytics](contributing/milestones/milestone-21-call-history.md) | Dec 2025 | Persistent call records with transcripts, debugging, and export |
+| 22 | [Outbound Campaign Dialer](contributing/milestones/milestone-22-outbound-campaign-dialer.md) | Jan 2026 | Alpha — scheduled outbound campaigns, AMD, voicemail drop, consent gate, Admin UI Call Scheduling |
 | 23 | [NAT/Advertise Host](contributing/milestones/milestone-23-nat-advertise-host.md) | Feb 2026 | Separate bind vs advertise host for NAT/VPN/hybrid cloud deployments |
 | 24 | [Phase Tools & Tool Enhancements](contributing/milestones/milestone-24-tools-enhancements.md) | Feb 2026 | Pre-call HTTP lookups, in-call HTTP tools, post-call webhooks, extension status checking |
 
@@ -40,6 +42,7 @@ Archive of completed development milestones for the Asterisk AI Voice Agent. For
 | v6.1.1 | Feb 2026 | Operator config overrides, live agent transfer, ViciDial compatibility, Admin UI Asterisk audit |
 | v6.0.0 | Feb 2026 | OpenAI Realtime GA API, email system overhaul, NAT/GPU support, Google Live improvements |
 | v5.3.1 | Jan 2026 | Phase tools (pre/in/post-call HTTP), extension status checking, Deepgram language config |
+| v5.0.0 | Jan 2026 | Outbound Campaign Dialer (Alpha), Groq Speech, Ollama improvements, attended transfer |
 | v4.5.3 | Dec 2025 | Security hardening, RTP safety, ExternalMedia endpoint pinning |
 | v4.4.1 | Nov 2025 | Admin UI v1.0, ElevenLabs provider, background music |
 | v4.3.0 | Nov 2025 | Pipeline tool execution, AudioSocket + pipeline validation |
