@@ -2186,6 +2186,30 @@ class GoogleLiveProvider(AIProviderInterface):
                 await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
                 self._setup_complete = True
 
+                # Force-clear TTS gating so audio capture resumes.
+                # The old streaming playback's gating token is stale after 1008;
+                # without this, the engine keeps sending silence frames forever.
+                try:
+                    session_store = getattr(self, '_session_store', None)
+                    if session_store and call_id:
+                        session = await session_store.get_by_call_id(call_id)
+                        if session and session.tts_active_count > 0:
+                            logger.info(
+                                "🔓 Force-clearing stale TTS gating after reconnect",
+                                call_id=call_id,
+                                stale_tokens=session.tts_active_count,
+                            )
+                            session.tts_active_count = 0
+                            session.tts_playing = False
+                            session.audio_capture_enabled = True
+                            session.tts_gating_tokens.clear()
+                            if session.vad_state:
+                                session.vad_state["tts_playing"] = False
+                            await session_store.upsert_call(session)
+                except Exception:
+                    logger.debug("Failed to clear gating after reconnect",
+                                 call_id=call_id, exc_info=True)
+
                 logger.info(
                     "✅ Google Live reconnected successfully",
                     call_id=call_id,
