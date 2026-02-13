@@ -1359,8 +1359,9 @@ class GoogleLiveProvider(AIProviderInterface):
             call_id=self._call_id,
         )
 
-        # Play greeting if configured
-        if self.config.greeting:
+        # Play greeting if configured (skip on reconnect — caller already heard it)
+        if self.config.greeting and not self._greeting_completed:
+            self._greeting_completed = True
             await self._send_greeting()
 
     async def _handle_server_content(self, data: Dict[str, Any]) -> None:
@@ -2054,6 +2055,9 @@ class GoogleLiveProvider(AIProviderInterface):
         if not text or not text.strip():
             return
         
+        # Keep local copy for reconnect context replay
+        self._conversation_history.append({"role": role, "content": text.strip()})
+        
         # Get session_store from provider context (injected by engine)
         session_store = getattr(self, '_session_store', None)
         if not session_store:
@@ -2155,6 +2159,23 @@ class GoogleLiveProvider(AIProviderInterface):
                 # Wait for setup ACK
                 await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
                 self._setup_complete = True
+
+                # Replay conversation history so model has context
+                if self._conversation_history:
+                    turns = []
+                    for msg in self._conversation_history[-10:]:  # Last 10 turns
+                        role = msg.get("role", "user")
+                        content = msg.get("content", "")
+                        if content:
+                            turns.append({"role": role, "parts": [{"text": content}]})
+                    if turns:
+                        history_msg = {"clientContent": {"turns": turns, "turnComplete": True}}
+                        await self._send_message(history_msg)
+                        logger.info(
+                            "📜 Replayed conversation history after reconnect",
+                            call_id=call_id,
+                            turns_count=len(turns),
+                        )
 
                 logger.info(
                     "✅ Google Live reconnected successfully",
