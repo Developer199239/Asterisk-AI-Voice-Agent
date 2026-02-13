@@ -11087,7 +11087,17 @@ class Engine:
                     current_provider=session.provider_name,
                     available_providers=list(self.providers.keys()),
                 )
- 
+                # Clear stale full-agent provider_name so UI topology doesn't
+                # incorrectly highlight a monolithic provider for pipeline calls.
+                if session.provider_name in self.providers:
+                    session.provider_name = "pipeline"
+                    updated = True
+        else:
+            # No primary_provider hint from pipeline; clear stale full-agent name.
+            if session.provider_name in self.providers:
+                session.provider_name = "pipeline"
+                updated = True
+
         if updated:
             await self._save_session(session)
  
