@@ -300,6 +300,21 @@ Requirements:
 
 - `OPENAI_API_KEY` must be set in the environment.
 
+### Telnyx AI Inference (pipelines)
+
+Telnyx AI Inference is supported as a modular LLM component:
+
+- `telnyx_llm`: OpenAI-compatible Chat Completions (`chat_base_url`, `chat_model`)
+
+Requirements:
+
+- `TELNYX_API_KEY` must be set in the environment.
+
+Notes:
+
+- Telnyx supports many model IDs (GPT/Claude/Llama/Mistral). Use the exact model ID returned by Telnyx `/models`.
+- For pipeline selection, set `AI_PROVIDER=telnyx_hybrid` (pipeline name) in your dialplan when forcing a per-extension pipeline.
+
 ### Deepgram Voice Agent
 
 - providers.deepgram.api_key: injected from `DEEPGRAM_API_KEY` (env-only; do not commit secrets to YAML).

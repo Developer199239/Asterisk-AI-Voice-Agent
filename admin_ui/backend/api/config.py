@@ -40,6 +40,7 @@ def _ai_engine_env_key(key: str) -> bool:
             "GROQ_API_KEY",
             "DEEPGRAM_API_KEY",
             "GOOGLE_API_KEY",
+            "TELNYX_API_KEY",
             "RESEND_API_KEY",
             "ELEVENLABS_API_KEY",
             "ELEVENLABS_AGENT_ID",
@@ -1102,6 +1103,8 @@ async def test_provider_connection(request: ProviderTestRequest):
                     inferred_env = 'GROQ_API_KEY'
                 elif 'openai' in provider_name or host == 'api.openai.com':
                     inferred_env = 'OPENAI_API_KEY'
+                elif 'telnyx' in provider_name or host == 'api.telnyx.com':
+                    inferred_env = 'TELNYX_API_KEY'
 
                 if inferred_env:
                     api_key = get_env_key(inferred_env) or os.getenv(inferred_env) or ''

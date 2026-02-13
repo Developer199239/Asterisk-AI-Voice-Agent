@@ -47,17 +47,15 @@ curl -X GET "https://api.telnyx.com/v2/ai/models" \
 
 Telnyx uses the OpenAI-compatible API, making it a drop-in replacement. Configure it in `config/ai-agent.yaml`:
 
-**Option A: Use Telnyx as an LLM in a Pipeline**
+**Option A (Recommended): Use `telnyx_llm` in a Pipeline**
 
 ```yaml
 providers:
-  openai:
+  # Telnyx modular LLM provider (OpenAI-compatible Chat Completions)
+  # API key is injected from TELNYX_API_KEY in .env (env-only; do not commit keys to YAML)
+  telnyx_llm:
     enabled: true
-    api_key: "${OPENAI_API_KEY}"
-  # Add Telnyx as a separate provider entry
-  telnyx:
-    enabled: true
-    api_key: "${TELNYX_API_KEY}"
+    chat_base_url: "https://api.telnyx.com/v2/ai"
 
 pipelines:
   # Use Telnyx for LLM with local STT/TTS
@@ -67,7 +65,6 @@ pipelines:
     tts: local_tts
     options:
       llm:
-        base_url: "https://api.telnyx.com/v2/ai"
         model: "gpt-4o-mini"  # or claude-3-5-sonnet, llama-3.1-70b, etc.
         temperature: 0.7
         max_tokens: 150
@@ -84,7 +81,11 @@ pipelines:
 active_pipeline: telnyx_hybrid
 ```
 
-**Option B: Override OpenAI base_url for LLM**
+**Option B (Legacy): Override `openai_llm` base_url**
+
+This works for simple GPT-* usage, but `telnyx_llm` is recommended so:
+- `TELNYX_API_KEY` is used directly (no dependency on `OPENAI_API_KEY`)
+- non-OpenAI model IDs (Claude/Llama/Mistral) are supported without OpenAI-specific filtering
 
 ```yaml
 pipelines:
@@ -127,7 +128,7 @@ Add to `/etc/asterisk/extensions_custom.conf`:
 [from-ai-agent-telnyx]
 exten => s,1,NoOp(AI Voice Agent - Telnyx AI Inference)
 exten => s,n,Set(AI_CONTEXT=demo_telnyx)
-exten => s,n,Set(AI_PROVIDER=local)
+exten => s,n,Set(AI_PROVIDER=telnyx_hybrid)
 exten => s,n,Stasis(asterisk-ai-voice-agent)
 exten => s,n,Hangup()
 ```
