@@ -161,6 +161,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._force_farewell_task: Optional[asyncio.Task] = None
         self._force_farewell_text: str = ""
         self._force_farewell_sent: bool = False
+        self._post_hangup_output_detected: bool = False
         # Conversation state
         self._conversation_history: List[Dict[str, Any]] = []
         
@@ -681,10 +682,12 @@ class GoogleLiveProvider(AIProviderInterface):
         else:
             self._allowed_tools = []
 
+        effective_model = self._normalize_model_name(self.config.llm_model)
         logger.info(
             "Starting Google Live session",
             call_id=call_id,
-            model=self._normalize_model_name(self.config.llm_model),
+            configured_model=self.config.llm_model,
+            effective_model=effective_model,
         )
         if not self._hangup_markers_enabled:
             logger.warning(
@@ -781,13 +784,22 @@ class GoogleLiveProvider(AIProviderInterface):
     @staticmethod
     def _normalize_model_name(model: Optional[str]) -> str:
         """
-        Normalize model identifiers for compatibility with older UI/config options.
+        Strip the ``models/`` prefix and apply legacy alias remapping.
+
+        The operator-configured model name is used as-is after prefix
+        stripping.  We intentionally do NOT silently replace unrecognized
+        model names with a default — that hides config errors and causes
+        the wrong model to be used at runtime.
         """
         m = (model or "").strip()
         if m.startswith("models/"):
             m = m[7:]
 
         if not m:
+            logger.warning(
+                "No Google Live model configured; using default",
+                fallback_model=GoogleLiveProvider.DEFAULT_LIVE_MODEL,
+            )
             return GoogleLiveProvider.DEFAULT_LIVE_MODEL
 
         if m in GoogleLiveProvider.LEGACY_LIVE_MODEL_MAP:
@@ -799,20 +811,16 @@ class GoogleLiveProvider(AIProviderInterface):
             )
             return replacement
 
-        # Accept both native-audio and legacy Live model names.
-        # v5.x allowed non-native-audio Live models (e.g. `gemini-2.0-flash-live-001`).
-        # Forcing everything to the preview native-audio model can regress stability and blocks
-        # operators from testing alternate Live models for RCA.
+        # Pass through whatever the operator configured — do not second-guess.
+        # A warning is still useful so typos are visible in logs.
         m_l = m.lower()
-        if ("native-audio" in m_l) or ("live" in m_l):
-            return m
-
-        logger.warning(
-            "Google Live model does not look like a Live-capable model; falling back to default",
-            configured_model=m,
-            fallback_model=GoogleLiveProvider.DEFAULT_LIVE_MODEL,
-        )
-        return GoogleLiveProvider.DEFAULT_LIVE_MODEL
+        if ("native-audio" not in m_l) and ("live" not in m_l):
+            logger.warning(
+                "Google Live model name does not contain 'native-audio' or 'live'; "
+                "verify this is a valid Live API model",
+                configured_model=m,
+            )
+        return m
 
     async def _send_setup(self, context: Optional[Dict[str, Any]]) -> None:
         """Send session setup message to Gemini Live API."""
@@ -1393,6 +1401,8 @@ class GoogleLiveProvider(AIProviderInterface):
             text = output_transcription.get("text", "")
             if text:
                 self._turn_has_assistant_output = True
+                if self._hangup_after_response and not self._force_farewell_sent:
+                    self._post_hangup_output_detected = True
                 self._output_transcription_buffer, self._last_output_transcription_fragment = _merge_transcription_fragment(
                     self._output_transcription_buffer, text, self._last_output_transcription_fragment
                 )
@@ -1911,6 +1921,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
 
                 if func_name == "hangup_call" and self._force_farewell_text:
+                    self._post_hangup_output_detected = False
                     self._schedule_forced_farewell_if_needed()
                 
                 # Log tool call to session for call history (Milestone 21)
@@ -1980,6 +1991,12 @@ class GoogleLiveProvider(AIProviderInterface):
             if self._force_farewell_sent:
                 return
             if self._hangup_fallback_audio_started:
+                return
+            if self._post_hangup_output_detected:
+                logger.debug(
+                    "Skipping forced farewell - model already generating post-hangup speech",
+                    call_id=self._call_id,
+                )
                 return
 
             farewell = (self._force_farewell_text or "").strip()
@@ -2222,6 +2239,7 @@ class GoogleLiveProvider(AIProviderInterface):
             self._hangup_fallback_wait_logged = False
             self._force_farewell_text = ""
             self._force_farewell_sent = False
+            self._post_hangup_output_detected = False
             self._last_audio_out_monotonic = None
             self._user_end_intent = None
             self._assistant_farewell_intent = None

@@ -4,6 +4,18 @@ This directory tracks major project milestones and implementation achievements.
 
 ## Recent Milestones
 
+### **Milestone 24: Phase Tools & Tool Enhancements (Pre/In/Post-Call HTTP)** 🔧
+- [View Details →](milestone-24-tools-enhancements.md)
+- **Date**: February 2026 (shipped in v5.3.1)
+- **Status**: ✅ Complete
+- **Impact**: Pre-call HTTP lookups (CRM enrichment), in-call HTTP tools (AI-invoked), post-call webhooks (fire-and-forget automation), extension status checking
+
+### **Milestone 23: NAT/Advertise Host** 🌐
+- [View Details →](milestone-23-nat-advertise-host.md)
+- **Date**: February 2026 (shipped in v6.0.0)
+- **Status**: ✅ Complete
+- **Impact**: Separate bind vs advertise host for NAT/VPN/hybrid cloud deployments
+
 ### **Milestone 22: Outbound Campaign Dialer (Scheduled Calls + Voicemail Drop)** 📞
 - [View Details →](milestone-22-outbound-campaign-dialer.md)
 - **Status**: 🟡 In Progress (dev validated)

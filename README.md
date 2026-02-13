@@ -554,11 +554,26 @@ The `preflight.sh` script handles initial setup:
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md).
+Contributions are welcome! We value all contributions — code, documentation, bug reports, tests, and ideas.
+
+Please see our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md).
+
+**Areas where we need help:**
+- New provider adapters (Azure, Anthropic Claude) — see [Roadmap](docs/ROADMAP.md)
+- Test coverage expansion (currently ~28%)
+- Admin UI improvements and accessibility
+- Documentation improvements
 
 ### 👩‍💻 For Developers
-- [Developer Quickstart](docs/contributing/quickstart.md)
-- [Developer Documentation](docs/contributing/README.md)
+- [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md) - Project overview and first tasks
+- [Developer Quickstart](docs/contributing/quickstart.md) - Set up your dev environment
+- [Developer Documentation](docs/contributing/README.md) - Full contributor docs
+
+### Contributors
+
+<a href="https://github.com/hkjarral/Asterisk-AI-Voice-Agent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=hkjarral/Asterisk-AI-Voice-Agent" />
+</a>
 
 ---
 
