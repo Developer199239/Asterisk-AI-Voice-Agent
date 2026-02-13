@@ -69,6 +69,11 @@ class ElevenLabsTTSAdapter(TTSComponent):
         """Cleanup call resources (no per-call state)."""
         pass
 
+    async def validate_connectivity(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        # Merge provider config into options so the base validator sees base_url.
+        merged = self._compose_options(options or {})
+        return await super().validate_connectivity(merged)
+
     async def synthesize(
         self,
         call_id: str,
