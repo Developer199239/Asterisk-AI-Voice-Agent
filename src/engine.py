@@ -9498,6 +9498,7 @@ class Engine:
                                 
                                 if tool:
                                     logger.info("Executing pipeline tool", tool=name, call_id=call_id)
+                                    _tool_start = time.time()
                                     # Slow-response UX (pipeline only): speak a waiting message if the tool takes too long.
                                     slow_threshold_ms = int(getattr(tool, "slow_response_threshold_ms", 0) or 0)
                                     slow_message = str(getattr(tool, "slow_response_message", "") or "").strip()
@@ -9524,8 +9525,26 @@ class Engine:
                                             except Exception:
                                                 logger.debug("Failed to speak slow-response message", call_id=call_id, exc_info=True)
                                     result = await tool_task
+                                    tool_duration_ms = (time.time() - _tool_start) * 1000
                                     logger.info("Tool execution result", tool=name, result=result)
-                                    
+
+                                    # Record tool call for call history (Milestone 21)
+                                    try:
+                                        tool_record = {
+                                            "name": name,
+                                            "params": args,
+                                            "result": result.get("status", "unknown"),
+                                            "message": result.get("message", ""),
+                                            "timestamp": datetime.now().isoformat(),
+                                            "duration_ms": round(tool_duration_ms, 2),
+                                        }
+                                        if not hasattr(session, 'tool_calls') or session.tool_calls is None:
+                                            session.tool_calls = []
+                                        session.tool_calls.append(tool_record)
+                                        await self.session_store.upsert_call(session)
+                                    except Exception:
+                                        logger.debug("Failed to log pipeline tool call to session", call_id=call_id, exc_info=True)
+
                                     # Handle Hangup (AAVA-85 Fix)
                                     if result.get("will_hangup"):
                                         farewell = result.get("message")
