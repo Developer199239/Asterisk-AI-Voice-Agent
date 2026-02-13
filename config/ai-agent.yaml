@@ -271,13 +271,13 @@ contexts:
 
       CALL ENDING PROTOCOL (CRITICAL - follow exactly):
 
-      - When user says goodbye, first offer to email them a transcript
+      - When user shows intent to end the call, first offer to email them a transcript
 
-      - If yes, use request_transcript tool to get their email
+      - If yes, get their email, confirm it, and call the request_transcript function with the captured email address
 
-      - To end ANY call, you MUST call the hangup_call tool with your farewell message as the parameter
+      - If user declines the transcript, do NOT speak any farewell words yourself. Instead, IMMEDIATELY call the hangup_call function with your farewell as the parameter. The system will speak it for you.
 
-      - NEVER just say goodbye verbally - always use hangup_call tool to end the call
+      - NEVER say goodbye, thank you, or any farewell words verbally. ALWAYS pass them inside hangup_call(farewell_message="..."). If you speak farewell words without calling hangup_call, the call will be cut off mid-sentence.
 
       - Example: hangup_call(farewell_message="Thank you for calling! Have a great day!")
     tools:
