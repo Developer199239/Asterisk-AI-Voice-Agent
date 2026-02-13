@@ -162,8 +162,6 @@ class GoogleLiveProvider(AIProviderInterface):
         self._force_farewell_text: str = ""
         self._force_farewell_sent: bool = False
         self._post_hangup_output_detected: bool = False
-        # Conversation state
-        self._conversation_history: List[Dict[str, Any]] = []
         
         # Initialize tool adapter early (before start_session) so engine can inject context
         # This ensures _session_store, _ari_client, etc. are available for tool execution
@@ -196,11 +194,6 @@ class GoogleLiveProvider(AIProviderInterface):
         self._ws_send_close_logged: bool = False
         self._closing: bool = False
         self._closed: bool = False
-        # Auto-reconnect on 1008 (Google server-side policy violation bug with native audio + tools).
-        self._reconnect_task: Optional[asyncio.Task] = None
-        self._reconnect_context: Optional[Dict[str, Any]] = None
-        self._reconnect_count: int = 0
-        self._max_reconnect_attempts: int = 3
         # Diagnostics: keep a small ring buffer of outbound message summaries
         # to help explain server-initiated closes (e.g., 1008 policy violations).
         self._outbound_summaries: deque[Dict[str, Any]] = deque(maxlen=12)
@@ -667,9 +660,6 @@ class GoogleLiveProvider(AIProviderInterface):
         self._closing = False
         self._closed = False
         self._session_start_time = time.time()
-        self._reconnect_context = context
-        self._reconnect_count = 0
-        self._conversation_history = []
         self._setup_complete = False
         self._greeting_completed = False
         self._ws_unavailable_logged = False
@@ -827,10 +817,10 @@ class GoogleLiveProvider(AIProviderInterface):
             return GoogleLiveProvider.DEFAULT_LIVE_MODEL
         return m
 
-    async def _send_setup(self, context: Optional[Dict[str, Any]], system_prompt_override: Optional[str] = None) -> None:
+    async def _send_setup(self, context: Optional[Dict[str, Any]]) -> None:
         """Send session setup message to Gemini Live API."""
         # Use instructions from config (like OpenAI Realtime pattern)
-        system_prompt = system_prompt_override or self.config.instructions
+        system_prompt = self.config.instructions
         
         response_modalities = self._normalize_response_modalities(self.config.response_modalities)
 
@@ -1271,20 +1261,20 @@ class GoogleLiveProvider(AIProviderInterface):
                     exc_info=True,
                 )
             self._mark_ws_disconnected()
-            # On 1008 (Google server-side bug with native audio + tools), attempt
-            # auto-reconnect instead of killing the call.
-            if close_code == 1008 and self._reconnect_count < self._max_reconnect_attempts:
-                if not self._closing and not self._closed and self._call_id:
-                    try:
-                        if not self._reconnect_task or self._reconnect_task.done():
-                            self._reconnect_task = asyncio.create_task(
-                                self._reconnect_with_backoff(),
-                                name=f"google-live-reconnect-{self._call_id}",
-                            )
-                    except Exception:
-                        logger.debug("Failed to schedule Google Live reconnect", call_id=self._call_id, exc_info=True)
-                    return  # Don't emit ProviderDisconnected yet
             try:
+                # If farewell audio is already buffered/playing (hangup_call was invoked),
+                # the WebSocket is no longer needed.  Let the engine's cleanup_after_tts
+                # flow finish playback and hang up gracefully.
+                if self._hangup_after_response:
+                    logger.info(
+                        "Google Live WebSocket closed during farewell — "
+                        "letting buffered farewell audio play out",
+                        call_id=self._call_id,
+                        code=close_code,
+                        reason=close_reason,
+                    )
+                    return  # Don't emit ProviderDisconnected
+
                 # Only treat abnormal closes as a "disconnect" signal for the engine.
                 # Normal closure (1000) can occur during expected teardown and should not
                 # force an immediate hangup (would cut off farewell audio / cleanup flows).
@@ -2053,9 +2043,6 @@ class GoogleLiveProvider(AIProviderInterface):
         if not text or not text.strip():
             return
         
-        # Keep local copy for reconnect context replay
-        self._conversation_history.append({"role": role, "content": text.strip()})
-        
         # Get session_store from provider context (injected by engine)
         session_store = getattr(self, '_session_store', None)
         if not session_store:
@@ -2097,145 +2084,6 @@ class GoogleLiveProvider(AIProviderInterface):
             "Google Live server sending goAway",
             call_id=self._call_id,
         )
-        # Prepare for reconnection if needed
-
-    async def _reconnect_with_backoff(self) -> None:
-        """Auto-reconnect on 1008 (Google server-side bug with native audio + tools).
-
-        Opens a new WebSocket, re-sends setup (prompt, tools, config),
-        and restarts the receive loop. The caller stays on the line and
-        hears a brief silence (~1-2s) during reconnection.
-        """
-        call_id = self._call_id
-        if not call_id:
-            return
-        backoff = 0.5
-        for attempt in range(1, self._max_reconnect_attempts + 1):
-            if self._closing or self._closed:
-                return
-            self._reconnect_count += 1
-            logger.info(
-                "🔄 Google Live auto-reconnect attempt",
-                call_id=call_id,
-                attempt=attempt,
-                max_attempts=self._max_reconnect_attempts,
-            )
-            try:
-                await asyncio.sleep(backoff)
-                if self._closing or self._closed:
-                    return
-
-                api_key = self.config.api_key or ""
-                endpoint = (self.config.websocket_endpoint or "").strip()
-                if not endpoint:
-                    endpoint = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-                ws_url = f"{endpoint}?key={api_key}"
-
-                self.websocket = await websockets.connect(
-                    ws_url,
-                    subprotocols=["gemini-live"],
-                    max_size=10 * 1024 * 1024,
-                    ping_interval=None,
-                    ping_timeout=None,
-                )
-                _GOOGLE_LIVE_SESSIONS.inc()
-                self._session_gauge_incremented = True
-                self._ws_unavailable_logged = False
-                self._outbound_summaries.clear()
-
-                # Re-create ACK event and start receive loop
-                self._setup_ack_event = asyncio.Event()
-                self._receive_task = asyncio.create_task(
-                    self._receive_loop(),
-                    name=f"google-live-receive-{call_id}-r{attempt}",
-                )
-
-                # Re-send setup with saved context (no greeting on reconnect).
-                # Embed conversation history into system prompt so model has context
-                # (sending clientContent turns causes 1007 "invalid argument").
-                self._greeting_completed = True  # Skip greeting on reconnect
-                augmented_prompt = None
-                if self._conversation_history:
-                    history_lines = []
-                    for msg in self._conversation_history[-10:]:
-                        role = msg.get("role", "user")
-                        content = msg.get("content", "")
-                        if content:
-                            label = "Caller" if role == "user" else "You"
-                            history_lines.append(f"{label}: {content}")
-                    if history_lines:
-                        history_text = "\n".join(history_lines)
-                        base_prompt = self.config.instructions or ""
-                        augmented_prompt = (
-                            f"{base_prompt}\n\n"
-                            f"[SESSION RESUMED — the connection was briefly interrupted. "
-                            f"Continue the conversation naturally from where you left off. "
-                            f"Do NOT re-greet or restart. Here is the conversation so far:]\n"
-                            f"{history_text}"
-                        )
-                        logger.info(
-                            "📜 Embedded conversation history in system prompt for reconnect",
-                            call_id=call_id,
-                            turns_count=len(history_lines),
-                        )
-                await self._send_setup(self._reconnect_context, system_prompt_override=augmented_prompt)
-
-                # Wait for setup ACK
-                await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
-                self._setup_complete = True
-
-                # Force-clear TTS gating so audio capture resumes.
-                # The old streaming playback's gating token is stale after 1008;
-                # without this, the engine keeps sending silence frames forever.
-                try:
-                    session_store = getattr(self, '_session_store', None)
-                    if session_store and call_id:
-                        session = await session_store.get_by_call_id(call_id)
-                        if session and session.tts_active_count > 0:
-                            logger.info(
-                                "🔓 Force-clearing stale TTS gating after reconnect",
-                                call_id=call_id,
-                                stale_tokens=session.tts_active_count,
-                            )
-                            session.tts_active_count = 0
-                            session.tts_playing = False
-                            session.audio_capture_enabled = True
-                            session.tts_gating_tokens.clear()
-                            if session.vad_state:
-                                session.vad_state["tts_playing"] = False
-                            await session_store.upsert_call(session)
-                except Exception:
-                    logger.debug("Failed to clear gating after reconnect",
-                                 call_id=call_id, exc_info=True)
-
-                logger.info(
-                    "✅ Google Live reconnected successfully",
-                    call_id=call_id,
-                    attempt=attempt,
-                    total_reconnects=self._reconnect_count,
-                )
-                return  # Success
-            except asyncio.CancelledError:
-                return
-            except Exception:
-                logger.warning(
-                    "Google Live reconnect attempt failed",
-                    call_id=call_id,
-                    attempt=attempt,
-                    exc_info=True,
-                )
-                backoff = min(4.0, backoff * 2)
-
-        # Exhausted all reconnect attempts — signal disconnect to engine
-        logger.error(
-            "Google Live reconnection exhausted all attempts",
-            call_id=call_id,
-            total_attempts=self._reconnect_count,
-        )
-        try:
-            await self._emit_provider_disconnected(code=1008, reason="Reconnect attempts exhausted")
-        except Exception:
-            pass
 
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive messages."""
@@ -2350,11 +2198,6 @@ class GoogleLiveProvider(AIProviderInterface):
                                  call_id=self._call_id, exc_info=True)
 
             # Cancel background tasks
-            if self._reconnect_task and not self._reconnect_task.done():
-                self._reconnect_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._reconnect_task
-
             if self._receive_task and not self._receive_task.done():
                 self._receive_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -2384,7 +2227,6 @@ class GoogleLiveProvider(AIProviderInterface):
             self._call_id = None
             self._session_id = None
             self._input_buffer.clear()
-            self._conversation_history.clear()
             self._hangup_after_response = False
             self._hangup_fallback_armed = False
             self._hangup_fallback_emitted = False
