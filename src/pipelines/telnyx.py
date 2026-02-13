@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from ..config import AppConfig, OpenAIProviderConfig
+from ..config import AppConfig, TelnyxLLMProviderConfig
 from ..logging_config import get_logger
 from ..tools.registry import tool_registry
 from .base import LLMComponent, LLMResponse
@@ -48,7 +48,7 @@ class TelnyxLLMAdapter(LLMComponent):
         self,
         component_key: str,
         app_config: AppConfig,
-        provider_config: OpenAIProviderConfig,
+        provider_config: TelnyxLLMProviderConfig,
         options: Optional[Dict[str, Any]] = None,
         *,
         session_factory: Optional[Callable[[], aiohttp.ClientSession]] = None,
@@ -59,7 +59,9 @@ class TelnyxLLMAdapter(LLMComponent):
         self._pipeline_defaults = options or {}
         self._session_factory = session_factory
         self._session: Optional[aiohttp.ClientSession] = None
-        self._default_timeout = float(self._pipeline_defaults.get("response_timeout_sec", provider_config.response_timeout_sec))
+        self._default_timeout = float(
+            self._pipeline_defaults.get("response_timeout_sec", provider_config.response_timeout_sec)
+        )
         self._models_cache: Optional[list[str]] = None
         self._models_cache_at: float = 0.0
 
@@ -99,7 +101,9 @@ class TelnyxLLMAdapter(LLMComponent):
                     ids.append(str(it["id"]))
             return ids
 
-    async def _maybe_resolve_model_id(self, model: str, *, api_key: str, chat_base_url: str) -> str:
+    async def _maybe_resolve_model_id(
+        self, model: str, *, api_key: str, chat_base_url: str, api_key_ref: Optional[str]
+    ) -> str:
         """
         Telnyx model IDs are namespaced (e.g., `openai/gpt-4o-mini`).
         If the user supplies an un-namespaced model (e.g., `gpt-4o-mini`), try to
@@ -122,6 +126,9 @@ class TelnyxLLMAdapter(LLMComponent):
         matches = [mid for mid in self._models_cache if str(mid).rsplit("/", 1)[-1] == raw]
         if len(matches) == 1:
             resolved = matches[0]
+            # Guardrail: OpenAI-prefixed models require an integration secret reference.
+            if str(resolved).startswith("openai/") and not api_key_ref:
+                return raw
             logger.info(
                 "Resolved Telnyx model alias",
                 component=self.component_key,
@@ -135,6 +142,10 @@ class TelnyxLLMAdapter(LLMComponent):
         runtime_options = runtime_options or {}
         merged = {
             "api_key": runtime_options.get("api_key", self._pipeline_defaults.get("api_key", self._provider_defaults.api_key)),
+            "api_key_ref": runtime_options.get(
+                "api_key_ref",
+                self._pipeline_defaults.get("api_key_ref", getattr(self._provider_defaults, "api_key_ref", None)),
+            ),
             "chat_base_url": runtime_options.get(
                 "chat_base_url",
                 runtime_options.get(
@@ -157,8 +168,14 @@ class TelnyxLLMAdapter(LLMComponent):
             ),
             "system_prompt": runtime_options.get("system_prompt", self._pipeline_defaults.get("system_prompt")),
             "instructions": runtime_options.get("instructions", self._pipeline_defaults.get("instructions")),
-            "temperature": runtime_options.get("temperature", self._pipeline_defaults.get("temperature", 0.7)),
-            "max_tokens": runtime_options.get("max_tokens", self._pipeline_defaults.get("max_tokens")),
+            "temperature": runtime_options.get(
+                "temperature",
+                self._pipeline_defaults.get("temperature", getattr(self._provider_defaults, "temperature", 0.7)),
+            ),
+            "max_tokens": runtime_options.get(
+                "max_tokens",
+                self._pipeline_defaults.get("max_tokens", getattr(self._provider_defaults, "max_tokens", None)),
+            ),
             "timeout_sec": float(runtime_options.get("timeout_sec", self._pipeline_defaults.get("timeout_sec", self._default_timeout))),
             "tools": runtime_options.get("tools", self._pipeline_defaults.get("tools", [])),
         }
@@ -198,6 +215,8 @@ class TelnyxLLMAdapter(LLMComponent):
             "model": merged["chat_model"],
             "messages": self._coalesce_messages(transcript, context, merged),
         }
+        if merged.get("api_key_ref"):
+            payload["api_key_ref"] = merged["api_key_ref"]
         if merged.get("temperature") is not None:
             payload["temperature"] = merged["temperature"]
         if merged.get("max_tokens") is not None:
@@ -243,6 +262,15 @@ class TelnyxLLMAdapter(LLMComponent):
         await self._ensure_session()
         assert self._session
 
+        # Telnyx supports external inference providers (e.g. OpenAI) via Integration Secrets.
+        # If a user selects an external model, require api_key_ref to avoid confusing 400s.
+        requested_model = str(merged.get("chat_model") or "").strip()
+        if requested_model.startswith("openai/") and not merged.get("api_key_ref"):
+            raise RuntimeError(
+                "Telnyx external models like 'openai/*' require 'api_key_ref' (Integration Secret identifier). "
+                "Set providers.telnyx_llm.api_key_ref or choose a Telnyx-hosted model like 'meta-llama/*'."
+            )
+
         # Normalize model ID: allow un-namespaced IDs by resolving to the account's model list.
         try:
             merged = dict(merged)
@@ -250,6 +278,7 @@ class TelnyxLLMAdapter(LLMComponent):
                 str(merged.get("chat_model") or ""),
                 api_key=str(api_key),
                 chat_base_url=str(merged.get("chat_base_url") or self.DEFAULT_CHAT_BASE_URL),
+                api_key_ref=str(merged.get("api_key_ref") or "") or None,
             )
         except Exception:
             logger.debug("Telnyx model alias resolution failed", call_id=call_id, exc_info=True)

@@ -19,6 +19,7 @@ import DeepgramProviderForm from '../components/config/providers/DeepgramProvide
 import GoogleLiveProviderForm from '../components/config/providers/GoogleLiveProviderForm';
 import OpenAIProviderForm from '../components/config/providers/OpenAIProviderForm';
 import ElevenLabsProviderForm from '../components/config/providers/ElevenLabsProviderForm';
+import TelnyxProviderForm from '../components/config/providers/TelnyxProviderForm';
 import { Capability, capabilityFromKey, ensureModularKey, isFullAgentProvider } from '../utils/providerNaming';
 import { GOOGLE_LIVE_DEFAULT_MODEL } from '../utils/googleLiveModels';
 
@@ -224,6 +225,16 @@ const ProvidersPage: React.FC = () => {
                 local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
                 local_llm: { type: 'local', capabilities: ['llm'], enabled: false, auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
                 local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' }
+            },
+            telnyx_llm: {
+                enabled: false,
+                type: 'telnyx',
+                capabilities: ['llm'],
+                chat_base_url: 'https://api.telnyx.com/v2/ai',
+                api_key: '${TELNYX_API_KEY}',
+                chat_model: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+                temperature: 0.7,
+                response_timeout_sec: 5.0,
             }
         };
 
@@ -532,6 +543,9 @@ const ProvidersPage: React.FC = () => {
         if (providerName.includes('elevenlabs')) {
             return <ElevenLabsProviderForm config={providerForm} onChange={updateForm} />;
         }
+        if (providerName.includes('telnyx') || providerName.includes('telenyx')) {
+            return <TelnyxProviderForm config={providerForm} onChange={updateForm} />;
+        }
         
         // Fall back to type-based selection
         switch (providerForm.type) {
@@ -548,6 +562,9 @@ const ProvidersPage: React.FC = () => {
                 return <ElevenLabsProviderForm config={providerForm} onChange={updateForm} />;
             case 'ollama':
                 return <OllamaProviderForm config={providerForm} onChange={updateForm} />;
+            case 'telnyx':
+            case 'telenyx':
+                return <TelnyxProviderForm config={providerForm} onChange={updateForm} />;
             default:
                 return <GenericProviderForm config={providerForm} onChange={updateForm} isNew={isNewProvider} />;
         }
@@ -1061,6 +1078,37 @@ const ProvidersPage: React.FC = () => {
                                 <p className="text-xs text-muted-foreground">Adds local_stt, local_llm, local_tts for pipeline use</p>
                             </div>
                         </label>
+                    </div>
+                    <div className="space-y-2">
+                        <h4 className="text-sm font-medium">Modular Providers (Cloud)</h4>
+                        {[
+                            { id: 'telnyx_llm', name: 'Telnyx LLM', desc: 'Telnyx AI Inference (OpenAI-compatible /chat/completions)' },
+                        ].map(template => (
+                            <label key={template.id} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-accent/50 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedTemplates.includes(template.id)}
+                                    onChange={(e) => {
+                                        if (e.target.checked) {
+                                            setSelectedTemplates([...selectedTemplates, template.id]);
+                                        } else {
+                                            setSelectedTemplates(selectedTemplates.filter(t => t !== template.id));
+                                        }
+                                    }}
+                                    disabled={!!config.providers?.[template.id]}
+                                    className="mt-1"
+                                />
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium">{template.name}</span>
+                                        {config.providers?.[template.id] && (
+                                            <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">Already exists</span>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">{template.desc}</p>
+                                </div>
+                            </label>
+                        ))}
                     </div>
                 </div>
             </Modal>

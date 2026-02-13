@@ -150,8 +150,14 @@ providers:
     chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
   telnyx_llm:
     enabled: true
+    type: telnyx
+    capabilities: [llm]
     chat_base_url: "https://api.telnyx.com/v2/ai"
     api_key: "${TELNYX_API_KEY}"
+    # Telnyx-hosted default model (works with TELNYX_API_KEY only)
+    chat_model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    temperature: 0.7
+    response_timeout_sec: 5.0
 
 # Pipeline Configuration - Telnyx Hybrid
 # Local STT + Telnyx LLM + Local TTS
@@ -162,9 +168,10 @@ pipelines:
     tts: local_tts
     options:
       llm:
-        # Model selection - choose from 53+ available models
-        # Popular options: openai/gpt-4o-mini, anthropic/claude-*, meta-llama/*, mistralai/*
-        model: "openai/gpt-4o-mini"
+        # Model selection
+        # Telnyx-hosted models like meta-llama/* work with TELNYX_API_KEY only.
+        # External models like openai/* require providers.telnyx_llm.api_key_ref (Integration Secret identifier).
+        model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
         temperature: 0.7
         max_tokens: 150
       stt:

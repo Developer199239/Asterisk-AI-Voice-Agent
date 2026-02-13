@@ -120,13 +120,28 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
     // Prefer capabilities array (authoritative). For legacy configs missing capabilities, infer from key suffix.
     // Only show registered providers that have engine adapter support.
     const getProvidersByCapability = (cap: 'stt' | 'llm' | 'tts', selectedProvider?: string) => {
+        const isRegisteredOrInferred = (providerKey: string, provider: any) => {
+            if (isRegisteredProvider(provider)) return true;
+            // Legacy configs may omit `type`. Infer registration from the provider key prefix.
+            // This preserves pipeline editability for older YAML and prevents "provider disappears" UX.
+            const k = (providerKey || '').toLowerCase();
+            if (k.startsWith('local')) return true;
+            if (k.startsWith('openai')) return true;
+            if (k.startsWith('groq')) return true;
+            if (k.startsWith('google')) return true;
+            if (k.startsWith('ollama')) return true;
+            if (k.startsWith('elevenlabs')) return true;
+            if (k.startsWith('telnyx') || k.startsWith('telenyx')) return true;
+            return false;
+        };
+
         const base = Object.entries(providers || {})
             .filter(([providerKey, p]: [string, any]) => {
                 // Exclude Full Agents from modular slots
                 if (isFullAgentProvider(p)) return false;
 
                 // Exclude unregistered providers (no engine adapter)
-                if (!isRegisteredProvider(p)) return false;
+                if (!isRegisteredOrInferred(providerKey, p)) return false;
 
                 // Hide disabled providers from choices (but keep them visible if currently selected).
                 if (p.enabled === false) return false;

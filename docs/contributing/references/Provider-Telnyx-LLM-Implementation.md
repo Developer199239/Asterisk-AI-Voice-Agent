@@ -93,7 +93,7 @@ Mitigation:
 ### 3) Register factories in `PipelineOrchestrator`
 
 - File: `src/pipelines/orchestrator.py`
-- Hydrate `providers.telnyx_llm` into a config object (reuse `OpenAIProviderConfig` for schema compatibility).
+- Hydrate `providers.telnyx_llm` into a config object (`TelnyxLLMProviderConfig`) so we can support Telnyx-specific fields like `api_key_ref`.
 - Register factories:
   - `telnyx_llm`
   - optional alias `telenyx_llm`
@@ -146,4 +146,3 @@ Observability:
 2) Deploy `staging` to the dev/staging server via git pull + service restart.
 3) Run manual call tests.
 4) Promote to `main` via PR (no direct merges) and include the same credit.
-

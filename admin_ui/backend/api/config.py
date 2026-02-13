@@ -1091,9 +1091,9 @@ async def test_provider_connection(request: ProviderTestRequest):
                 return {"success": False, "message": f"OpenAI API error: HTTP {response.status_code}"}
 
         # ============================================================
-        # OPENAI-COMPATIBLE (OpenAI / Groq / OpenRouter / etc.)
+        # OPENAI-COMPATIBLE (OpenAI / Groq / Telnyx / OpenRouter / etc.)
         # ============================================================
-        if provider_config.get('type') == 'openai':
+        if str(provider_config.get('type') or '').lower() in ('openai', 'telnyx', 'telenyx'):
             chat_base_url = (provider_config.get('chat_base_url') or 'https://api.openai.com/v1').rstrip('/')
             api_key = provider_config.get('api_key')
             if not api_key:

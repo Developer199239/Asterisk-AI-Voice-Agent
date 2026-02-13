@@ -24,6 +24,7 @@ from ..config import (
     GroqTTSProviderConfig,
     LocalProviderConfig,
     OpenAIProviderConfig,
+    TelnyxLLMProviderConfig,
 )
 from ..logging_config import get_logger
 from .base import Component, STTComponent, LLMComponent, TTSComponent
@@ -223,7 +224,7 @@ class PipelineOrchestrator:
         self._local_provider_config: Optional[LocalProviderConfig] = self._hydrate_local_config()
         self._deepgram_provider_config: Optional[DeepgramProviderConfig] = self._hydrate_deepgram_config()
         self._openai_provider_config: Optional[OpenAIProviderConfig] = self._hydrate_openai_config()
-        self._telnyx_llm_provider_config: Optional[OpenAIProviderConfig] = self._hydrate_telnyx_llm_config()
+        self._telnyx_llm_provider_config: Optional[TelnyxLLMProviderConfig] = self._hydrate_telnyx_llm_config()
         self._google_provider_config: Optional[GoogleProviderConfig] = self._hydrate_google_config()
         self._elevenlabs_provider_config: Optional[ElevenLabsProviderConfig] = self._hydrate_elevenlabs_config()
         self._groq_stt_provider_config: Optional[GroqSTTProviderConfig] = self._hydrate_groq_stt_config()
@@ -778,7 +779,7 @@ class PipelineOrchestrator:
 
     def _make_telnyx_llm_factory(
         self,
-        provider_config: OpenAIProviderConfig,
+        provider_config: TelnyxLLMProviderConfig,
     ) -> ComponentFactory:
         config_payload = provider_config.model_dump()
 
@@ -786,7 +787,7 @@ class PipelineOrchestrator:
             return TelnyxLLMAdapter(
                 component_key,
                 self.config,
-                OpenAIProviderConfig(**config_payload),
+                TelnyxLLMProviderConfig(**config_payload),
                 options,
             )
 
@@ -1052,7 +1053,7 @@ class PipelineOrchestrator:
 
         return config
 
-    def _hydrate_telnyx_llm_config(self) -> Optional[OpenAIProviderConfig]:
+    def _hydrate_telnyx_llm_config(self) -> Optional[TelnyxLLMProviderConfig]:
         providers = getattr(self.config, "providers", {}) or {}
         raw = providers.get("telnyx_llm") or providers.get("telenyx_llm") or providers.get("telnyx")
         merged: Dict[str, Any] = {}
@@ -1081,7 +1082,7 @@ class PipelineOrchestrator:
         merged.setdefault("chat_base_url", "https://api.telnyx.com/v2/ai")
 
         try:
-            config = OpenAIProviderConfig(**merged)
+            config = TelnyxLLMProviderConfig(**merged)
         except Exception as exc:
             logger.warning(
                 "Failed to hydrate Telnyx LLM provider config for pipelines",
