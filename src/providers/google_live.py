@@ -829,10 +829,10 @@ class GoogleLiveProvider(AIProviderInterface):
             )
         return m
 
-    async def _send_setup(self, context: Optional[Dict[str, Any]]) -> None:
+    async def _send_setup(self, context: Optional[Dict[str, Any]], system_prompt_override: Optional[str] = None) -> None:
         """Send session setup message to Gemini Live API."""
         # Use instructions from config (like OpenAI Realtime pattern)
-        system_prompt = self.config.instructions
+        system_prompt = system_prompt_override or self.config.instructions
         
         response_modalities = self._normalize_response_modalities(self.config.response_modalities)
 
@@ -2152,30 +2152,39 @@ class GoogleLiveProvider(AIProviderInterface):
                     name=f"google-live-receive-{call_id}-r{attempt}",
                 )
 
-                # Re-send setup with saved context (no greeting on reconnect)
+                # Re-send setup with saved context (no greeting on reconnect).
+                # Embed conversation history into system prompt so model has context
+                # (sending clientContent turns causes 1007 "invalid argument").
                 self._greeting_completed = True  # Skip greeting on reconnect
-                await self._send_setup(self._reconnect_context)
+                augmented_prompt = None
+                if self._conversation_history:
+                    history_lines = []
+                    for msg in self._conversation_history[-10:]:
+                        role = msg.get("role", "user")
+                        content = msg.get("content", "")
+                        if content:
+                            label = "Caller" if role == "user" else "You"
+                            history_lines.append(f"{label}: {content}")
+                    if history_lines:
+                        history_text = "\n".join(history_lines)
+                        base_prompt = self.config.instructions or ""
+                        augmented_prompt = (
+                            f"{base_prompt}\n\n"
+                            f"[SESSION RESUMED — the connection was briefly interrupted. "
+                            f"Continue the conversation naturally from where you left off. "
+                            f"Do NOT re-greet or restart. Here is the conversation so far:]\n"
+                            f"{history_text}"
+                        )
+                        logger.info(
+                            "📜 Embedded conversation history in system prompt for reconnect",
+                            call_id=call_id,
+                            turns_count=len(history_lines),
+                        )
+                await self._send_setup(self._reconnect_context, system_prompt_override=augmented_prompt)
 
                 # Wait for setup ACK
                 await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
                 self._setup_complete = True
-
-                # Replay conversation history so model has context
-                if self._conversation_history:
-                    turns = []
-                    for msg in self._conversation_history[-10:]:  # Last 10 turns
-                        role = msg.get("role", "user")
-                        content = msg.get("content", "")
-                        if content:
-                            turns.append({"role": role, "parts": [{"text": content}]})
-                    if turns:
-                        history_msg = {"clientContent": {"turns": turns, "turnComplete": True}}
-                        await self._send_message(history_msg)
-                        logger.info(
-                            "📜 Replayed conversation history after reconnect",
-                            call_id=call_id,
-                            turns_count=len(turns),
-                        )
 
                 logger.info(
                     "✅ Google Live reconnected successfully",
