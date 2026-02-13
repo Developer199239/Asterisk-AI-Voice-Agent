@@ -1881,11 +1881,16 @@ class GoogleLiveProvider(AIProviderInterface):
 
                 # Send tool response (camelCase per official API)
                 safe_result = self._build_tool_response_payload(func_name, result)
-                # For hangup_call, replace the farewell text with a neutral confirmation
-                # so the model doesn't echo the farewell and then also generate its own,
-                # which produces a duplicate farewell.
-                if func_name == "hangup_call" and isinstance(safe_result, dict):
-                    safe_result["message"] = "Acknowledged. Call will disconnect after your response."
+                # Neutralize speech-like tool responses for Google Live.
+                # The model echoes/paraphrases any "message" text it receives AND
+                # generates its own response, causing duplicates (e.g. farewell said twice).
+                # Keep responses purely factual so the model formulates its own speech.
+                _NEUTRAL_RESPONSES = {
+                    "hangup_call": "Done. Call will disconnect after your response.",
+                    "request_transcript": "Transcript scheduled for delivery after call ends.",
+                }
+                if func_name in _NEUTRAL_RESPONSES and isinstance(safe_result, dict):
+                    safe_result["message"] = _NEUTRAL_RESPONSES[func_name]
                 tool_response = {
                     "toolResponse": {
                         "functionResponses": [
