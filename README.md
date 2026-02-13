@@ -545,10 +545,12 @@ The `preflight.sh` script handles initial setup:
 - **[Local Profiles](docs/LOCAL_PROFILES.md)**
 - **[Monitoring Guide](docs/MONITORING_GUIDE.md)**
 
-### Development
+### Development & Community
+- **[Roadmap](docs/ROADMAP.md)** - What's next, planned milestones, and how to get involved
 - **[Developer Documentation](docs/contributing/README.md)**
 - **[Architecture Deep Dive](docs/contributing/architecture-deep-dive.md)**
 - **[Contributing Guide](CONTRIBUTING.md)**
+- **[Milestone History](docs/MILESTONE_HISTORY.md)** - Completed milestones 1-24
 
 ---
 
