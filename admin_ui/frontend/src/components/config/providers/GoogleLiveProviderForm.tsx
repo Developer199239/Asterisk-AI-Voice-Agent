@@ -401,7 +401,10 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Audio Idle Timeout (sec)</label>
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                Audio Idle Timeout (sec)
+                                <HelpTooltip content="How long to wait after the last audio output before triggering hangup. If the model stops producing audio for this duration after a farewell, the call is ended. Default: 1.25s." />
+                            </label>
                             <input
                                 type="number"
                                 step="0.05"
@@ -411,7 +414,10 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Minimum Armed Time (sec)</label>
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                Minimum Armed Time (sec)
+                                <HelpTooltip content="Minimum time the hangup fallback must be armed before it can fire. Prevents premature hangup if the model is still processing. Default: 0.8s." />
+                            </label>
                             <input
                                 type="number"
                                 step="0.05"
@@ -421,7 +427,10 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">No Audio Timeout (sec)</label>
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                No Audio Timeout (sec)
+                                <HelpTooltip content="If the model produces NO audio at all after hangup_call, wait this long before forcing a farewell and disconnect. Covers cases where the model goes silent. Default: 4.0s." />
+                            </label>
                             <input
                                 type="number"
                                 step="0.1"
@@ -431,7 +440,10 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Turn Complete Timeout (sec)</label>
+                            <label className="text-sm font-medium flex items-center gap-1">
+                                Turn Complete Timeout (sec)
+                                <HelpTooltip content="After the model's farewell audio finishes, wait this long for a turnComplete event before proceeding with hangup. Default: 2.5s." />
+                            </label>
                             <input
                                 type="number"
                                 step="0.1"
