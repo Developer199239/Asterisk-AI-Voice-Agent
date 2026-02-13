@@ -196,6 +196,11 @@ class GoogleLiveProvider(AIProviderInterface):
         self._ws_send_close_logged: bool = False
         self._closing: bool = False
         self._closed: bool = False
+        # Auto-reconnect on 1008 (Google server-side policy violation bug with native audio + tools).
+        self._reconnect_task: Optional[asyncio.Task] = None
+        self._reconnect_context: Optional[Dict[str, Any]] = None
+        self._reconnect_count: int = 0
+        self._max_reconnect_attempts: int = 3
         # Diagnostics: keep a small ring buffer of outbound message summaries
         # to help explain server-initiated closes (e.g., 1008 policy violations).
         self._outbound_summaries: deque[Dict[str, Any]] = deque(maxlen=12)
@@ -662,6 +667,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._closing = False
         self._closed = False
         self._session_start_time = time.time()
+        self._reconnect_context = context
+        self._reconnect_count = 0
         self._conversation_history = []
         self._setup_complete = False
         self._greeting_completed = False
@@ -1266,6 +1273,19 @@ class GoogleLiveProvider(AIProviderInterface):
                     exc_info=True,
                 )
             self._mark_ws_disconnected()
+            # On 1008 (Google server-side bug with native audio + tools), attempt
+            # auto-reconnect instead of killing the call.
+            if close_code == 1008 and self._reconnect_count < self._max_reconnect_attempts:
+                if not self._closing and not self._closed and self._call_id:
+                    try:
+                        if not self._reconnect_task or self._reconnect_task.done():
+                            self._reconnect_task = asyncio.create_task(
+                                self._reconnect_with_backoff(),
+                                name=f"google-live-reconnect-{self._call_id}",
+                            )
+                    except Exception:
+                        logger.debug("Failed to schedule Google Live reconnect", call_id=self._call_id, exc_info=True)
+                    return  # Don't emit ProviderDisconnected yet
             try:
                 # Only treat abnormal closes as a "disconnect" signal for the engine.
                 # Normal closure (1000) can occur during expected teardown and should not
@@ -2077,6 +2097,94 @@ class GoogleLiveProvider(AIProviderInterface):
         )
         # Prepare for reconnection if needed
 
+    async def _reconnect_with_backoff(self) -> None:
+        """Auto-reconnect on 1008 (Google server-side bug with native audio + tools).
+
+        Opens a new WebSocket, re-sends setup (prompt, tools, config),
+        and restarts the receive loop. The caller stays on the line and
+        hears a brief silence (~1-2s) during reconnection.
+        """
+        call_id = self._call_id
+        if not call_id:
+            return
+        backoff = 0.5
+        for attempt in range(1, self._max_reconnect_attempts + 1):
+            if self._closing or self._closed:
+                return
+            self._reconnect_count += 1
+            logger.info(
+                "🔄 Google Live auto-reconnect attempt",
+                call_id=call_id,
+                attempt=attempt,
+                max_attempts=self._max_reconnect_attempts,
+            )
+            try:
+                await asyncio.sleep(backoff)
+                if self._closing or self._closed:
+                    return
+
+                api_key = self.config.api_key or ""
+                endpoint = (self.config.websocket_endpoint or "").strip()
+                if not endpoint:
+                    endpoint = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+                ws_url = f"{endpoint}?key={api_key}"
+
+                self.websocket = await websockets.connect(
+                    ws_url,
+                    subprotocols=["gemini-live"],
+                    max_size=10 * 1024 * 1024,
+                    ping_interval=None,
+                    ping_timeout=None,
+                )
+                _GOOGLE_LIVE_SESSIONS.inc()
+                self._session_gauge_incremented = True
+                self._ws_unavailable_logged = False
+                self._outbound_summaries.clear()
+
+                # Re-create ACK event and start receive loop
+                self._setup_ack_event = asyncio.Event()
+                self._receive_task = asyncio.create_task(
+                    self._receive_loop(),
+                    name=f"google-live-receive-{call_id}-r{attempt}",
+                )
+
+                # Re-send setup with saved context (no greeting on reconnect)
+                self._greeting_completed = True  # Skip greeting on reconnect
+                await self._send_setup(self._reconnect_context)
+
+                # Wait for setup ACK
+                await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
+                self._setup_complete = True
+
+                logger.info(
+                    "✅ Google Live reconnected successfully",
+                    call_id=call_id,
+                    attempt=attempt,
+                    total_reconnects=self._reconnect_count,
+                )
+                return  # Success
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.warning(
+                    "Google Live reconnect attempt failed",
+                    call_id=call_id,
+                    attempt=attempt,
+                    exc_info=True,
+                )
+                backoff = min(4.0, backoff * 2)
+
+        # Exhausted all reconnect attempts — signal disconnect to engine
+        logger.error(
+            "Google Live reconnection exhausted all attempts",
+            call_id=call_id,
+            total_attempts=self._reconnect_count,
+        )
+        try:
+            await self._emit_provider_disconnected(code=1008, reason="Reconnect attempts exhausted")
+        except Exception:
+            pass
+
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive messages."""
         try:
@@ -2190,6 +2298,11 @@ class GoogleLiveProvider(AIProviderInterface):
                                  call_id=self._call_id, exc_info=True)
 
             # Cancel background tasks
+            if self._reconnect_task and not self._reconnect_task.done():
+                self._reconnect_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._reconnect_task
+
             if self._receive_task and not self._receive_task.done():
                 self._receive_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
