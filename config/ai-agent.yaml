@@ -191,9 +191,9 @@ providers:
     llm_temperature: 0.4
     llm_top_k: 20
     llm_top_p: 0.9
-    # Google Live: prefer tool-driven hangup. Marker-driven cleanup_after_tts can cause premature teardown
-    # during transcript/email capture flows.
-    hangup_markers_enabled: false
+    # Google Live: marker-driven hangup detects farewell patterns and hangs up automatically.
+    # Preferred over tool-driven hangup which triggers Google 1008 disconnects with native audio models.
+    hangup_markers_enabled: true
     # Google Live: disable WebSocket keepalive by default. We saw 1008 disconnects correlated with ping/keepalive
     # behavior; opt-in if needed once verified for your account/model.
     ws_keepalive_enabled: false
