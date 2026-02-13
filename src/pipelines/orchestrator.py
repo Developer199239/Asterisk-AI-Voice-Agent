@@ -904,7 +904,11 @@ class PipelineOrchestrator:
                 if not isinstance(cfg, dict):
                     continue
                 cfg_type = str(cfg.get("type", "")).lower()
-                if cfg_type == "elevenlabs_agent":
+                if cfg_type in ("elevenlabs_agent", "full"):
+                    continue
+                # Also skip providers with all three capabilities (full agents)
+                cfg_caps = cfg.get("capabilities", [])
+                if isinstance(cfg_caps, list) and "stt" in cfg_caps and "llm" in cfg_caps and "tts" in cfg_caps:
                     continue
                 if lower.startswith("elevenlabs_") or cfg_type == "elevenlabs":
                     raw_config = cfg
