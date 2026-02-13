@@ -916,6 +916,27 @@ pipelines:
           sample_rate: 8000
     stt: local_stt
     tts: local_tts
+  # Local STT + OpenAI LLM + ElevenLabs TTS (premium voice quality)
+  # Requires: ELEVENLABS_API_KEY + OPENAI_API_KEY in .env
+  hybrid_elevenlabs:
+    stt: local_stt
+    llm: openai_llm
+    tts: elevenlabs_tts
+    options:
+      stt:
+        chunk_ms: 160
+        mode: stt
+        streaming: true
+        stream_format: pcm16_16k
+      llm:
+        base_url: https://api.openai.com/v1
+        model: gpt-4o-mini
+        temperature: 0.7
+        max_tokens: 200
+      tts:
+        format:
+          encoding: mulaw
+          sample_rate: 8000
 profiles:
   default: telephony_ulaw_8k
   openai_realtime_24k:
@@ -1214,6 +1235,21 @@ providers:
     continuous_input: true
     input_gain_target_rms: 0
     input_gain_max_db: 0
+  # ElevenLabs TTS - Modular pipeline adapter for STT→LLM→TTS pipelines
+  # Use with pipelines (e.g., local_stt + openai_llm + elevenlabs_tts)
+  # Requires ELEVENLABS_API_KEY in .env
+  elevenlabs_tts:
+    type: elevenlabs
+    enabled: true
+    capabilities:
+      - tts
+    voice_id: "21m00Tcm4TlvDq8ikWAM"   # Rachel (warm, professional)
+    model_id: "eleven_turbo_v2_5"        # Fast, high-quality
+    output_format: "ulaw_8000"           # Telephony-optimized
+    stability: 0.5
+    similarity_boost: 0.75
+    style: 0.0
+    use_speaker_boost: true
   openai_stt:
     enabled: false
     capabilities:
