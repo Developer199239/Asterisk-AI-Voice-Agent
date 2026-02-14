@@ -234,15 +234,21 @@ class TelnyxLLMAdapter(LLMComponent):
         headers = _make_http_headers(str(api_key))
 
         try:
-            await self._ensure_session()
-            assert self._session
-            async with self._session.get(endpoint, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as resp:
-                if resp.status in (401, 403):
-                    return {"healthy": False, "error": f"Auth failed (HTTP {resp.status})", "details": {"endpoint": endpoint}}
-                if resp.status >= 400:
-                    body = await resp.text()
-                    return {"healthy": False, "error": f"API error: HTTP {resp.status}", "details": {"endpoint": endpoint, "body_preview": body[:200]}}
-                return {"healthy": True, "error": None, "details": {"endpoint": endpoint, "protocol": "https"}}
+            # Connectivity validation is called during pipeline validation and may run
+            # on short-lived adapter instances. Use a one-off session to avoid
+            # "Unclosed client session" warnings at startup.
+            async with aiohttp.ClientSession() as session:
+                async with session.get(endpoint, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as resp:
+                    if resp.status in (401, 403):
+                        return {"healthy": False, "error": f"Auth failed (HTTP {resp.status})", "details": {"endpoint": endpoint}}
+                    if resp.status >= 400:
+                        body = await resp.text()
+                        return {
+                            "healthy": False,
+                            "error": f"API error: HTTP {resp.status}",
+                            "details": {"endpoint": endpoint, "body_preview": body[:200]},
+                        }
+                    return {"healthy": True, "error": None, "details": {"endpoint": endpoint, "protocol": "https"}}
         except Exception as exc:
             logger.debug("Telnyx connectivity validation failed", error=str(exc), exc_info=True)
             return {"healthy": False, "error": "Connection failed (see logs)", "details": {"endpoint": endpoint}}
