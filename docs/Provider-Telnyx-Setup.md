@@ -60,9 +60,9 @@ providers:
     chat_base_url: "https://api.telnyx.com/v2/ai"
     # Telnyx-hosted default model (works with TELNYX_API_KEY only)
     # Recommended for tool calling (auto tool choice supported)
-    chat_model: "Qwen/Qwen3-235B-A22B"
-    temperature: 0.7
-    response_timeout_sec: 5.0
+	    chat_model: "Qwen/Qwen3-235B-A22B"
+	    temperature: 0.7
+	    response_timeout_sec: 30.0
 
 pipelines:
   # Use Telnyx for LLM with local STT/TTS

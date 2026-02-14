@@ -9,6 +9,7 @@ This adapter is intentionally separate from OpenAI's adapter to:
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
@@ -21,6 +22,40 @@ from ..tools.registry import tool_registry
 from .base import LLMComponent, LLMResponse
 
 logger = get_logger(__name__)
+
+
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>\s*", flags=re.IGNORECASE | re.DOTALL)
+
+
+def _strip_thinking(content: str) -> str:
+    """
+    Some Telnyx-hosted models (notably Qwen) may include chain-of-thought in `<think>...</think>`.
+    We never want to speak that verbatim on a phone call.
+    """
+    text = (content or "").strip()
+    if not text:
+        return ""
+
+    # Remove explicit <think> blocks when present.
+    stripped = _THINK_TAG_RE.sub("", text).strip()
+    if stripped != text:
+        return stripped
+
+    # If the model starts with a <think> tag but never closes it, drop the first block.
+    if re.match(r"^\s*<think>\b", text, flags=re.IGNORECASE):
+        without_tag = re.sub(r"^\s*<think>\b", "", text, flags=re.IGNORECASE).lstrip()
+        parts = re.split(r"\n\s*\n", without_tag, maxsplit=1)
+        if len(parts) == 2:
+            return parts[1].strip()
+
+        # Fallback: look for "Answer:" / "Final:" markers.
+        m = re.search(r"\n\s*(final|answer)\s*[:：]\s*", without_tag, flags=re.IGNORECASE)
+        if m:
+            return without_tag[m.end() :].strip()
+
+        return without_tag.strip()
+
+    return text
 
 
 def _url_host(url: str) -> str:
@@ -392,7 +427,7 @@ class TelnyxLLMAdapter(LLMComponent):
                     return ""
 
                 message = choices[0].get("message") or {}
-                content = message.get("content", "")
+                content = _strip_thinking(str(message.get("content", "") or ""))
                 tool_calls = message.get("tool_calls") or []
 
                 if tool_calls:

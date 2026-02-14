@@ -217,7 +217,8 @@ class TelnyxLLMProviderConfig(BaseModel):
 
     temperature: float = Field(default=0.7)
     max_tokens: Optional[int] = None
-    response_timeout_sec: float = Field(default=5.0)
+    # Telnyx-hosted models can be slower than OpenAI; keep a more forgiving default.
+    response_timeout_sec: float = Field(default=30.0)
 
 
 class GoogleProviderConfig(BaseModel):

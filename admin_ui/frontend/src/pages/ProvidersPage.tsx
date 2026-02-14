@@ -234,7 +234,7 @@ const ProvidersPage: React.FC = () => {
                 api_key: '${TELNYX_API_KEY}',
                 chat_model: 'Qwen/Qwen3-235B-A22B',
                 temperature: 0.7,
-                response_timeout_sec: 5.0,
+                response_timeout_sec: 30.0,
             }
         };
 
@@ -462,7 +462,7 @@ const ProvidersPage: React.FC = () => {
                 if (!providerData.chat_base_url) providerData.chat_base_url = 'https://api.telnyx.com/v2/ai';
                 if (!providerData.chat_model) providerData.chat_model = 'Qwen/Qwen3-235B-A22B';
                 if (providerData.temperature === undefined || providerData.temperature === null) providerData.temperature = 0.7;
-                if (!providerData.response_timeout_sec) providerData.response_timeout_sec = 5.0;
+                if (!providerData.response_timeout_sec) providerData.response_timeout_sec = 30.0;
             }
         } catch {
             // Non-blocking defaults

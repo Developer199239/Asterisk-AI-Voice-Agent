@@ -129,8 +129,8 @@ const TelnyxProviderForm: React.FC<TelnyxProviderFormProps> = ({ config, onChang
                             step="0.5"
                             min="0.5"
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.response_timeout_sec ?? 5.0}
-                            onChange={(e) => handleChange('response_timeout_sec', parseFloat(e.target.value || '5'))}
+                            value={config.response_timeout_sec ?? 30.0}
+                            onChange={(e) => handleChange('response_timeout_sec', parseFloat(e.target.value || '30'))}
                         />
                     </div>
                 </div>
