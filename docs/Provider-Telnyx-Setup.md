@@ -108,7 +108,7 @@ pipelines:
         # Change base_url to Telnyx
         base_url: "https://api.telnyx.com/v2/ai"
         # IMPORTANT: Use a Telnyx model ID from /models (namespaced)
-        model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        model: "Qwen/Qwen3-235B-A22B"
         temperature: 0.7
         max_tokens: 150
 ```

@@ -232,7 +232,7 @@ const ProvidersPage: React.FC = () => {
                 capabilities: ['llm'],
                 chat_base_url: 'https://api.telnyx.com/v2/ai',
                 api_key: '${TELNYX_API_KEY}',
-                chat_model: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+                chat_model: 'Qwen/Qwen3-235B-A22B',
                 temperature: 0.7,
                 response_timeout_sec: 5.0,
             }

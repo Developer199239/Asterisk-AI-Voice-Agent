@@ -212,7 +212,8 @@ class TelnyxLLMProviderConfig(BaseModel):
     api_key_ref: Optional[str] = None
 
     chat_base_url: str = Field(default="https://api.telnyx.com/v2/ai")
-    chat_model: str = Field(default="meta-llama/Meta-Llama-3.1-8B-Instruct")
+    # Default to a model that supports tool calling reliably on Telnyx.
+    chat_model: str = Field(default="Qwen/Qwen3-235B-A22B")
 
     temperature: float = Field(default=0.7)
     max_tokens: Optional[int] = None
