@@ -7,7 +7,7 @@ using Pydantic v2 for validation and type safety.
 
 import os
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Dict, Any, Optional, List
 import structlog
 
@@ -194,6 +194,31 @@ class OpenAIProviderConfig(BaseModel):
     response_timeout_sec: float = Field(default=5.0)
     # Provider-specific farewell hangup delay (overrides global)
     farewell_hangup_delay_sec: Optional[float] = None
+
+
+class TelnyxLLMProviderConfig(BaseModel):
+    """
+    Canonical defaults for the Telnyx AI Inference LLM adapter.
+
+    Notes:
+    - Telnyx-hosted models (e.g. meta-llama/*) work with TELNYX_API_KEY only.
+    - External models (e.g. openai/*) require an Integration Secret identifier
+      passed via `api_key_ref` (see Telnyx docs for "Integration Secrets").
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    api_key: Optional[str] = None
+    api_key_ref: Optional[str] = None
+
+    chat_base_url: str = Field(default="https://api.telnyx.com/v2/ai")
+    # Default to a model that supports tool calling reliably on Telnyx.
+    chat_model: str = Field(default="Qwen/Qwen3-235B-A22B")
+
+    temperature: float = Field(default=0.7)
+    max_tokens: Optional[int] = None
+    # Telnyx-hosted models can be slower than OpenAI; keep a more forgiving default.
+    response_timeout_sec: float = Field(default=30.0)
 
 
 class GoogleProviderConfig(BaseModel):
