@@ -451,6 +451,23 @@ const ProvidersPage: React.FC = () => {
         const existingData = !isNewProvider && editingProvider ? (config.providers?.[editingProvider] || {}) : {};
         const providerData = { ...existingData, ...providerForm, name: finalName, capabilities };
 
+        // Telnyx LLM defaults: ensure the values shown in the form are actually persisted to YAML.
+        // Without this, the form may display placeholders while the YAML remains unset, causing ai_engine
+        // to fall back to its internal defaults (which can differ across releases).
+        try {
+            const providerType = String(providerData.type || '').toLowerCase();
+            const isTelnyx = providerType === 'telnyx' || providerType === 'telenyx' || finalName.includes('telnyx') || finalName.includes('telenyx');
+            const isLLMOnly = Array.isArray(providerData.capabilities) && providerData.capabilities.length === 1 && providerData.capabilities[0] === 'llm';
+            if (isTelnyx && isLLMOnly) {
+                if (!providerData.chat_base_url) providerData.chat_base_url = 'https://api.telnyx.com/v2/ai';
+                if (!providerData.chat_model) providerData.chat_model = 'Qwen/Qwen3-235B-A22B';
+                if (providerData.temperature === undefined || providerData.temperature === null) providerData.temperature = 0.7;
+                if (!providerData.response_timeout_sec) providerData.response_timeout_sec = 5.0;
+            }
+        } catch {
+            // Non-blocking defaults
+        }
+
         if (!isFull && providerData.capabilities.length !== 1) {
             toast.error('Modular providers must have exactly one capability.');
             return;
