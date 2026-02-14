@@ -216,7 +216,7 @@ class UnifiedTransferTool(Tool):
                 "message": message
             }
         
-        dest_config = destinations[destination]
+        dest_config = destinations[destination] or {}
         transfer_type = dest_config.get('type')
         target = dest_config.get('target')
         description = dest_config.get('description', destination)

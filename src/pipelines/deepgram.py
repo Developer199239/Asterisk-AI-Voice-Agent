@@ -85,6 +85,7 @@ class _STTSessionState:
     transcript_queue: Optional[asyncio.Queue] = None
     receiver_task: Optional[asyncio.Task] = None
     active: bool = True
+    resample_state: Optional[tuple] = None
 
 
 class DeepgramSTTAdapter(STTComponent):
@@ -203,8 +204,7 @@ class DeepgramSTTAdapter(STTComponent):
         
         # Resample if needed
         if sample_rate_hz != api_sample_rate:
-            import audioop
-            api_audio, _ = audioop.ratecv(api_audio, 2, 1, sample_rate_hz, api_sample_rate, None)
+            api_audio, session.resample_state = resample_audio(api_audio, sample_rate_hz, api_sample_rate, state=session.resample_state)
             logger.debug(
                 "STT resampled audio",
                 call_id=call_id,

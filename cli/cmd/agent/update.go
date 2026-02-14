@@ -13,8 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/check"
+	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/configmerge"
 	"github.com/spf13/cobra"
 )
 
@@ -34,20 +35,20 @@ const (
 )
 
 var (
-	updateRemote        string
-	updateRef           string
-	updateNoStash       bool
+	updateRemote         string
+	updateRef            string
+	updateNoStash        bool
 	updateStashUntracked bool
-	updateRebuild       string
-	updateForceRecreate bool
-	updateSkipCheck     bool
-	updateSelfUpdate    bool
-	updateIncludeUI     bool
-	updateCheckout      bool
-	updateBackupID      string
-	updatePlan          bool
-	updatePlanJSON      bool
-	gitSafeDirectory    string
+	updateRebuild        string
+	updateForceRecreate  bool
+	updateSkipCheck      bool
+	updateSelfUpdate     bool
+	updateIncludeUI      bool
+	updateCheckout       bool
+	updateBackupID       string
+	updatePlan           bool
+	updatePlanJSON       bool
+	gitSafeDirectory     string
 )
 
 var semverTagRe = regexp.MustCompile(`^(v)?([0-9]+\.[0-9]+\.[0-9]+)$`)
@@ -70,13 +71,16 @@ var updateCmd = &cobra.Command{
 	Long: `Update Asterisk AI Voice Agent to the latest code and apply changes safely.
 
 This command:
-  - Backs up operator-owned config (.env, config/ai-agent.yaml, config/users.json, config/contexts/)
+  - Backs up operator config (.env, config/ai-agent.local.yaml, config/users.json, config/contexts/)
+  - Also snapshots config/ai-agent.yaml for recovery/migration if it was edited locally
   - Safely fast-forwards to origin/main (no forced merges by default)
   - Preserves local tracked changes using git stash (optional)
   - Rebuilds/restarts only the containers impacted by the change set
   - Verifies success by running agent check (optional)
 
 Safety notes:
+  - If you edited config/ai-agent.yaml directly, updates can conflict. This updater automatically migrates
+    those edits into config/ai-agent.local.yaml and resets config/ai-agent.yaml back to upstream defaults.
   - No hard resets are performed.
   - Fast-forward only: if your branch has diverged, the update stops with guidance.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -86,7 +90,7 @@ Safety notes:
 
 func init() {
 	updateCmd.Flags().StringVar(&updateRemote, "remote", "origin", "git remote name")
-	updateCmd.Flags().StringVar(&updateRef, "ref", "main", "git ref to update to (branch like main, or tag like v5.2.4)")
+	updateCmd.Flags().StringVar(&updateRef, "ref", "main", "git ref to update to (branch like main, or tag like v6.2.0)")
 	updateCmd.Flags().BoolVar(&updateNoStash, "no-stash", false, "abort if repo has local changes instead of stashing")
 	updateCmd.Flags().BoolVar(&updateStashUntracked, "stash-untracked", false, "include untracked files when stashing (does not include ignored files)")
 	updateCmd.Flags().StringVar(&updateRebuild, "rebuild", string(rebuildAuto), "rebuild mode: auto|none|all")
@@ -102,12 +106,12 @@ func init() {
 }
 
 type updateContext struct {
-	repoRoot string
-	oldSHA   string
-	newSHA   string
+	repoRoot  string
+	oldSHA    string
+	newSHA    string
 	backupDir string
-	stashed  bool
-	stashRef string
+	stashed   bool
+	stashRef  string
 
 	changedFiles []string
 
@@ -119,32 +123,32 @@ type updateContext struct {
 }
 
 type updatePlanReport struct {
-	RepoRoot         string              `json:"repo_root"`
-	Remote           string              `json:"remote"`
-	Ref              string              `json:"ref"`
-	CurrentBranch    string              `json:"current_branch"`
-	TargetBranch     string              `json:"target_branch"`
-	Checkout         bool                `json:"checkout"`
-	WouldCheckout    bool                `json:"would_checkout"`
-	OldSHA           string              `json:"old_sha"`
-	NewSHA           string              `json:"new_sha"`
-	Relation         string              `json:"relation"` // equal|behind|ahead|diverged
-	CodeChanged      bool                `json:"code_changed"`
-	UpdateAvailable  bool                `json:"update_available"`
-	Dirty            bool                `json:"dirty"`
-	NoStash          bool                `json:"no_stash"`
-	StashUntracked   bool                `json:"stash_untracked"`
-	WouldStash       bool                `json:"would_stash"`
-	WouldAbort       bool                `json:"would_abort"`
-	RebuildMode      string              `json:"rebuild_mode"`
-	ComposeChanged   bool                `json:"compose_changed"`
-	ServicesRebuild  []string            `json:"services_rebuild"`
-	ServicesRestart  []string            `json:"services_restart"`
-	SkippedServices  map[string]string   `json:"skipped_services,omitempty"`
-	ChangedFileCount int                 `json:"changed_file_count"`
-	ChangedFiles     []string            `json:"changed_files,omitempty"`
-	FilesTruncated   bool                `json:"changed_files_truncated,omitempty"`
-	Warnings         []string            `json:"warnings,omitempty"`
+	RepoRoot         string            `json:"repo_root"`
+	Remote           string            `json:"remote"`
+	Ref              string            `json:"ref"`
+	CurrentBranch    string            `json:"current_branch"`
+	TargetBranch     string            `json:"target_branch"`
+	Checkout         bool              `json:"checkout"`
+	WouldCheckout    bool              `json:"would_checkout"`
+	OldSHA           string            `json:"old_sha"`
+	NewSHA           string            `json:"new_sha"`
+	Relation         string            `json:"relation"` // equal|behind|ahead|diverged
+	CodeChanged      bool              `json:"code_changed"`
+	UpdateAvailable  bool              `json:"update_available"`
+	Dirty            bool              `json:"dirty"`
+	NoStash          bool              `json:"no_stash"`
+	StashUntracked   bool              `json:"stash_untracked"`
+	WouldStash       bool              `json:"would_stash"`
+	WouldAbort       bool              `json:"would_abort"`
+	RebuildMode      string            `json:"rebuild_mode"`
+	ComposeChanged   bool              `json:"compose_changed"`
+	ServicesRebuild  []string          `json:"services_rebuild"`
+	ServicesRestart  []string          `json:"services_restart"`
+	SkippedServices  map[string]string `json:"skipped_services,omitempty"`
+	ChangedFileCount int               `json:"changed_file_count"`
+	ChangedFiles     []string          `json:"changed_files,omitempty"`
+	FilesTruncated   bool              `json:"changed_files_truncated,omitempty"`
+	Warnings         []string          `json:"warnings,omitempty"`
 }
 
 func runUpdate() (retErr error) {
@@ -304,6 +308,14 @@ func runUpdate() (retErr error) {
 			printUpdateInfo("Operator config restored from backup — update will continue")
 		}
 	}
+
+	// If the operator edited config/ai-agent.yaml directly (tracked), move those edits into
+	// config/ai-agent.local.yaml so future updates remain conflict-free and new upstream knobs
+	// are inherited by default.
+	if err := migrateBaseConfigEditsToLocal(); err != nil {
+		return err
+	}
+
 	if strings.TrimSpace(ctx.oldSHA) != strings.TrimSpace(ctx.newSHA) {
 		ctx.changedFiles, err = gitDiffNames(ctx.oldSHA, ctx.newSHA)
 		if err != nil {
@@ -1030,9 +1042,10 @@ func recoverFromStashConflict(ctx *updateContext) error {
 		return errors.New("no backup directory available for recovery")
 	}
 
+	// Restore operator-owned files. Do NOT restore config/ai-agent.yaml over the updated upstream base.
+	// If the operator had edits in ai-agent.yaml, we migrate them into ai-agent.local.yaml below.
 	configFiles := []string{
 		".env",
-		filepath.Join("config", "ai-agent.yaml"),
 		filepath.Join("config", "ai-agent.local.yaml"),
 		filepath.Join("config", "users.json"),
 	}
@@ -1060,6 +1073,26 @@ func recoverFromStashConflict(ctx *updateContext) error {
 	}
 
 	ctx.stashed = false
+
+	// Best-effort: if backup included ai-agent.yaml edits, migrate them into ai-agent.local.yaml.
+	// Fall back to restoring the base file only if migration fails due to YAML parse errors.
+	backupBase := filepath.Join(ctx.backupDir, "config", "ai-agent.yaml")
+	if _, err := os.Stat(backupBase); err == nil {
+		if err := migrateBackupBaseConfigEditsToLocal(ctx.oldSHA, backupBase); err != nil {
+			printUpdateInfo("WARN: failed to migrate backed-up ai-agent.yaml edits into ai-agent.local.yaml: %v", err)
+			// Conservative fallback: restore backup ai-agent.yaml so operator config isn't silently lost.
+			// This may reintroduce drift; operators should move overrides into ai-agent.local.yaml.
+			if copyErr := copyFile(backupBase, filepath.Join("config", "ai-agent.yaml")); copyErr == nil {
+				printUpdateInfo("Restored config/ai-agent.yaml (fallback)")
+			} else {
+				printUpdateInfo(
+					"WARN: could not restore backup ai-agent.yaml either: %v (backup still at %s)",
+					copyErr,
+					ctx.backupDir,
+				)
+			}
+		}
+	}
 	return nil
 }
 
@@ -1107,6 +1140,108 @@ func gitFetch(remote string, ref string) error {
 		return fmt.Errorf("git fetch --prune %s %s failed: %w", remote, ref, err)
 	}
 	return nil
+}
+
+func migrateBackupBaseConfigEditsToLocal(oldSHA string, backupBasePath string) error {
+	// Determine what the operator changed in ai-agent.yaml prior to the update, then carry only those
+	// edits forward into ai-agent.local.yaml. This avoids freezing upstream defaults when the base file
+	// changes between releases.
+	baseBefore, err := gitShowYAMLMap(oldSHA, filepath.Join("config", "ai-agent.yaml"))
+	if err != nil {
+		return err
+	}
+	backupBase, err := configmerge.ReadYAMLFile(backupBasePath)
+	if err != nil {
+		return err
+	}
+
+	patch := configmerge.ComputeOverrideNoDeletes(baseBefore, backupBase)
+	localPath := filepath.Join("config", "ai-agent.local.yaml")
+	local := map[string]any{}
+	if _, statErr := os.Stat(localPath); statErr == nil {
+		m, err := configmerge.ReadYAMLFile(localPath)
+		if err != nil {
+			return fmt.Errorf("failed to parse existing %s during migration: %w", localPath, err)
+		}
+		if m != nil {
+			local = m
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to stat %s: %w", localPath, statErr)
+	}
+
+	mergedLocal := configmerge.DeepMerge(local, patch)
+	if err := configmerge.WriteYAMLFileAtomic(localPath, mergedLocal); err != nil {
+		return err
+	}
+	// Ensure base file is reset to upstream version.
+	if _, err := runGitCmd("checkout", "--", filepath.Join("config", "ai-agent.yaml")); err != nil {
+		return fmt.Errorf("failed to reset %s to upstream: %w", filepath.Join("config", "ai-agent.yaml"), err)
+	}
+	return nil
+}
+
+func migrateBaseConfigEditsToLocal() error {
+	baseRel := filepath.Join("config", "ai-agent.yaml")
+	modified, err := gitFileModified(baseRel)
+	if err != nil {
+		return err
+	}
+	if !modified {
+		return nil
+	}
+
+	printUpdateStep("Migrating operator config into ai-agent.local.yaml")
+
+	baseClean, err := gitShowYAMLMap("HEAD", baseRel)
+	if err != nil {
+		return err
+	}
+
+	baseWorking, err := configmerge.ReadYAMLFile(baseRel)
+	if err != nil {
+		return err
+	}
+	patch := configmerge.ComputeOverrideNoDeletes(baseClean, baseWorking)
+	localRel := filepath.Join("config", "ai-agent.local.yaml")
+	localExisting := map[string]any{}
+	if _, statErr := os.Stat(localRel); statErr == nil {
+		m, err := configmerge.ReadYAMLFile(localRel)
+		if err != nil {
+			return fmt.Errorf("failed to parse existing %s during migration: %w", localRel, err)
+		}
+		if m != nil {
+			localExisting = m
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to stat %s: %w", localRel, statErr)
+	}
+	localNew := configmerge.DeepMerge(localExisting, patch)
+	if err := configmerge.WriteYAMLFileAtomic(localRel, localNew); err != nil {
+		return err
+	}
+	if _, err := runGitCmd("checkout", "--", baseRel); err != nil {
+		return fmt.Errorf("failed to reset %s to upstream: %w", baseRel, err)
+	}
+	printUpdateInfo("Moved local edits from %s into %s", baseRel, localRel)
+	return nil
+}
+
+func gitFileModified(path string) (bool, error) {
+	// Use status porcelain so we detect staged-only changes too.
+	out, err := runGitCmd("status", "--porcelain", "--", path)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+func gitShowYAMLMap(ref string, relPath string) (map[string]any, error) {
+	out, err := runGitCmd("show", fmt.Sprintf("%s:%s", ref, filepath.ToSlash(relPath)))
+	if err != nil {
+		return nil, err
+	}
+	return configmerge.ParseYAML([]byte(out))
 }
 
 func gitFetchTags(remote string) error {

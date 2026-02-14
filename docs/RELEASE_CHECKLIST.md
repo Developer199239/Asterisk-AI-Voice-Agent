@@ -27,7 +27,7 @@ Run at least one successful call for each baseline you intend to claim as suppor
 - Provider + transport
 - Config snippet (redacted)
 - Any warnings in logs
-- Matrix row in `docs/baselines/golden/v6.1.1-validation-matrix.md`
+- Matrix row in `docs/baselines/golden/v6.2.0-validation-matrix.md`
 
 ### Providers (AudioSocket)
 
@@ -48,3 +48,12 @@ Run at least one successful call for each baseline you intend to claim as suppor
 - Update `CHANGELOG.md`
 - Ensure `docs/baselines/golden/` matches current known-good behavior
 - Update `docs/SUPPORTED_PLATFORMS.md` if new Tier-2 platforms were verified
+
+## Documentation Checklist
+
+- [ ] Version references in `docs/INSTALLATION.md` updated to new version
+- [ ] `SECURITY.md` supported versions table reflects current release series
+- [ ] `docs/ROADMAP.md` "What's Next" section reflects current state
+- [ ] `docs/README.md` links verified (no broken links to renamed/deleted files)
+- [ ] `docs/contributing/README.md` "Current Version" updated
+- [ ] `README.md` version badge updated

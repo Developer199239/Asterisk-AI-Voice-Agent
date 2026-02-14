@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-6.1.1-blue.svg)
+![Version](https://img.shields.io/badge/version-6.2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -12,7 +12,7 @@
 
 The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Demo](#-demo) • [Docs](docs/README.md) • [Community](#-community)
+[Quick Start](#-quick-start) • [Features](#-features) • [Roadmap](docs/ROADMAP.md) • [Demo](#-demo) • [Docs](docs/README.md) • [Community](#-community)
 
 </div>
 
@@ -110,7 +110,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.1.1.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.2.0.
 
 ### Option B: Manual Setup
 ```bash
@@ -153,33 +153,48 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v6.1.1
+## 🎉 What's New in v6.2.0
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### OpenAI Realtime GA API (v6.1.1)
-- Full Beta-to-GA migration with `api_version` toggle, nested audio schema, MIME format types
-- New `project_id` field for OpenAI project tracking
-- 10 voices with gender labels (alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse)
+### 🔊 Audio Quality Fix (v6.2.0)
+- Replaced legacy `audioop.ratecv` with NumPy linear interpolation resampler at all 19 call sites
+- Eliminates audio crackling artifacts that affected some deployments
+- Community contribution by [@turgutguvercin](https://github.com/turgutguvercin) (PR [#204](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/204))
 
-### Email System Overhaul (v6.1.1)
-- SMTP support alongside Resend with auto-detection
-- HTML template editor with per-context overrides, subject prefix, call outcome variables
-- Template autoescaping for security
+### 🤖 Google Live Provider Hardening (v6.2.0)
+- Support for Google's **native audio latest** model (`gemini-2.5-flash-native-audio-latest`) — true audio-native understanding, not just transcription
+- VAD tuning via `realtimeInputConfig` for reliable short utterance detection
+- TTS gating prevents echo-induced delays on AudioSocket transport
+- Farewell/hangup race condition fixes — eliminates duplicate farewells and premature hangups
+- Keepalive expert knobs and smoother config updates
+- Provider input gain normalization for consistent audio levels
 
-### 🖥️ Admin UI Modernization (v6.1.1)
-- Live System Topology with clickable navigation to settings pages
-- Modern confirm dialogs, toast notifications, tab-based EnvPage, Help section
-- Models page redesign with active model cards during calls
+### � Call Termination Hardening (v6.2.0)
+- 13 fixes across all providers, engine, and AudioSocket for reliable call endings
+- Prevents verbal farewell before `hangup_call` tool invocation
+- Pipeline tool calls now recorded in session for Call History visibility
 
-### 🌐 NAT & GPU Support (v6.1.1)
-- `AUDIOSOCKET_ADVERTISE_HOST` / `EXTERNAL_MEDIA_ADVERTISE_HOST` for split-horizon deployments
-- GPU acceleration via `docker-compose.gpu.yml` overlay with CUDA support
+### 🩺 Agent CLI: `check --fix` (v6.2.0)
+- New `agent check --fix` auto-repairs common configuration issues
+- Ships minimal production baseline config for recovery scenarios
+- Hardened restore logic to avoid partial writes
 
-### 🔧 Google Live Improvements (v6.1.1)
-- Hangup fallback watchdog with tunable timeouts
-- Model normalization hardening and `toolConfig` support
+### 🖥️ Admin UI Improvements (v6.2.0)
+- Read-only **Tool Catalog** page showing all available built-in and MCP tools
+- Google Live VAD tuning exposed as advanced settings
+- Hangup fallback tuning tooltips
+
+### 🌐 Telnyx AI Inference LLM (v6.2.0)
+- New modular `telnyx_llm` pipeline provider — OpenAI-compatible Chat Completions via Telnyx AI Inference
+- Access to 53+ models (GPT-4o, Claude, Llama, Mistral) through a single `TELNYX_API_KEY`
+- Golden baseline config, Admin UI integration, and setup guide included
+- Community contribution by Abhishek @ Telnyx ([PR #219](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/219))
+
+### �️ Preflight & Security (v6.2.0)
+- `preflight.sh --force` flag to bypass unsupported OS check
+- CodeQL SSRF fix for Google API key handling
 
 For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -187,6 +202,11 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 <details>
 <summary><b>Previous Versions</b></summary>
+
+#### v6.1.1 - Operator Config & Live Agent Transfer
+- Operator config overrides (`ai-agent.local.yaml`), live agent transfer tool
+- ViciDial compatibility, Asterisk config discovery in Admin UI
+- OpenAI Realtime GA API, Email system overhaul, NAT/GPU support
 
 #### v5.3.1 - Phase Tools & Stability
 - Pre-call HTTP lookups, in-call HTTP tools, and post-call webhooks (Milestone 24)
@@ -241,7 +261,7 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 ## ✨ Features
 
-### 5 Golden Baseline Configurations
+### 6 Golden Baseline Configurations
 
 1. **OpenAI Realtime** (Recommended for Quick Start)
    - Modern cloud AI with natural conversations (<2s response).
@@ -267,6 +287,12 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
    - Local STT/TTS + Cloud LLM (OpenAI). Audio stays on-premises.
    - Config: `config/ai-agent.golden-local-hybrid.yaml`
    - *Best for: Audio privacy, cost control, compliance.*
+
+6. **Telnyx AI Inference** (Cost-Effective Multi-Model)
+   - Local STT/TTS + Telnyx LLM with 53+ models (GPT-4o, Claude, Llama).
+   - OpenAI-compatible API with competitive pricing.
+   - Config: `config/ai-agent.golden-telnyx.yaml`
+   - *Best for: Model flexibility, cost optimization, multi-provider access.*
 
 ### Fully Local (Optional)
 
@@ -545,20 +571,63 @@ The `preflight.sh` script handles initial setup:
 - **[Local Profiles](docs/LOCAL_PROFILES.md)**
 - **[Monitoring Guide](docs/MONITORING_GUIDE.md)**
 
-### Development
+### Development & Community
+- **[Roadmap](docs/ROADMAP.md)** - What's next, planned milestones, and how to get involved
 - **[Developer Documentation](docs/contributing/README.md)**
 - **[Architecture Deep Dive](docs/contributing/architecture-deep-dive.md)**
 - **[Contributing Guide](CONTRIBUTING.md)**
+- **[Milestone History](docs/MILESTONE_HISTORY.md)** - Completed milestones 1-24
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md).
+**You don't need to know how to code.** Our AI assistant AVA writes the code for you — just describe what you want to build.
+
+<!-- TODO: Add YouTube video link once recorded -->
+<!-- **Watch the 5-minute walkthrough:** [YouTube Video](https://youtube.com/...) -->
+
+### 🚀 Get Started in 3 Steps
+
+```bash
+git clone -b develop https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
+./scripts/setup-contributor.sh
+```
+
+Then open in [Windsurf](https://codeium.com/windsurf) and type: **"I want to contribute"**
+
+### 📖 Guides
+
+| Guide | For |
+|-------|-----|
+| **[Operator Contributor Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE.md)** | First-time contributors (no GitHub experience needed) |
+| **[Contributing Guide](CONTRIBUTING.md)** | Full contribution guidelines and workflow |
+| **[Coding Guidelines](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/CODING_GUIDELINES.md)** | Code standards for all contributions |
+| **[Roadmap](docs/ROADMAP.md)** | What to work on next (13+ beginner-friendly tasks) |
+
+### 🔧 Build Something New
+
+| Area | Guide | Template |
+|------|-------|----------|
+| Full Agent Provider | [Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/adding-full-agent-provider.md) | [Template](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/examples/providers/template_full_agent.py) |
+| Pipeline Adapter (STT/LLM/TTS) | [Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/adding-pipeline-adapter.md) | [Templates](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/tree/develop/examples/pipelines/) |
+| Pre-Call Hook | [Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/pre-call-hooks-development.md) | [Template](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/examples/hooks/template_pre_call_hook.py) |
+| In-Call Hook | [Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/in-call-hooks-development.md) | [Template](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/examples/hooks/template_in_call_hook.py) |
+| Post-Call Hook | [Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/post-call-hooks-development.md) | [Template](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/examples/hooks/template_post_call_hook.py) |
 
 ### 👩‍💻 For Developers
-- [Developer Quickstart](docs/contributing/quickstart.md)
-- [Developer Documentation](docs/contributing/README.md)
+- [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md) - Project overview and first tasks
+- [Developer Quickstart](docs/contributing/quickstart.md) - Set up your dev environment
+- [Developer Documentation](docs/contributing/README.md) - Full contributor docs
+
+### Contributors
+
+<a href="https://github.com/hkjarral/Asterisk-AI-Voice-Agent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=hkjarral/Asterisk-AI-Voice-Agent" />
+</a>
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list and [Recognition Program](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/RECOGNITION.md) for how we recognize contributions.
 
 ---
 
