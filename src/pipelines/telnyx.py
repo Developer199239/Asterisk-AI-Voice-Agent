@@ -374,7 +374,8 @@ class TelnyxLLMAdapter(LLMComponent):
         retries = 1
         tools_stripped = False
         for attempt in range(retries + 1):
-            async with self._session.post(url, json=payload, headers=headers, timeout=merged["timeout_sec"]) as response:
+            timeout = aiohttp.ClientTimeout(total=float(merged["timeout_sec"]))
+            async with self._session.post(url, json=payload, headers=headers, timeout=timeout) as response:
                 body = await response.text()
                 if response.status >= 400:
                     err_code = None
