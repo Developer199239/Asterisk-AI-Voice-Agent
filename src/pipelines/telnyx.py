@@ -336,10 +336,28 @@ class TelnyxLLMAdapter(LLMComponent):
             async with self._session.post(url, json=payload, headers=headers, timeout=merged["timeout_sec"]) as response:
                 body = await response.text()
                 if response.status >= 400:
+                    err_code = None
+                    err_title = None
+                    err_detail = None
+                    try:
+                        parsed = json.loads(body)
+                        if isinstance(parsed, dict):
+                            errors = parsed.get("errors") or []
+                            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                                err_code = errors[0].get("code")
+                                err_title = errors[0].get("title")
+                                err_detail = errors[0].get("detail")
+                    except Exception:
+                        pass
                     logger.error(
                         "Telnyx chat completion failed",
                         call_id=call_id,
                         status=response.status,
+                        model=payload.get("model"),
+                        tools_count=len(payload.get("tools", [])),
+                        error_code=err_code,
+                        error_title=err_title,
+                        error_detail=(str(err_detail)[:200] if err_detail else None),
                         body_preview=body[:128],
                     )
                     if (
@@ -352,6 +370,7 @@ class TelnyxLLMAdapter(LLMComponent):
                         payload = dict(payload)
                         payload.pop("tools", None)
                         payload.pop("tool_choice", None)
+                        # max_tokens may have been stripped earlier; keep payload minimal on retry.
                         logger.warning(
                             "Tool calling failed; retrying chat completion without tools",
                             call_id=call_id,
