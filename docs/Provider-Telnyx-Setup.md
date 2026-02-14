@@ -59,7 +59,8 @@ providers:
     capabilities: [llm]
     chat_base_url: "https://api.telnyx.com/v2/ai"
     # Telnyx-hosted default model (works with TELNYX_API_KEY only)
-    chat_model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    # Recommended for tool calling (auto tool choice supported)
+    chat_model: "Qwen/Qwen3-235B-A22B"
     temperature: 0.7
     response_timeout_sec: 5.0
 
@@ -73,7 +74,8 @@ pipelines:
       llm:
         # Telnyx-hosted models like meta-llama/* work with TELNYX_API_KEY only.
         # External models like openai/* require telnyx_llm.api_key_ref (Integration Secret identifier).
-        model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        # Recommended for tool calling (auto tool choice supported)
+        model: "Qwen/Qwen3-235B-A22B"
         temperature: 0.7
         max_tokens: 150
       stt:
@@ -117,9 +119,9 @@ Telnyx AI Inference supports many model IDs. Popular Telnyx-hosted options:
 
 | Model | Description | Best For |
 |-------|-------------|----------|
-| `meta-llama/Meta-Llama-3.1-8B-Instruct` | Strong general-purpose open model | Low-latency, cost-sensitive calls |
+| `Qwen/Qwen3-235B-A22B` | Excellent function calling | Tool-heavy voice workflows |
+| `meta-llama/Meta-Llama-3.1-8B-Instruct` | General-purpose open model | Low-latency, cost-sensitive calls (may vary by account/region) |
 | `meta-llama/Meta-Llama-3.1-70B-Instruct` | Higher-quality open model | Higher quality, more complex tasks |
-| `Qwen/Qwen3-235B-A22B` | Excellent function-calling | Tool-heavy workflows |
 
 Check available models:
 ```bash

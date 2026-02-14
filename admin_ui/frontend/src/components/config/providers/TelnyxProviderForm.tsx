@@ -70,9 +70,9 @@ const TelnyxProviderForm: React.FC<TelnyxProviderFormProps> = ({ config, onChang
                         <input
                             type="text"
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.chat_model || 'meta-llama/Meta-Llama-3.1-8B-Instruct'}
+                            value={config.chat_model || 'Qwen/Qwen3-235B-A22B'}
                             onChange={(e) => handleChange('chat_model', e.target.value)}
-                            placeholder="meta-llama/Meta-Llama-3.1-8B-Instruct"
+                            placeholder="Qwen/Qwen3-235B-A22B"
                         />
                         <p className="text-xs text-muted-foreground">
                             Telnyx-hosted models like <code>meta-llama/*</code> work with only <code>TELNYX_API_KEY</code>. External models
@@ -135,4 +135,3 @@ const TelnyxProviderForm: React.FC<TelnyxProviderFormProps> = ({ config, onChang
 };
 
 export default TelnyxProviderForm;
-

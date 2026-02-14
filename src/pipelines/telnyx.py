@@ -306,6 +306,16 @@ class TelnyxLLMAdapter(LLMComponent):
         if tool_schemas:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
+            # Telnyx currently rejects requests that combine function tools with max_tokens.
+            # We keep max_tokens for non-tool requests, but strip it when tools are present.
+            if payload.get("max_tokens") is not None:
+                removed = payload.pop("max_tokens", None)
+                logger.debug(
+                    "Stripped max_tokens for Telnyx tool calling compatibility",
+                    call_id=call_id,
+                    model=payload.get("model"),
+                    removed_max_tokens=removed,
+                )
 
         base_url = str(merged.get("chat_base_url") or self.DEFAULT_CHAT_BASE_URL).rstrip("/")
         url = f"{base_url}/chat/completions"
