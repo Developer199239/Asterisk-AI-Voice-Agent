@@ -9,6 +9,10 @@ Thanks to all the people who have contributed to the Asterisk AI Voice Agent!
 | Avatar | Name | Contributions |
 |--------|------|---------------|
 | <img src="https://github.com/hkjarral.png" width="50" alt="hkjarral"> | **[hkjarral](https://github.com/hkjarral)** | Code, Docs, Architecture, Maintenance |
+| <img src="https://github.com/a692570.png" width="50" alt="a692570"> | **[Abhishek (a692570)](https://github.com/a692570)** | Code — Telnyx AI Inference LLM Provider |
+| <img src="https://github.com/turgutguvercin.png" width="50" alt="turgutguvercin"> | **[turgutguvercin](https://github.com/turgutguvercin)** | Code — NumPy Audio Resampler |
+| <img src="https://github.com/Scarjit.png" width="50" alt="Scarjit"> | **[Scarjit](https://github.com/Scarjit)** | Code |
+| <img src="https://github.com/egorky.png" width="50" alt="egorky"> | **[egorky](https://github.com/egorky)** | Bug Fix — OpenAI Realtime modalities |
 
 <!-- markdownlint-restore -->
 <!-- prettier-ignore-end -->
