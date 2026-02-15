@@ -379,6 +379,45 @@ detect_os() {
         log_ok "Architecture: $ARCH"
     fi
     
+    # Check CPU compatibility for NumPy 2.x (requires SSE4.1/SSE4.2 aka X86_V2)
+    # NumPy 2.x requires these instructions; older KVM/QEMU VMs may lack them
+    if [ -f /proc/cpuinfo ]; then
+        if ! grep -qE 'sse4_1|sse4_2' /proc/cpuinfo 2>/dev/null; then
+            log_warn "CPU lacks SSE4.1/SSE4.2 (X86_V2) - NumPy 2.x incompatible"
+            log_info "  Your CPU does not support instructions required by NumPy 2.x"
+            log_info "  This commonly occurs on older KVM/QEMU VMs or pre-2013 CPUs"
+            
+            # Check if requirements.txt already has the fix
+            local needs_fix=false
+            if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
+                if ! grep -q 'numpy.*<2.0' "$SCRIPT_DIR/requirements.txt" 2>/dev/null; then
+                    needs_fix=true
+                fi
+            fi
+            
+            if [ "$needs_fix" = true ]; then
+                if [ "$APPLY_FIXES" = true ]; then
+                    log_info "  Applying fix: pinning numpy<2.0 in requirements files..."
+                    sed -i 's/numpy>=1.24.0/numpy>=1.24.0,<2.0/g' "$SCRIPT_DIR/requirements.txt" 2>/dev/null || true
+                    if [ -f "$SCRIPT_DIR/admin_ui/backend/requirements.txt" ]; then
+                        sed -i 's/numpy>=1.24.0/numpy>=1.24.0,<2.0/g' "$SCRIPT_DIR/admin_ui/backend/requirements.txt" 2>/dev/null || true
+                    fi
+                    log_ok "NumPy pinned to <2.0 for CPU compatibility"
+                    log_info "  Rebuild containers: docker compose build --no-cache ai_engine admin_ui"
+                else
+                    log_info "  Fix: Run with --apply-fixes to auto-pin numpy<2.0"
+                    log_info "  Or manually edit requirements.txt: numpy>=1.24.0,<2.0"
+                    FIX_CMDS+=("sed -i 's/numpy>=1.24.0/numpy>=1.24.0,<2.0/g' requirements.txt")
+                fi
+            else
+                log_ok "NumPy already pinned to <2.0 for CPU compatibility"
+            fi
+            log_info "  Docs: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md#troubleshooting"
+        else
+            log_ok "CPU supports SSE4.1/SSE4.2 (NumPy 2.x compatible)"
+        fi
+    fi
+    
     # Check for unsupported OS family with helpful instructions
     if [ "$OS_FAMILY" = "unknown" ]; then
         if [ "$FORCE_MODE" = true ]; then
