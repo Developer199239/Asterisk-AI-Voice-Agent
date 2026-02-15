@@ -38,6 +38,7 @@ interface TopologyState {
   asteriskChannels: number;  // Pre-stasis + in-stasis calls (for Asterisk PBX indicator)
   localAIStatus: 'connected' | 'error' | 'unknown';
   localAIModels: LocalAIModels | null;
+  providerHealth: Record<string, { ready: boolean; reason?: string }>;  // From health endpoint
   configuredProviders: ProviderConfig[];
   configuredPipelines: PipelineConfig[];
   defaultProvider: string | null;
@@ -69,6 +70,7 @@ export const SystemTopology = () => {
     asteriskChannels: 0,
     localAIStatus: 'unknown',
     localAIModels: null,
+    providerHealth: {},
     configuredProviders: [],
     configuredPipelines: [],
     defaultProvider: null,
@@ -91,6 +93,7 @@ export const SystemTopology = () => {
           asteriskChannels: aiEngineDetails.asterisk_channels ?? 0,
           localAIStatus: res.data.local_ai_server?.status === 'connected' ? 'connected' : 'error',
           localAIModels: res.data.local_ai_server?.details?.models || null,
+          providerHealth: aiEngineDetails.providers || {},
         }));
       } catch {
         setState(prev => ({
@@ -123,8 +126,8 @@ export const SystemTopology = () => {
               const cfg = config as any;
               // Check if enabled - defaults to true if not specified
               const enabled = cfg?.enabled !== false;
-              // Provider is ready if AI Engine is connected (we'll refine this with actual provider health later)
-              const ready = true; // Will be updated from health check
+              // Provider ready status comes from health check, default to false if not found
+              const ready = false; // Will be updated from health endpoint data
               providers.push({
                 name,
                 displayName: PROVIDER_DISPLAY_NAMES[name] || name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
@@ -149,13 +152,20 @@ export const SystemTopology = () => {
           }
         }
 
-        setState(prev => ({
-          ...prev,
-          configuredProviders: providers,
-          configuredPipelines: pipelines,
-          defaultProvider: parsed?.default_provider || null,
-          activePipeline: parsed?.active_pipeline || null,
-        }));
+        setState(prev => {
+          // Merge provider config with health status
+          const mergedProviders = providers.map(p => ({
+            ...p,
+            ready: prev.providerHealth[p.name]?.ready ?? false,
+          }));
+          return {
+            ...prev,
+            configuredProviders: mergedProviders,
+            configuredPipelines: pipelines,
+            defaultProvider: parsed?.default_provider || null,
+            activePipeline: parsed?.active_pipeline || null,
+          };
+        });
         setLoading(false);
       } catch {
         setLoading(false);
