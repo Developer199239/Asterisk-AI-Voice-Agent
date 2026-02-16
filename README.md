@@ -370,7 +370,7 @@ docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_u
 
 ## 🎥 Demo
 
-[![Watch the demo](https://img.youtube.com/vi/ZGrr9-Q85xA/hqdefault.jpg)](https://www.youtube.com/watch?v=ZGrr9-Q85xA "Asterisk AI Voice Agent demo")
+[![Watch the demo](https://img.youtube.com/vi/fDZ_yMNenJc/hqdefault.jpg)](https://youtu.be/fDZ_yMNenJc "Asterisk AI Voice Agent v6.1 Deep Dive")
 
 ### 📞 Try it Live! (US Only)
 
