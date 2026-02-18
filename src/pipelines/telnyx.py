@@ -27,6 +27,14 @@ logger = get_logger(__name__)
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>\s*", flags=re.IGNORECASE | re.DOTALL)
 
 
+def _safe_float(value: Any, fallback: float) -> float:
+    """Convert *value* to float, returning *fallback* on failure (empty str, None, etc.)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(fallback)
+
+
 def _strip_thinking(content: str) -> str:
     """
     Some Telnyx-hosted models (notably Qwen) may include chain-of-thought in `<think>...</think>`.
@@ -94,8 +102,9 @@ class TelnyxLLMAdapter(LLMComponent):
         self._pipeline_defaults = options or {}
         self._session_factory = session_factory
         self._session: Optional[aiohttp.ClientSession] = None
-        self._default_timeout = float(
-            self._pipeline_defaults.get("response_timeout_sec", provider_config.response_timeout_sec)
+        self._default_timeout = _safe_float(
+            self._pipeline_defaults.get("response_timeout_sec", provider_config.response_timeout_sec),
+            provider_config.response_timeout_sec,
         )
         self._models_cache: Optional[list[str]] = None
         self._models_cache_at: float = 0.0
@@ -124,7 +133,8 @@ class TelnyxLLMAdapter(LLMComponent):
         url = f"{base}/models"
         headers = _make_http_headers(api_key)
         await self._ensure_session()
-        assert self._session
+        if not self._session:
+            raise RuntimeError("Failed to create aiohttp session for Telnyx model fetch")
         async with self._session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as resp:
             body = await resp.text()
             resp.raise_for_status()
@@ -157,7 +167,8 @@ class TelnyxLLMAdapter(LLMComponent):
                 logger.debug("Failed to refresh Telnyx model cache", error=str(exc), exc_info=True)
                 return raw
 
-        assert self._models_cache is not None
+        if self._models_cache is None:
+            return raw
         matches = [mid for mid in self._models_cache if str(mid).rsplit("/", 1)[-1] == raw]
         if len(matches) == 1:
             resolved = matches[0]
@@ -211,7 +222,7 @@ class TelnyxLLMAdapter(LLMComponent):
                 "max_tokens",
                 self._pipeline_defaults.get("max_tokens", getattr(self._provider_defaults, "max_tokens", None)),
             ),
-            "timeout_sec": float(runtime_options.get("timeout_sec", self._pipeline_defaults.get("timeout_sec", self._default_timeout))),
+            "timeout_sec": _safe_float(runtime_options.get("timeout_sec", self._pipeline_defaults.get("timeout_sec", self._default_timeout)), self._default_timeout),
             "tools": runtime_options.get("tools", self._pipeline_defaults.get("tools", [])),
         }
 
@@ -301,7 +312,8 @@ class TelnyxLLMAdapter(LLMComponent):
             raise RuntimeError("Telnyx LLM requires TELNYX_API_KEY")
 
         await self._ensure_session()
-        assert self._session
+        if not self._session:
+            raise RuntimeError("Failed to create aiohttp session for Telnyx LLM")
 
         # Telnyx supports external inference providers (e.g. OpenAI) via Integration Secrets.
         # If a user selects an external model, require api_key_ref to avoid confusing 400s.
@@ -333,13 +345,13 @@ class TelnyxLLMAdapter(LLMComponent):
                 tool = tool_registry.get(tool_name)
                 if tool:
                     try:
-                        from src.tools.base import ToolPhase
+                        from ..tools.base import ToolPhase
 
                         if getattr(tool.definition, "phase", ToolPhase.IN_CALL) != ToolPhase.IN_CALL:
                             logger.warning("Skipping non-in-call tool in pipeline schema", tool=tool_name)
                             continue
                     except Exception:
-                        pass
+                        logger.debug("Failed to check tool phase", tool=tool_name, exc_info=True)
                     tool_schemas.append(tool.definition.to_openai_schema())
                 else:
                     logger.warning("Tool not found in registry", tool=tool_name)

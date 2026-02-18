@@ -72,6 +72,7 @@ pipelines:
     tts: local_tts
     options:
       llm:
+        # Pipeline-level model override (takes precedence over providers.telnyx_llm.chat_model).
         # Telnyx-hosted models like meta-llama/* work with TELNYX_API_KEY only.
         # External models like openai/* require telnyx_llm.api_key_ref (Integration Secret identifier).
         # Recommended for tool calling (auto tool choice supported)

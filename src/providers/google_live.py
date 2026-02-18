@@ -262,6 +262,28 @@ class GoogleLiveProvider(AIProviderInterface):
         except Exception:
             return {"type": "unknown"}
 
+    def _ws_keepalive_telemetry(self) -> Dict[str, Any]:
+        """Build a diagnostic dict for WebSocket keepalive state (DRY helper)."""
+        now = time.monotonic()
+        return {
+            "ping_seq": self._ws_ping_seq,
+            "pong_seq": self._ws_pong_seq,
+            "last_ping_age_sec": (
+                round(now - self._last_ws_ping_monotonic, 3)
+                if self._last_ws_ping_monotonic is not None
+                else None
+            ),
+            "last_pong_age_sec": (
+                round(now - self._last_ws_pong_monotonic, 3)
+                if self._last_ws_pong_monotonic is not None
+                else None
+            ),
+            "last_ping_rtt_ms": (
+                round(self._last_ws_ping_rtt_ms, 2) if self._last_ws_ping_rtt_ms else None
+            ),
+            "last_ping_error": self._last_ws_ping_error,
+        }
+
     def _mark_ws_disconnected(self) -> None:
         self._setup_complete = False
         self.websocket = None
@@ -914,10 +936,17 @@ class GoogleLiveProvider(AIProviderInterface):
         # Higher startOfSpeechSensitivity = catches shorter utterances
         # Lower silenceDurationMs = faster response after user stops talking
         # Configurable via YAML: providers.google_live.vad_*
+        _VALID_EOS = {"END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW", "END_SENSITIVITY_UNSPECIFIED"}
+        _VALID_SOS = {"START_SENSITIVITY_HIGH", "START_SENSITIVITY_LOW", "START_SENSITIVITY_UNSPECIFIED"}
         vad_eos = getattr(self.config, "vad_end_of_speech_sensitivity", "END_SENSITIVITY_HIGH")
         vad_sos = getattr(self.config, "vad_start_of_speech_sensitivity", "START_SENSITIVITY_HIGH")
         vad_prefix_ms = int(getattr(self.config, "vad_prefix_padding_ms", 20))
         vad_silence_ms = int(getattr(self.config, "vad_silence_duration_ms", 500))
+        if vad_eos not in _VALID_EOS:
+            logger.warning("Invalid vad_end_of_speech_sensitivity value, API may reject", call_id=self._call_id, value=vad_eos, valid=list(_VALID_EOS))
+        if vad_sos not in _VALID_SOS:
+            logger.warning("Invalid vad_start_of_speech_sensitivity value, API may reject", call_id=self._call_id, value=vad_sos, valid=list(_VALID_SOS))
+        logger.info("Google Live VAD config", call_id=self._call_id, eos=vad_eos, sos=vad_sos, prefix_ms=vad_prefix_ms, silence_ms=vad_silence_ms)
         setup_msg["setup"]["realtimeInputConfig"] = {
             "automaticActivityDetection": {
                 "disabled": False,
@@ -1204,22 +1233,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 meaning=close_meaning,
                 reason=close_reason,
                 outbound_tail=list(self._outbound_summaries),
-                ws_keepalive={
-                    "ping_seq": self._ws_ping_seq,
-                    "pong_seq": self._ws_pong_seq,
-                    "last_ping_age_sec": (
-                        round(time.monotonic() - self._last_ws_ping_monotonic, 3)
-                        if self._last_ws_ping_monotonic is not None
-                        else None
-                    ),
-                    "last_pong_age_sec": (
-                        round(time.monotonic() - self._last_ws_pong_monotonic, 3)
-                        if self._last_ws_pong_monotonic is not None
-                        else None
-                    ),
-                    "last_ping_rtt_ms": (round(self._last_ws_ping_rtt_ms, 2) if self._last_ws_ping_rtt_ms else None),
-                    "last_ping_error": self._last_ws_ping_error,
-                },
+                ws_keepalive=self._ws_keepalive_telemetry(),
             )
             
             # Specific guidance for common errors
@@ -1234,22 +1248,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     hint=hint,
                     outbound_tail=list(self._outbound_summaries),
-                    ws_keepalive={
-                        "ping_seq": self._ws_ping_seq,
-                        "pong_seq": self._ws_pong_seq,
-                        "last_ping_age_sec": (
-                            round(time.monotonic() - self._last_ws_ping_monotonic, 3)
-                            if self._last_ws_ping_monotonic is not None
-                            else None
-                        ),
-                        "last_pong_age_sec": (
-                            round(time.monotonic() - self._last_ws_pong_monotonic, 3)
-                            if self._last_ws_pong_monotonic is not None
-                            else None
-                        ),
-                        "last_ping_rtt_ms": (round(self._last_ws_ping_rtt_ms, 2) if self._last_ws_ping_rtt_ms else None),
-                        "last_ping_error": self._last_ws_ping_error,
-                    },
+                    ws_keepalive=self._ws_keepalive_telemetry(),
                 )
             # Persist any pending transcription buffers before we signal the engine to tear down.
             try:

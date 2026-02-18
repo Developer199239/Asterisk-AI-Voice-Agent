@@ -257,6 +257,31 @@ def _url_host(url: str) -> str:
         return ""
 
 
+# SECURITY: Hardcoded base URLs for provider validation requests.
+# Maps hostname → canonical base URL.  This prevents SSRF via user-supplied
+# chat_base_url in YAML config by never forwarding the raw user string.
+_SAFE_BASE_URLS: dict[str, str] = {
+    "api.telnyx.com": "https://api.telnyx.com/v2/ai",
+    "api.openai.com": "https://api.openai.com/v1",
+    "api.groq.com": "https://api.groq.com/openai/v1",
+    "openrouter.ai": "https://openrouter.ai/api/v1",
+    "api.anthropic.com": "https://api.anthropic.com/v1",
+    "api.deepgram.com": "https://api.deepgram.com/v1",
+    "api.elevenlabs.io": "https://api.elevenlabs.io/v1",
+    "generativelanguage.googleapis.com": "https://generativelanguage.googleapis.com/v1beta",
+}
+
+
+def _safe_base_url(user_url: str, fallback: str) -> str:
+    """Return a hardcoded base URL for a known provider host, or *fallback*.
+
+    The returned string is NEVER derived from *user_url* — only the hostname
+    is extracted for lookup.  This breaks the CodeQL taint chain.
+    """
+    host = _url_host(user_url)
+    return _SAFE_BASE_URLS.get(host, fallback)
+
+
 def _rotate_backups(base_path: str) -> None:
     """
     A11: Keep only the last MAX_BACKUPS backup files.
@@ -1098,7 +1123,7 @@ async def test_provider_connection(request: ProviderTestRequest):
         host = _url_host(chat_base_url)
         is_telnyx = provider_type in ('telnyx', 'telenyx') or ('telnyx' in provider_name) or host == 'api.telnyx.com'
         if is_telnyx:
-            base_url = (chat_base_url or 'https://api.telnyx.com/v2/ai').rstrip('/')
+            base_url = _safe_base_url(chat_base_url, 'https://api.telnyx.com/v2/ai')
             api_key = get_env_key('TELNYX_API_KEY') or os.getenv('TELNYX_API_KEY') or ''
             if not api_key:
                 return {"success": False, "message": "TELNYX_API_KEY not set in .env"}
@@ -1168,7 +1193,9 @@ async def test_provider_connection(request: ProviderTestRequest):
         # OPENAI-COMPATIBLE (OpenAI / Groq / OpenRouter / etc.) - validate /models
         # ============================================================
         if provider_type == 'openai':
-            chat_base_url = (provider_config.get('chat_base_url') or 'https://api.openai.com/v1').rstrip('/')
+            chat_base_url = _safe_base_url(
+                provider_config.get('chat_base_url') or '', 'https://api.openai.com/v1'
+            )
             api_key = provider_config.get('api_key')
             if not api_key:
                 inferred_env = None

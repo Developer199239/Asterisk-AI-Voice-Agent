@@ -1,12 +1,12 @@
-# Asterisk AI Voice Agent - Installation Guide (v6.1.1)
+# Asterisk AI Voice Agent - Installation Guide (v6.2.0)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v6.1.1 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v6.2.0 on your server.
 
 ## Three Setup Paths
 
 Choose the path that best fits your experience level:
 
-## Upgrade to v6.1.1 (Existing Checkout)
+## Upgrade to v6.2.0 (Existing Checkout)
 
 This section is for operators upgrading an existing repo checkout (not a fresh install).
 
@@ -19,11 +19,11 @@ This section is for operators upgrading an existing repo checkout (not a fresh i
 
 ### 1) Pull the new release
 
-To upgrade to the tagged `v6.1.1` release (once the tag is published):
+To upgrade to the tagged `v6.2.0` release (once the tag is published):
 
 ```bash
 git fetch --tags
-git checkout v6.1.1
+git checkout v6.2.0
 ```
 
 If the tag is not published yet, track `main` temporarily:
@@ -257,7 +257,7 @@ agent setup
 
 **Best for:** Headless servers, scripted deployments, CLI preference
 
-> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.1.1.
+> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.2.0.
 
 ---
 
@@ -608,7 +608,7 @@ asterisk -rx "dialplan reload"
   - Verify you are not appending file extensions to ARI `sound:` URIs (Asterisk will add them automatically).
 
 - **No host Python 3 installed (scripts/Makefile)**:
-  - The Makefile auto-falls back to running helper scripts inside the `ai_engine` container. You’ll see a hint when it does.
+  - The Makefile auto-falls back to running helper scripts inside the `ai_engine` container. You'll see a hint when it does.
   - Check your environment:
 
         ```bash
@@ -624,5 +624,46 @@ asterisk -rx "dialplan reload"
         docker compose -p asterisk-ai-voice-agent exec -T ai_engine python /app/scripts/capture_test_logs.py --duration 40
         docker compose -p asterisk-ai-voice-agent exec -T ai_engine python /app/scripts/analyze_logs.py /app/logs/latest.json
         ```
+
+- **Container crashes with NumPy X86_V2 CPU error**:
+
+  If containers fail to start with an error like:
+
+  ```text
+  RuntimeError: NumPy was built with baseline optimizations:
+  (X86_V2) but your machine doesn't support:
+  (X86_V2).
+  ```
+
+  This means your CPU lacks SSE4.1/SSE4.2 instructions required by NumPy 2.x. This commonly occurs on:
+  - Older KVM/QEMU virtual machines with "Common KVM processor"
+  - Pre-2013 physical CPUs
+  - Some cloud VPS instances with legacy CPU emulation
+
+  **Fix**: Pin NumPy to version 1.x (compatible with older CPUs):
+
+  ```bash
+  cd /root/Asterisk-AI-Voice-Agent
+
+  # Fix ai_engine requirements
+  sed -i 's/numpy>=1.24.0/numpy>=1.24.0,<2.0/g' requirements.txt
+
+  # Fix admin_ui requirements
+  sed -i 's/numpy>=1.24.0/numpy>=1.24.0,<2.0/g' admin_ui/backend/requirements.txt
+
+  # Rebuild containers with --no-cache to force fresh install
+  docker compose -p asterisk-ai-voice-agent build --no-cache ai_engine admin_ui
+
+  # Recreate containers
+  docker compose -p asterisk-ai-voice-agent up -d --force-recreate ai_engine admin_ui
+  ```
+
+  **Verify your CPU supports X86_V2** (optional diagnostic):
+
+  ```bash
+  grep -E 'sse4_1|sse4_2' /proc/cpuinfo
+  ```
+
+  If no output, your CPU lacks the required instructions and the fix above is needed.
 
 For more advanced troubleshooting, refer to the project's main `README.md` or open an issue in the repository.

@@ -40,11 +40,11 @@ Exit codes:
 				return errors.New("--fix cannot be combined with --json")
 			}
 			exitCode, err := runCheckWithFix()
-			if err != nil {
-				return err
-			}
 			if exitCode != 0 {
 				os.Exit(exitCode)
+			}
+			if err != nil {
+				return err
 			}
 			return nil
 		}

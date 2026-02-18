@@ -3,7 +3,7 @@ Live Agent Transfer Tool - explicit handoff to configured live agent destination
 
 This tool is intended to mean: the caller explicitly asked for a human/live agent.
 
-Default behavior (v6.1.1+): route to configured Live Agents (`tools.extensions.internal`).
+Default behavior (v6.2.0+): route to configured Live Agents (`tools.extensions.internal`).
 Advanced/legacy override: route via a transfer destination key (`tools.transfer.*`).
 """
 

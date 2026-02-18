@@ -2,6 +2,25 @@
 
 This guide covers upgrading between major versions of Asterisk AI Voice Agent.
 
+## v6.1.1 to v6.2.0
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.2.0:
+- NumPy audio resampler replaces legacy `audioop.ratecv` (fixes crackling)
+- Google Live native audio latest model support (`gemini-2.5-flash-native-audio-latest`)
+- Google Live VAD tuning, TTS gating, farewell/hangup hardening
+- Telnyx AI Inference LLM pipeline provider (`telnyx_llm`)
+- Agent CLI `check --fix` auto-repair
+- Admin UI tool catalog and Google Live settings
+- 13 call termination fixes across all providers
+
 ## v6.0.0 to v6.1.1
 
 **No breaking changes.** All new features are additive or opt-in.

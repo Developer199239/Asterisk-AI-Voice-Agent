@@ -22,7 +22,7 @@ assignees: ''
 <!-- What actually happened -->
 
 ## Environment
-- **Version**: <!-- e.g., v6.1.1 -->
+- **Version**: <!-- e.g., v6.2.0 -->
 - **OS**: <!-- e.g., Ubuntu 22.04 -->
 - **Docker Version**: <!-- e.g., 24.0.7 -->
 - **Asterisk Version**: <!-- e.g., 18.20.0 -->
@@ -34,6 +34,8 @@ assignees: ''
 ```
 docker logs ai_engine --tail=100
 ```
+
+**From Admin UI**: Navigate to **Logs** page → filter by call or time range → click **Export** and attach the downloaded file.
 
 ## Diagnostics (Recommended)
 

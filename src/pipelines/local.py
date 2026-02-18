@@ -534,7 +534,7 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
             options,
             default_mode="stt",
         )
-        self._resample_state: Optional[tuple] = None
+        self._resample_states: Dict[str, Optional[tuple]] = {}
 
     async def start_stream(
         self,
@@ -592,7 +592,7 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
             )
             return  # Skip this audio frame rather than crash the call
         
-        pcm16 = self._to_pcm16_16k(audio, fmt)
+        pcm16 = self._to_pcm16_16k(audio, fmt, call_id=call_id)
         if not pcm16:
             logger.warning(
                 "send_audio: conversion to PCM16 16kHz produced empty result",
@@ -699,6 +699,7 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
 
     async def close_call(self, call_id: str) -> None:
         await self.stop_stream(call_id)
+        self._resample_states.pop(call_id, None)
         await super().close_call(call_id)
 
     async def _stream_receive_loop(
@@ -751,18 +752,22 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
             except asyncio.QueueFull:
                 pass
 
-    def _to_pcm16_16k(self, audio: bytes, fmt: str) -> bytes:
+    def _to_pcm16_16k(self, audio: bytes, fmt: str, call_id: str = "") -> bytes:
         if not audio:
             return audio
         fmt = fmt.lower()
         if fmt in {"pcm16", "pcm16_16k", "pcm16-16k"}:
             return audio
         if fmt in {"pcm16_8k", "pcm16-8k"}:
-            converted, self._resample_state = resample_audio(audio, 8000, 16000, state=self._resample_state)
+            state = self._resample_states.get(call_id)
+            converted, state = resample_audio(audio, 8000, 16000, state=state)
+            self._resample_states[call_id] = state
             return converted
         if fmt in {"mulaw8k", "ulaw8k"}:
             linear = audioop.ulaw2lin(audio, 2)
-            converted, self._resample_state = resample_audio(linear, 8000, 16000, state=self._resample_state)
+            state = self._resample_states.get(call_id)
+            converted, state = resample_audio(linear, 8000, 16000, state=state)
+            self._resample_states[call_id] = state
             return converted
         raise ValueError(f"Unsupported audio format '{fmt}' for local STT streaming")
 

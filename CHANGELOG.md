@@ -12,9 +12,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [6.2.0] - 2026-02-15
+
 ### Added
 
-- **Telnyx AI Inference (pipelines)**: New modular LLM provider `telnyx_llm` (OpenAI-compatible Chat Completions) powered by `TELNYX_API_KEY`. Credits: Abhishek (PR #219).
+- **NumPy Audio Resampler**: Replaced legacy `audioop.ratecv` with NumPy linear interpolation at all 19 call sites, eliminating audio crackling artifacts. Community contribution by [@turgutguvercin](https://github.com/turgutguvercin) ([PR #204](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/204)).
+- **Google Native Audio Latest Model**: Support for `gemini-2.5-flash-native-audio-latest` — Google's audio-native model with true audio understanding, tuned defaults for telephony use cases.
+- **Google Live VAD Tuning**: `realtimeInputConfig` support for short utterance detection; configurable via Admin UI advanced settings.
+- **Google Live Keepalive Expert Knobs**: Smoother config updates and WebSocket keepalive tuning for long-running sessions.
+- **Google Live Input Gain Normalization**: Provider-level input gain for consistent audio levels across telephony trunks.
+- **Admin UI Tool Catalog**: Read-only page listing all available built-in and MCP tools with descriptions and parameter schemas (PR #211).
+- **Admin UI Google Live Settings**: VAD tuning and hangup fallback tooltips exposed as advanced provider settings.
+- **Agent CLI `check --fix`**: Auto-repair common configuration issues with minimal production baseline config for recovery; hardened restore logic (PR #210).
+- **Telnyx AI Inference LLM**: New modular pipeline provider `telnyx_llm` using OpenAI-compatible Chat Completions via Telnyx AI Inference. Access 53+ models (GPT-4o, Claude, Llama, Mistral) with a single `TELNYX_API_KEY`. Includes golden baseline config, Admin UI provider form, and setup guide. Community contribution by Abhishek @ Telnyx ([PR #219](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/219)).
+- **Preflight `--force`**: Bypass unsupported OS check for exotic distributions.
+
+### Changed
+
+- **Google Live Farewell Handling**: Settled on farewell-play-out design (removed experimental auto-reconnect on 1008 disconnect); neutralized tool response to prevent duplicate farewells.
+- **Google Live TTS Gating**: Per-segment re-arm so silence replaces echo on every turn; enabled on AudioSocket transport.
+- **Call Ending Prompts**: Tightened prompts to prevent verbal farewell before `hangup_call` tool invocation across all providers.
+- **Transparent Model Name Flow**: Removed silent fallback/remapping for Google Live model names; aligned names across UI and wizard.
+- **Demo Contexts Restored**: All 11 demo contexts from v6.0.0 baseline restored.
+
+### Fixed
+
+- **Audio Crackling**: NumPy resampler fixes crackling caused by `audioop.ratecv` discontinuities ([PR #204](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/204), [@turgutguvercin](https://github.com/turgutguvercin)).
+- **Call Termination Hardening**: 13 fixes across providers, engine, and AudioSocket for reliable call endings and proper cleanup.
+- **Google Live Duplicate Farewell**: 6+ iterations eliminating race conditions between tool-ack `turnComplete`, forced farewell, and model post-hangup speech.
+- **Google Live Premature Hangup**: Fixed hangup firing on tool-acknowledgment `turnComplete` before farewell audio finishes playing.
+- **Google Live Model Names**: Transparent model name flow — removed silent fallback/remapping; aligned names across UI and wizard.
+- **Pipeline Call History**: Tool calls now recorded in session so they appear in Admin UI Call History.
+- **Provider Topology Accuracy**: Clear stale `provider_name` on pipeline calls so UI topology is accurate.
+- **Agent CLI Conflict Markers**: Reduced conflict-marker false positives in `agent check`.
+- **Agent CLI Wizard Logger**: Removed invalid logger kwargs.
+- **Agent CLI Restore Safety**: Hardened `check --fix` restore to avoid partial writes.
+- **Admin UI Tool Catalog**: Removed unreachable except in tool catalog (PR #212).
+
+### Security
+
+- **CodeQL SSRF Fix**: Google API key now passed as params instead of URL path to prevent SSRF (CodeQL alert).
+
+### Documentation
+
+- Telnyx AI Inference Provider Setup Guide (`docs/Provider-Telnyx-Setup.md`)
+- Milestones 23 (NAT) and 24 (Phase Tools) added to milestone history
+- Complete documentation, roadmap, and community alignment overhaul
+- Roadmap and Milestone History links added to main README hero nav bar
+
+### Migration from v6.1.1
+
+1. **No breaking changes.** All new features are additive or opt-in.
+2. Existing `config/ai-agent.yaml` continues to work unchanged.
+3. **Docker rebuild required**: Run `docker compose up -d --build --force-recreate` for all containers.
+4. **Telnyx users**: Add `TELNYX_API_KEY` to `.env` and configure `telnyx_hybrid` pipeline. See `docs/Provider-Telnyx-Setup.md`.
+5. **Google Live users**: Default model updated to `gemini-2.5-flash-native-audio-latest`. No action needed unless you pinned a specific model.
 
 ## [6.1.1] - 2026-02-09
 
@@ -1345,7 +1397,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.1.1...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.0...HEAD
+[6.2.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.1.1...v6.2.0
 [6.1.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v6.1.1
 [6.0.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v6.0.0
 [5.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.3.1

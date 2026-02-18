@@ -1058,7 +1058,9 @@ class PipelineOrchestrator:
         raw = providers.get("telnyx_llm") or providers.get("telenyx_llm") or providers.get("telnyx")
         merged: Dict[str, Any] = {}
 
-        if isinstance(raw, dict):
+        if isinstance(raw, TelnyxLLMProviderConfig):
+            merged.update(raw.model_dump())
+        elif isinstance(raw, dict):
             merged.update(raw)
         elif isinstance(raw, OpenAIProviderConfig):
             merged.update(raw.model_dump())

@@ -13,8 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,20 +35,20 @@ const (
 )
 
 var (
-	updateRemote        string
-	updateRef           string
-	updateNoStash       bool
+	updateRemote         string
+	updateRef            string
+	updateNoStash        bool
 	updateStashUntracked bool
-	updateRebuild       string
-	updateForceRecreate bool
-	updateSkipCheck     bool
-	updateSelfUpdate    bool
-	updateIncludeUI     bool
-	updateCheckout      bool
-	updateBackupID      string
-	updatePlan          bool
-	updatePlanJSON      bool
-	gitSafeDirectory    string
+	updateRebuild        string
+	updateForceRecreate  bool
+	updateSkipCheck      bool
+	updateSelfUpdate     bool
+	updateIncludeUI      bool
+	updateCheckout       bool
+	updateBackupID       string
+	updatePlan           bool
+	updatePlanJSON       bool
+	gitSafeDirectory     string
 )
 
 var semverTagRe = regexp.MustCompile(`^(v)?([0-9]+\.[0-9]+\.[0-9]+)$`)
@@ -90,7 +90,7 @@ Safety notes:
 
 func init() {
 	updateCmd.Flags().StringVar(&updateRemote, "remote", "origin", "git remote name")
-	updateCmd.Flags().StringVar(&updateRef, "ref", "main", "git ref to update to (branch like main, or tag like v5.2.4)")
+	updateCmd.Flags().StringVar(&updateRef, "ref", "main", "git ref to update to (branch like main, or tag like v6.2.0)")
 	updateCmd.Flags().BoolVar(&updateNoStash, "no-stash", false, "abort if repo has local changes instead of stashing")
 	updateCmd.Flags().BoolVar(&updateStashUntracked, "stash-untracked", false, "include untracked files when stashing (does not include ignored files)")
 	updateCmd.Flags().StringVar(&updateRebuild, "rebuild", string(rebuildAuto), "rebuild mode: auto|none|all")
@@ -106,12 +106,12 @@ func init() {
 }
 
 type updateContext struct {
-	repoRoot string
-	oldSHA   string
-	newSHA   string
+	repoRoot  string
+	oldSHA    string
+	newSHA    string
 	backupDir string
-	stashed  bool
-	stashRef string
+	stashed   bool
+	stashRef  string
 
 	changedFiles []string
 
@@ -123,32 +123,32 @@ type updateContext struct {
 }
 
 type updatePlanReport struct {
-	RepoRoot         string              `json:"repo_root"`
-	Remote           string              `json:"remote"`
-	Ref              string              `json:"ref"`
-	CurrentBranch    string              `json:"current_branch"`
-	TargetBranch     string              `json:"target_branch"`
-	Checkout         bool                `json:"checkout"`
-	WouldCheckout    bool                `json:"would_checkout"`
-	OldSHA           string              `json:"old_sha"`
-	NewSHA           string              `json:"new_sha"`
-	Relation         string              `json:"relation"` // equal|behind|ahead|diverged
-	CodeChanged      bool                `json:"code_changed"`
-	UpdateAvailable  bool                `json:"update_available"`
-	Dirty            bool                `json:"dirty"`
-	NoStash          bool                `json:"no_stash"`
-	StashUntracked   bool                `json:"stash_untracked"`
-	WouldStash       bool                `json:"would_stash"`
-	WouldAbort       bool                `json:"would_abort"`
-	RebuildMode      string              `json:"rebuild_mode"`
-	ComposeChanged   bool                `json:"compose_changed"`
-	ServicesRebuild  []string            `json:"services_rebuild"`
-	ServicesRestart  []string            `json:"services_restart"`
-	SkippedServices  map[string]string   `json:"skipped_services,omitempty"`
-	ChangedFileCount int                 `json:"changed_file_count"`
-	ChangedFiles     []string            `json:"changed_files,omitempty"`
-	FilesTruncated   bool                `json:"changed_files_truncated,omitempty"`
-	Warnings         []string            `json:"warnings,omitempty"`
+	RepoRoot         string            `json:"repo_root"`
+	Remote           string            `json:"remote"`
+	Ref              string            `json:"ref"`
+	CurrentBranch    string            `json:"current_branch"`
+	TargetBranch     string            `json:"target_branch"`
+	Checkout         bool              `json:"checkout"`
+	WouldCheckout    bool              `json:"would_checkout"`
+	OldSHA           string            `json:"old_sha"`
+	NewSHA           string            `json:"new_sha"`
+	Relation         string            `json:"relation"` // equal|behind|ahead|diverged
+	CodeChanged      bool              `json:"code_changed"`
+	UpdateAvailable  bool              `json:"update_available"`
+	Dirty            bool              `json:"dirty"`
+	NoStash          bool              `json:"no_stash"`
+	StashUntracked   bool              `json:"stash_untracked"`
+	WouldStash       bool              `json:"would_stash"`
+	WouldAbort       bool              `json:"would_abort"`
+	RebuildMode      string            `json:"rebuild_mode"`
+	ComposeChanged   bool              `json:"compose_changed"`
+	ServicesRebuild  []string          `json:"services_rebuild"`
+	ServicesRestart  []string          `json:"services_restart"`
+	SkippedServices  map[string]string `json:"skipped_services,omitempty"`
+	ChangedFileCount int               `json:"changed_file_count"`
+	ChangedFiles     []string          `json:"changed_files,omitempty"`
+	FilesTruncated   bool              `json:"changed_files_truncated,omitempty"`
+	Warnings         []string          `json:"warnings,omitempty"`
 }
 
 func runUpdate() (retErr error) {

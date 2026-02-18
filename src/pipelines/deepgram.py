@@ -85,6 +85,7 @@ class _STTSessionState:
     transcript_queue: Optional[asyncio.Queue] = None
     receiver_task: Optional[asyncio.Task] = None
     active: bool = True
+    resample_state: Optional[tuple] = None
 
 
 class DeepgramSTTAdapter(STTComponent):
@@ -120,7 +121,6 @@ class DeepgramSTTAdapter(STTComponent):
         self._session_factory = session_factory
         self._sessions: Dict[str, _STTSessionState] = {}
         self._default_timeout = float(self._pipeline_defaults.get("response_timeout_sec", 5.0))
-        self._resample_state: Optional[tuple] = None
 
     async def start(self) -> None:
         # No global warm-up required yet.
@@ -204,7 +204,7 @@ class DeepgramSTTAdapter(STTComponent):
         
         # Resample if needed
         if sample_rate_hz != api_sample_rate:
-            api_audio, self._resample_state = resample_audio(api_audio, sample_rate_hz, api_sample_rate, state=self._resample_state)
+            api_audio, session.resample_state = resample_audio(api_audio, sample_rate_hz, api_sample_rate, state=session.resample_state)
             logger.debug(
                 "STT resampled audio",
                 call_id=call_id,

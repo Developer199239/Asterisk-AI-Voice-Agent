@@ -820,10 +820,10 @@ echo "=== End Health Check ==="
 
 # 2. Pull latest code
 git fetch origin
-git checkout v6.1.1  # Or: git pull origin main
+git checkout v6.2.0  # Or: git pull origin main
 
 # 3. Compare configuration changes
-git diff v6.1.0..v6.1.1 config/ai-agent.example.yaml
+git diff v6.1.1..v6.2.0 config/ai-agent.example.yaml
 
 # 4. Update if needed
 # Review and update config/ai-agent.yaml

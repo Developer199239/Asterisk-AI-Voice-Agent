@@ -294,7 +294,7 @@ def _safe_jsonable(obj: Any, *, max_depth: int = 5, max_items: int = 50, depth: 
         return obj
     if isinstance(obj, dict):
         out: Dict[str, Any] = {}
-        for idx, (k, v) in enumerate(list(obj.items())[:max_items]):
+        for k, v in list(obj.items())[:max_items]:
             out[str(k)] = _safe_jsonable(v, max_depth=max_depth, max_items=max_items, depth=depth + 1)
         return out
     if isinstance(obj, (list, tuple)):
@@ -404,9 +404,11 @@ async def get_tool_catalog():
                     )
                 )
             return ToolCatalogResponse(tools=out, source="ai_engine")
-        except httpx.ConnectError:
+        except httpx.ConnectError as exc:
+            logger.debug("Tool catalog fetch failed (connect)", error=str(exc), base_url=base)
             continue
-        except Exception:
+        except Exception as exc:
+            logger.debug("Tool catalog fetch failed", error=str(exc), base_url=base)
             continue
 
     # Fallback: local best-effort tool registry init.

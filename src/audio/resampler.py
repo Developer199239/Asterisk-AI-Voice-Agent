@@ -58,6 +58,11 @@ def resample_audio(
     The state tuple carries ``(prev_last_sample_float,)`` so that the
     boundary between consecutive chunks is interpolated correctly.
 
+    Note: state does not track fractional phase, so non-integer rate ratios
+    (e.g. 24 k→8 k) with variable chunk sizes may accumulate sample-count
+    drift over very long streams.  All production ratios in this project are
+    integer multiples (8 k↔16 k = 2:1) where this is not a concern.
+
     Returns a tuple of (converted_bytes, new_state).
     """
     if not pcm_bytes or source_rate == target_rate:

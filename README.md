@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-6.1.1-blue.svg)
+![Version](https://img.shields.io/badge/version-6.2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -110,7 +110,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.1.1.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.2.0.
 
 ### Option B: Manual Setup
 ```bash
@@ -153,33 +153,48 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v6.1.1
+## 🎉 What's New in v6.2.0
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### OpenAI Realtime GA API (v6.1.1)
-- Full Beta-to-GA migration with `api_version` toggle, nested audio schema, MIME format types
-- New `project_id` field for OpenAI project tracking
-- 10 voices with gender labels (alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse)
+### 🔊 Audio Quality Fix (v6.2.0)
+- Replaced legacy `audioop.ratecv` with NumPy linear interpolation resampler at all 19 call sites
+- Eliminates audio crackling artifacts that affected some deployments
+- Community contribution by [@turgutguvercin](https://github.com/turgutguvercin) (PR [#204](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/204))
 
-### Email System Overhaul (v6.1.1)
-- SMTP support alongside Resend with auto-detection
-- HTML template editor with per-context overrides, subject prefix, call outcome variables
-- Template autoescaping for security
+### 🤖 Google Live Provider Hardening (v6.2.0)
+- Support for Google's **native audio latest** model (`gemini-2.5-flash-native-audio-latest`) — true audio-native understanding, not just transcription
+- VAD tuning via `realtimeInputConfig` for reliable short utterance detection
+- TTS gating prevents echo-induced delays on AudioSocket transport
+- Farewell/hangup race condition fixes — eliminates duplicate farewells and premature hangups
+- Keepalive expert knobs and smoother config updates
+- Provider input gain normalization for consistent audio levels
 
-### 🖥️ Admin UI Modernization (v6.1.1)
-- Live System Topology with clickable navigation to settings pages
-- Modern confirm dialogs, toast notifications, tab-based EnvPage, Help section
-- Models page redesign with active model cards during calls
+### � Call Termination Hardening (v6.2.0)
+- 13 fixes across all providers, engine, and AudioSocket for reliable call endings
+- Prevents verbal farewell before `hangup_call` tool invocation
+- Pipeline tool calls now recorded in session for Call History visibility
 
-### 🌐 NAT & GPU Support (v6.1.1)
-- `AUDIOSOCKET_ADVERTISE_HOST` / `EXTERNAL_MEDIA_ADVERTISE_HOST` for split-horizon deployments
-- GPU acceleration via `docker-compose.gpu.yml` overlay with CUDA support
+### 🩺 Agent CLI: `check --fix` (v6.2.0)
+- New `agent check --fix` auto-repairs common configuration issues
+- Ships minimal production baseline config for recovery scenarios
+- Hardened restore logic to avoid partial writes
 
-### 🔧 Google Live Improvements (v6.1.1)
-- Hangup fallback watchdog with tunable timeouts
-- Model normalization hardening and `toolConfig` support
+### 🖥️ Admin UI Improvements (v6.2.0)
+- Read-only **Tool Catalog** page showing all available built-in and MCP tools
+- Google Live VAD tuning exposed as advanced settings
+- Hangup fallback tuning tooltips
+
+### 🌐 Telnyx AI Inference LLM (v6.2.0)
+- New modular `telnyx_llm` pipeline provider — OpenAI-compatible Chat Completions via Telnyx AI Inference
+- Access to 53+ models (GPT-4o, Claude, Llama, Mistral) through a single `TELNYX_API_KEY`
+- Golden baseline config, Admin UI integration, and setup guide included
+- Community contribution by Abhishek @ Telnyx ([PR #219](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/219))
+
+### �️ Preflight & Security (v6.2.0)
+- `preflight.sh --force` flag to bypass unsupported OS check
+- CodeQL SSRF fix for Google API key handling
 
 For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -187,6 +202,11 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 <details>
 <summary><b>Previous Versions</b></summary>
+
+#### v6.1.1 - Operator Config & Live Agent Transfer
+- Operator config overrides (`ai-agent.local.yaml`), live agent transfer tool
+- ViciDial compatibility, Asterisk config discovery in Admin UI
+- OpenAI Realtime GA API, Email system overhaul, NAT/GPU support
 
 #### v5.3.1 - Phase Tools & Stability
 - Pre-call HTTP lookups, in-call HTTP tools, and post-call webhooks (Milestone 24)
@@ -350,7 +370,7 @@ docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_u
 
 ## 🎥 Demo
 
-[![Watch the demo](https://img.youtube.com/vi/ZGrr9-Q85xA/hqdefault.jpg)](https://www.youtube.com/watch?v=ZGrr9-Q85xA "Asterisk AI Voice Agent demo")
+[![Watch the demo](https://img.youtube.com/vi/fDZ_yMNenJc/hqdefault.jpg)](https://youtu.be/fDZ_yMNenJc "Asterisk AI Voice Agent v6.1 Deep Dive")
 
 ### 📞 Try it Live! (US Only)
 
@@ -603,9 +623,15 @@ Then open in [Windsurf](https://codeium.com/windsurf) and type: **"I want to con
 
 ### Contributors
 
-<a href="https://github.com/hkjarral/Asterisk-AI-Voice-Agent/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=hkjarral/Asterisk-AI-Voice-Agent" />
-</a>
+<table>
+<tr>
+<td align="center"><a href="https://github.com/hkjarral"><img src="https://github.com/hkjarral.png" width="60" alt="hkjarral"><br><sub><b>hkjarral</b></sub></a><br>Architecture, Code</td>
+<td align="center"><a href="https://github.com/a692570"><img src="https://github.com/a692570.png" width="60" alt="a692570"><br><sub><b>Abhishek</b></sub></a><br>Telnyx LLM Provider</td>
+<td align="center"><a href="https://github.com/turgutguvercin"><img src="https://github.com/turgutguvercin.png" width="60" alt="turgutguvercin"><br><sub><b>turgutguvercin</b></sub></a><br>NumPy Resampler</td>
+<td align="center"><a href="https://github.com/Scarjit"><img src="https://github.com/Scarjit.png" width="60" alt="Scarjit"><br><sub><b>Scarjit</b></sub></a><br>Code</td>
+<td align="center"><a href="https://github.com/egorky"><img src="https://github.com/egorky.png" width="60" alt="egorky"><br><sub><b>egorky</b></sub></a><br>Bug Fix</td>
+</tr>
+</table>
 
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list and [Recognition Program](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/RECOGNITION.md) for how we recognize contributions.
 

@@ -1,12 +1,23 @@
 import React from 'react';
 
+interface TelnyxConfig {
+    api_key?: string;
+    api_key_ref?: string;
+    chat_base_url?: string;
+    chat_model?: string;
+    temperature?: number;
+    max_tokens?: number | null;
+    response_timeout_sec?: number;
+    [key: string]: unknown;
+}
+
 interface TelnyxProviderFormProps {
-    config: any;
-    onChange: (newConfig: any) => void;
+    config: TelnyxConfig;
+    onChange: (newConfig: TelnyxConfig) => void;
 }
 
 const TelnyxProviderForm: React.FC<TelnyxProviderFormProps> = ({ config, onChange }) => {
-    const handleChange = (field: string, value: any) => {
+    const handleChange = (field: string, value: unknown) => {
         onChange({ ...config, [field]: value });
     };
 
@@ -23,7 +34,7 @@ const TelnyxProviderForm: React.FC<TelnyxProviderFormProps> = ({ config, onChang
                         <input
                             type="text"
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.api_key || '${TELNYX_API_KEY}'}
+                            value={config.api_key ?? '${TELNYX_API_KEY}'}
                             onChange={(e) => handleChange('api_key', e.target.value)}
                             placeholder="${TELNYX_API_KEY}"
                         />
@@ -58,7 +69,7 @@ const TelnyxProviderForm: React.FC<TelnyxProviderFormProps> = ({ config, onChang
                         <input
                             type="text"
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.chat_base_url || 'https://api.telnyx.com/v2/ai'}
+                            value={config.chat_base_url ?? 'https://api.telnyx.com/v2/ai'}
                             onChange={(e) => handleChange('chat_base_url', e.target.value)}
                             placeholder="https://api.telnyx.com/v2/ai"
                         />
