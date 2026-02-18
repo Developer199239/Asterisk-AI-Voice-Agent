@@ -12,7 +12,7 @@ This file provides high-level guidance for Codex/CLI-style assistants working in
   - How to debug call behavior and prepare PRs
 - Prefer to:
   - Load and follow `AVA.mdc` for high-level planning and guidance.
-  - Use this file and the IDE rule files (Cursor/Windsurf/Gemini) for technical guardrails and context.
+  - Use this file and the IDE rule files (Cursor/Windsurf/Claude/Gemini) for technical guardrails and context.
 
 ## Canonical Sources
 
@@ -52,6 +52,10 @@ When there is a conflict, prefer these repository docs over external sources.
   - `.windsurf/rules/architecture-overview.md`
   - `.windsurf/rules/project-roadmap.md`
   - `.windsurf/rules/document-creation-rule.md`
+- Claude Code rules:
+  - `CLAUDE.md`
+- Gemini rules:
+  - `Gemini.md`
 
 These files define **how** to safely change code and docs:
 
