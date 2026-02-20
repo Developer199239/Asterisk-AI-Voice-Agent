@@ -33,6 +33,13 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
+try:
+    import google.auth
+    import google.auth.transport.requests
+    _GOOGLE_AUTH_AVAILABLE = True
+except ImportError:
+    _GOOGLE_AUTH_AVAILABLE = False
+
 from structlog import get_logger
 from prometheus_client import Gauge, Counter
 
@@ -662,8 +669,11 @@ class GoogleLiveProvider(AIProviderInterface):
         return ["ulaw"]
 
     def is_ready(self) -> bool:
-        """Check if provider is properly configured with required API key."""
-        api_key = getattr(self.config, 'api_key', None) or ""
+        """Check if provider is properly configured with required credentials."""
+        # Vertex AI mode requires project ID, Developer API mode requires API key
+        if getattr(self.config, "use_vertex_ai", False):
+            return bool((getattr(self.config, "vertex_project", "") or "").strip())
+        api_key = getattr(self.config, "api_key", None) or ""
         return bool(api_key and str(api_key).strip())
 
     async def start_session(
@@ -714,36 +724,81 @@ class GoogleLiveProvider(AIProviderInterface):
                 call_id=call_id,
             )
 
-        # Build WebSocket URL with API key
-        api_key = self.config.api_key or ""
-        
-        # Debug: Check API key
-        if not api_key:
-            logger.error(
-                "GOOGLE_API_KEY not found! Cannot connect to Google Live API.",
-                call_id=call_id,
-            )
-            raise ValueError("GOOGLE_API_KEY is required for Google Live provider")
-        
-        api_key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "<too_short>"
-        endpoint = (self.config.websocket_endpoint or "").strip()
-        if not endpoint:
-            # Fallback to historical constant if config not populated
-            endpoint = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        # Build WebSocket URL and headers — Vertex AI vs Developer API (AAVA-191)
+        use_vertex = getattr(self.config, 'use_vertex_ai', False)
+        ws_url: str
+        ws_extra_headers: dict = {}
 
-        logger.debug(
-            "Connecting to Google Live API",
-            call_id=call_id,
-            endpoint=endpoint,
-            api_key_preview=api_key_preview,
-        )
-        
-        ws_url = f"{endpoint}?key={api_key}"
+        if use_vertex:
+            # --- Vertex AI Live API ---
+            # Uses OAuth2/ADC bearer token; no API key in URL.
+            if not _GOOGLE_AUTH_AVAILABLE:
+                raise RuntimeError(
+                    "google-auth package is required for Vertex AI mode. "
+                    "Add google-auth>=2.0.0 to requirements.txt and rebuild the container."
+                )
+            vertex_location = (getattr(self.config, 'vertex_location', None) or "us-central1").strip()
+            vertex_project = (getattr(self.config, 'vertex_project', None) or "").strip()
+            if not vertex_project:
+                raise ValueError(
+                    "vertex_project is required for Vertex AI mode. "
+                    "Set GOOGLE_CLOUD_PROJECT in .env or vertex_project in ai-agent.yaml."
+                )
+
+            # Obtain OAuth2 bearer token via ADC (Application Default Credentials).
+            # Runs in executor to avoid blocking the event loop.
+            def _get_vertex_token() -> str:
+                credentials, _ = google.auth.default(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                auth_req = google.auth.transport.requests.Request()
+                credentials.refresh(auth_req)
+                return credentials.token
+
+            bearer_token = await asyncio.get_event_loop().run_in_executor(None, _get_vertex_token)
+            ws_extra_headers = {"Authorization": f"Bearer {bearer_token}"}
+
+            vertex_endpoint = (
+                f"wss://{vertex_location}-aiplatform.googleapis.com"
+                f"/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+            )
+            ws_url = vertex_endpoint
+
+            logger.info(
+                "Connecting to Google Vertex AI Live API",
+                call_id=call_id,
+                endpoint=vertex_endpoint,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+            )
+        else:
+            # --- Developer API (default) ---
+            api_key = self.config.api_key or ""
+            if not api_key:
+                logger.error(
+                    "GOOGLE_API_KEY not found! Cannot connect to Google Live API.",
+                    call_id=call_id,
+                )
+                raise ValueError("GOOGLE_API_KEY is required for Google Live provider")
+
+            api_key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "<too_short>"
+            endpoint = (self.config.websocket_endpoint or "").strip()
+            if not endpoint:
+                endpoint = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+
+            logger.debug(
+                "Connecting to Google Live API",
+                call_id=call_id,
+                endpoint=endpoint,
+                api_key_preview=api_key_preview,
+            )
+            ws_url = f"{endpoint}?key={api_key}"
 
         try:
             # Establish WebSocket connection
             self.websocket = await websockets.connect(
                 ws_url,
+                additional_headers=ws_extra_headers,
                 subprotocols=["gemini-live"],
                 max_size=10 * 1024 * 1024,  # 10MB max message size
                 # Disable library-level ping frames. We implement our own keepalive behavior
@@ -899,10 +954,20 @@ class GoogleLiveProvider(AIProviderInterface):
         model_name = self._normalize_model_name(self.config.llm_model)
         if model_name.startswith("models/"):
             model_name = model_name[7:]  # Remove "models/" prefix
-        
+
+        # Vertex AI uses a different model path format (AAVA-191)
+        # Full resource path: projects/{project}/locations/{location}/publishers/google/models/{model}
+        use_vertex = getattr(self.config, 'use_vertex_ai', False)
+        if use_vertex:
+            vertex_project = (getattr(self.config, 'vertex_project', None) or "").strip()
+            vertex_location = (getattr(self.config, 'vertex_location', None) or "us-central1").strip()
+            model_path = f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
+        else:
+            model_path = f"models/{model_name}"
+
         setup_msg = {
             "setup": {
-                "model": f"models/{model_name}",
+                "model": model_path,
                 # Live API expects camelCase field names.
                 "generationConfig": generation_config,
             }
@@ -1050,6 +1115,9 @@ class GoogleLiveProvider(AIProviderInterface):
         """
         Google Live can return 1011 internal errors if toolResponse payloads are too large or contain
         unexpected shapes. Keep responses minimal, JSON-serializable, and capped in size.
+        
+        For Vertex AI + hangup_call: include explicit instruction to speak the farewell,
+        since Vertex AI models may not automatically generate audio after tool responses.
         """
         if not isinstance(result, dict):
             payload: Dict[str, Any] = {"status": "success", "message": str(result)}
@@ -1062,6 +1130,13 @@ class GoogleLiveProvider(AIProviderInterface):
             # Always provide a message string (best-effort).
             if "message" not in payload:
                 payload["message"] = str(result.get("message") or "")
+            
+            # For hangup_call on Vertex AI: add explicit instruction to speak farewell
+            use_vertex = getattr(self.config, 'use_vertex_ai', False)
+            if use_vertex and tool_name == "hangup_call" and result.get("will_hangup"):
+                farewell = result.get("message", "")
+                if farewell:
+                    payload["instruction"] = f"Please say this farewell to the caller now: {farewell}"
             # Do NOT include raw MCP result blobs - they are commonly large/nested and cause
             # Google Live to stutter when generating audio. The `message` field already contains
             # the speech text extracted via speech_field/speech_template.
@@ -1855,6 +1930,14 @@ class GoogleLiveProvider(AIProviderInterface):
                 func_args = func_call.get("args", {})
                 call_id = func_call.get("id")
 
+                # Guard: skip duplicate hangup_call if already pending
+                if func_name == "hangup_call" and self._hangup_after_response:
+                    logger.debug(
+                        "Skipping duplicate hangup_call - already pending",
+                        call_id=self._call_id,
+                    )
+                    continue
+
                 logger.info(
                     "Google Live tool call",
                     call_id=self._call_id,
@@ -1908,16 +1991,23 @@ class GoogleLiveProvider(AIProviderInterface):
                         )
 
                 # Send tool response (camelCase per official API)
+                # Vertex AI doesn't accept "id" field in function responses (AAVA-191)
                 safe_result = self._build_tool_response_payload(func_name, result)
+                use_vertex = getattr(self.config, 'use_vertex_ai', False)
+                if use_vertex:
+                    func_response = {
+                        "name": func_name,
+                        "response": safe_result,
+                    }
+                else:
+                    func_response = {
+                        "id": call_id,
+                        "name": func_name,
+                        "response": safe_result,
+                    }
                 tool_response = {
                     "toolResponse": {
-                        "functionResponses": [
-                            {
-                                "id": call_id,
-                                "name": func_name,
-                                "response": safe_result,
-                            }
-                        ]
+                        "functionResponses": [func_response]
                     }
                 }
                 await self._send_message(tool_response)
@@ -1930,7 +2020,29 @@ class GoogleLiveProvider(AIProviderInterface):
 
                 if func_name == "hangup_call" and self._force_farewell_text:
                     self._post_hangup_output_detected = False
-                    self._schedule_forced_farewell_if_needed()
+                    # Send farewell prompt immediately after tool response for both API modes.
+                    # The delayed approach (3s wait) was unreliable - WebSocket or call can close
+                    # before the farewell is sent. Immediate prompt works for both Developer API
+                    # and Vertex AI.
+                    farewell = self._force_farewell_text
+                    farewell_msg = {
+                        "clientContent": {
+                            "turns": [
+                                {
+                                    "role": "user",
+                                    "parts": [{"text": f"[SYSTEM: The hangup_call tool was executed. Please speak this farewell message to the caller verbatim, then stop speaking: \"{farewell}\"]"}],
+                                }
+                            ],
+                            "turnComplete": True,
+                        }
+                    }
+                    await self._send_message(farewell_msg)
+                    self._force_farewell_sent = True
+                    logger.info(
+                        "📢 Sent immediate farewell prompt after hangup_call",
+                        call_id=self._call_id,
+                        farewell_preview=farewell[:60],
+                    )
                 
                 # Log tool call to session for call history (Milestone 21)
                 try:
