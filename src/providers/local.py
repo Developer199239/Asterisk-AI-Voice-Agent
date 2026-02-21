@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import hashlib
 from typing import Callable, Optional, List, Dict, Any
 import websockets
 import websockets.exceptions
@@ -53,6 +54,12 @@ class LocalProvider(AIProviderInterface):
         self._background_reconnect_task: Optional[asyncio.Task] = None
         # Runtime backend reported by local_ai_server in stt_result payloads.
         self._runtime_stt_backend: Optional[str] = None
+        # Runtime status snapshot (from local_ai_server status_response)
+        self._last_status: Optional[Dict[str, Any]] = None
+        self._pending_status_future: Optional[asyncio.Future] = None
+        self._status_lock: asyncio.Lock = asyncio.Lock()
+        # Track last applied system prompt to avoid spamming switch_model.
+        self._last_system_prompt_digest: Optional[str] = None
 
     def _parse_ws_url(self, ws_url: str) -> tuple:
         """Parse host and port from WebSocket URL."""
@@ -111,6 +118,36 @@ class LocalProvider(AIProviderInterface):
     def is_connected(self) -> bool:
         """Return True only when the provider has an active WS connection."""
         return bool(self.websocket is not None and self.websocket.state.name == "OPEN")
+
+    async def _request_status(self, *, timeout_sec: float = 2.0) -> Optional[Dict[str, Any]]:
+        """Fetch current runtime status from local_ai_server over WS.
+
+        This is used to learn runtime-selected STT/TTS/LLM configuration (which can be
+        switched via Admin UI) without requiring an ai-engine restart.
+        """
+        if not self.websocket or self.websocket.state.name != "OPEN":
+            return None
+        async with self._status_lock:
+            if self._pending_status_future and not self._pending_status_future.done():
+                try:
+                    return await asyncio.wait_for(self._pending_status_future, timeout=timeout_sec)
+                except Exception:
+                    return None
+
+            loop = asyncio.get_running_loop()
+            fut: asyncio.Future = loop.create_future()
+            self._pending_status_future = fut
+            try:
+                await self.websocket.send(json.dumps({"type": "status"}))
+                data = await asyncio.wait_for(fut, timeout=timeout_sec)
+                if isinstance(data, dict):
+                    return data
+                return None
+            except Exception:
+                return None
+            finally:
+                if self._pending_status_future is fut:
+                    self._pending_status_future = None
 
     async def _connect_ws(self):
         # Use conservative client settings; server will drive pings if needed
@@ -350,6 +387,7 @@ class LocalProvider(AIProviderInterface):
                     self._tts_audio_meta_by_call.pop(self._active_call_id, None)
                 self._active_call_id = call_id
                 self._runtime_stt_backend = None
+                self._last_status = None
                 # Ensure listener and sender tasks are running (may have crashed)
                 if self._listener_task is None or self._listener_task.done():
                     logger.info("Restarting listener task for reused connection", call_id=call_id)
@@ -357,6 +395,8 @@ class LocalProvider(AIProviderInterface):
                 if self._sender_task is None or self._sender_task.done():
                     logger.info("Restarting sender task for reused connection", call_id=call_id)
                     self._sender_task = asyncio.create_task(self._send_loop())
+                # Best-effort: refresh runtime status so engine gating logic is correct early.
+                await self._prime_runtime_status_and_context(context=context, call_id=call_id)
                 return
             
             # If not connected, initialize first
@@ -365,9 +405,66 @@ class LocalProvider(AIProviderInterface):
                 self._tts_audio_meta_by_call.pop(self._active_call_id, None)
             self._active_call_id = call_id
             self._runtime_stt_backend = None
+            self._last_status = None
+            # Best-effort: refresh runtime status so engine gating logic is correct early.
+            await self._prime_runtime_status_and_context(context=context, call_id=call_id)
         except Exception:
             logger.error("Failed to start session", call_id=call_id, exc_info=True)
             raise
+
+    async def _prime_runtime_status_and_context(self, *, context: Optional[Dict[str, Any]], call_id: str) -> None:
+        """Sync runtime model state and per-call prompt to local_ai_server.
+
+        - Status sync is required because Admin UI can switch models without restarting ai-engine.
+        - Prompt sync is required because ai-engine contexts hold the system prompt, while local-ai-server
+          owns the local LLM prompt used in full mode.
+        """
+        try:
+            status = await self._request_status(timeout_sec=float(self.connect_timeout) or 2.0)
+            if isinstance(status, dict):
+                self._last_status = dict(status)
+                backend = self._normalize_stt_backend(status.get("stt_backend"))
+                if backend:
+                    self._runtime_stt_backend = backend
+                    logger.info("Local AI Server runtime STT backend detected", call_id=call_id, stt_backend=backend)
+        except Exception:
+            logger.debug("Local AI Server status probe failed", call_id=call_id, exc_info=True)
+
+        # Apply system prompt from context (if provided).
+        prompt = ""
+        try:
+            if isinstance(context, dict):
+                prompt = str(context.get("prompt") or context.get("instructions") or "").strip()
+        except Exception:
+            prompt = ""
+        if not prompt:
+            try:
+                prompt = str(getattr(self.config, "instructions", None) or "").strip()
+            except Exception:
+                prompt = ""
+        if prompt:
+            await self._apply_system_prompt(prompt, call_id=call_id)
+
+    async def _apply_system_prompt(self, prompt: str, *, call_id: str) -> None:
+        prompt = (prompt or "").strip()
+        if not prompt or not self.websocket or self.websocket.state.name != "OPEN":
+            return
+        digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        if digest == self._last_system_prompt_digest:
+            return
+        payload = {
+            "type": "switch_model",
+            "dry_run": True,  # system prompt does not require reload_models()
+            "llm_config": {
+                "system_prompt": prompt,
+            },
+        }
+        try:
+            await self.websocket.send(json.dumps(payload))
+            self._last_system_prompt_digest = digest
+            logger.info("Applied Local AI Server system prompt (dry_run)", call_id=call_id, chars=len(prompt))
+        except Exception:
+            logger.debug("Failed applying Local AI Server system prompt", call_id=call_id, exc_info=True)
 
     async def send_audio(self, audio_chunk: bytes):
         """Send audio chunk to Local AI Server for STT processing."""
@@ -654,6 +751,15 @@ class LocalProvider(AIProviderInterface):
                 elif isinstance(message, str):
                     try:
                         data = json.loads(message)
+                        if data.get("type") == "status_response":
+                            self._last_status = dict(data)
+                            backend = self._normalize_stt_backend(data.get("stt_backend"))
+                            if backend:
+                                self._runtime_stt_backend = backend
+                            fut = self._pending_status_future
+                            if fut and not fut.done():
+                                fut.set_result(data)
+                            continue
                         if data.get("type") == "tts_audio":
                             meta_call_id = data.get("call_id") or self._active_call_id
                             if meta_call_id:

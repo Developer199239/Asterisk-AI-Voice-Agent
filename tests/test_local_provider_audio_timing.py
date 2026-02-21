@@ -149,6 +149,34 @@ async def test_stt_result_updates_runtime_backend_for_whisper():
     assert provider.is_whisper_stt_active() is True
 
 
+@pytest.mark.asyncio
+async def test_status_response_updates_runtime_backend():
+    events = []
+
+    async def on_event(event):
+        events.append(event)
+
+    provider = LocalProvider(LocalProviderConfig(stt_backend="vosk"), on_event=on_event)
+    provider._active_call_id = "call-status"
+    provider.websocket = _FakeWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "status_response",
+                    "status": "ok",
+                    "stt_backend": "whisper_cpp",
+                    "tts_backend": "piper",
+                    "models": {},
+                }
+            )
+        ]
+    )
+
+    await provider._receive_loop()
+    assert provider.get_active_stt_backend() == "whisper_cpp"
+    assert provider.is_whisper_stt_active() is True
+
+
 def test_stt_backend_falls_back_to_config_when_runtime_unknown():
     async def on_event(_event):
         return None
