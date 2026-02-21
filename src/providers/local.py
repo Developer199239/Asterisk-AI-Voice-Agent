@@ -36,6 +36,8 @@ class LocalProvider(AIProviderInterface):
         self._active_call_id: Optional[str] = None
         self.input_mode: str = 'mulaw8k'  # or 'pcm16_8k' or 'pcm16_16k'
         self._pending_tts_responses: Dict[str, asyncio.Future] = {}  # Track pending TTS responses
+        self._tts_audio_meta_by_call: Dict[str, Dict[str, Any]] = {}
+        self._agent_audio_done_tasks: Dict[str, asyncio.Task] = {}
         # Initial greeting text provided by engine/config (optional)
         self._initial_greeting: Optional[str] = None
         # Mode for local_ai_server: "full" or "stt" (for hybrid pipelines with cloud LLM)
@@ -342,6 +344,8 @@ class LocalProvider(AIProviderInterface):
             # Check if already connected
             if self.websocket and self.websocket.state.name == "OPEN":
                 logger.debug("WebSocket already connected, reusing connection", call_id=call_id)
+                if self._active_call_id and self._active_call_id != call_id:
+                    self._tts_audio_meta_by_call.pop(self._active_call_id, None)
                 self._active_call_id = call_id
                 # Ensure listener and sender tasks are running (may have crashed)
                 if self._listener_task is None or self._listener_task.done():
@@ -354,6 +358,8 @@ class LocalProvider(AIProviderInterface):
             
             # If not connected, initialize first
             await self.initialize()
+            if self._active_call_id and self._active_call_id != call_id:
+                self._tts_audio_meta_by_call.pop(self._active_call_id, None)
             self._active_call_id = call_id
         except Exception:
             logger.error("Failed to start session", call_id=call_id, exc_info=True)
@@ -447,6 +453,85 @@ class LocalProvider(AIProviderInterface):
                 logger.error("Sender loop error", exc_info=True)
                 await asyncio.sleep(0.1)
 
+    @staticmethod
+    def _normalize_audio_encoding(encoding: Any) -> str:
+        value = (str(encoding or "").strip().lower()) if encoding is not None else ""
+        if value in {"ulaw", "g711_ulaw", "g711u"}:
+            return "mulaw"
+        if value in {"slin16", "slin", "pcm16le"}:
+            return "linear16"
+        if value in {"linear16", "pcm16"}:
+            return value
+        return value or "mulaw"
+
+    @staticmethod
+    def _coerce_sample_rate(rate: Any) -> Optional[int]:
+        try:
+            parsed = int(rate)
+            return parsed if parsed > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _bytes_per_sample(encoding: str) -> int:
+        return 2 if encoding in {"linear16", "pcm16", "slin", "slin16"} else 1
+
+    def _estimate_audio_duration_seconds(self, audio_bytes: bytes, encoding: str, sample_rate: Optional[int]) -> float:
+        if not audio_bytes:
+            return 0.0
+        normalized = self._normalize_audio_encoding(encoding)
+        effective_rate = sample_rate or (8000 if normalized == "mulaw" else 16000)
+        bps = self._bytes_per_sample(normalized)
+        try:
+            return max(0.0, float(len(audio_bytes)) / float(max(1, bps * effective_rate)))
+        except Exception:
+            return 0.0
+
+    def _schedule_agent_audio_done(self, call_id: str, delay_seconds: float) -> None:
+        existing = self._agent_audio_done_tasks.pop(call_id, None)
+        if existing and not existing.done():
+            existing.cancel()
+
+        delay_seconds = max(0.08, float(delay_seconds))
+
+        async def _emit_done() -> None:
+            try:
+                await asyncio.sleep(delay_seconds)
+                if self.on_event:
+                    await self.on_event({
+                        "type": "AgentAudioDone",
+                        "call_id": call_id,
+                    })
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.error("Failed to emit delayed AgentAudioDone", call_id=call_id, exc_info=True)
+            finally:
+                current = self._agent_audio_done_tasks.get(call_id)
+                if current is asyncio.current_task():
+                    self._agent_audio_done_tasks.pop(call_id, None)
+
+        self._agent_audio_done_tasks[call_id] = asyncio.create_task(_emit_done())
+
+    async def _emit_agent_audio(self, call_id: str, audio_bytes: bytes, *, encoding: str, sample_rate: Optional[int]) -> None:
+        if not audio_bytes or not self.on_event:
+            return
+
+        normalized_encoding = self._normalize_audio_encoding(encoding)
+        effective_rate = sample_rate or (8000 if normalized_encoding == "mulaw" else 16000)
+
+        await self.on_event({
+            "type": "AgentAudio",
+            "data": audio_bytes,
+            "call_id": call_id,
+            "encoding": normalized_encoding,
+            "sample_rate": effective_rate,
+        })
+
+        # Hold TTS gating until the audio should be fully played out.
+        duration_s = self._estimate_audio_duration_seconds(audio_bytes, normalized_encoding, effective_rate)
+        self._schedule_agent_audio_done(call_id, duration_s + 0.05)
+
     def set_input_mode(self, mode: str):
         # mode: 'mulaw8k' or 'pcm16_8k'
         self.input_mode = mode
@@ -516,6 +601,12 @@ class LocalProvider(AIProviderInterface):
 
     async def clear_active_call_id(self):
         """Clear the active call ID after TTS playback is complete."""
+        old_call_id = self._active_call_id
+        if old_call_id:
+            self._tts_audio_meta_by_call.pop(old_call_id, None)
+            done_task = self._agent_audio_done_tasks.pop(old_call_id, None)
+            if done_task and not done_task.done():
+                done_task.cancel()
         self._active_call_id = None
         logger.info("Active call ID cleared after TTS completion.")
 
@@ -530,22 +621,30 @@ class LocalProvider(AIProviderInterface):
                     if self._active_call_id is None:
                         logger.debug("Dropping AgentAudio - no active call", message_size=len(message))
                         continue
-                    
-                    audio_event = {'type': 'AgentAudio', 'data': message, 'call_id': self._active_call_id}
-                    if self.on_event:
-                        await self.on_event(audio_event)
-                        # Heuristic: treat each binary message as a complete utterance
-                        # so the engine will play it immediately. If the server later
-                        # streams multi-frame replies, we can switch to explicit JSON
-                        # delimiters (e.g., tts_start/tts_end) instead of this heuristic.
-                        await self.on_event({
-                            'type': 'AgentAudioDone',
-                            'call_id': self._active_call_id,
-                        })
+
+                    call_id = self._active_call_id
+                    meta = self._tts_audio_meta_by_call.get(call_id, {})
+                    encoding = self._normalize_audio_encoding(meta.get("encoding"))
+                    sample_rate = self._coerce_sample_rate(meta.get("sample_rate") or meta.get("sample_rate_hz"))
+                    await self._emit_agent_audio(
+                        call_id,
+                        message,
+                        encoding=encoding,
+                        sample_rate=sample_rate,
+                    )
                 # Handle JSON messages (TTS responses, etc.)
                 elif isinstance(message, str):
                     try:
                         data = json.loads(message)
+                        if data.get("type") == "tts_audio":
+                            meta_call_id = data.get("call_id") or self._active_call_id
+                            if meta_call_id:
+                                self._tts_audio_meta_by_call[meta_call_id] = {
+                                    "encoding": self._normalize_audio_encoding(data.get("encoding")),
+                                    "sample_rate": self._coerce_sample_rate(data.get("sample_rate_hz") or data.get("sample_rate")),
+                                    "byte_length": data.get("byte_length"),
+                                }
+                            continue
                         # Handle TTS responses
                         if data.get("type") == "tts_response":
                             # Find the pending TTS response and complete it
@@ -573,15 +672,14 @@ class LocalProvider(AIProviderInterface):
                                     target_call_id = data.get("call_id") or self._active_call_id
                                     if target_call_id:
                                         try:
-                                            await self.on_event({
-                                                "type": "AgentAudio",
-                                                "data": audio_bytes,
-                                                "call_id": target_call_id,
-                                            })
-                                            await self.on_event({
-                                                "type": "AgentAudioDone",
-                                                "call_id": target_call_id,
-                                            })
+                                            encoding = self._normalize_audio_encoding(data.get("encoding"))
+                                            sample_rate = self._coerce_sample_rate(data.get("sample_rate_hz") or data.get("sample_rate"))
+                                            await self._emit_agent_audio(
+                                                target_call_id,
+                                                audio_bytes,
+                                                encoding=encoding,
+                                                sample_rate=sample_rate,
+                                            )
                                             # Signal farewell TTS received for hangup coordination
                                             if text and text.lower() == "goodbye":
                                                 await self.on_event({

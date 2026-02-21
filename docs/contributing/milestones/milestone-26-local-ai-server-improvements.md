@@ -10,6 +10,7 @@ Key outcomes:
 - UI prevents selecting unsupported backends (capability-aware gating).
 - CPU-only hosts default to a **minimal** runtime (STT + TTS only) so startup doesn’t depend on LLM files.
 - Added repeatable “UI-path” matrix testing script for STT/TTS.
+- Local provider now emits audio format metadata and delayed segment boundaries to prevent Whisper echo loops in ExternalMedia mode.
 
 ## Status
 
@@ -80,6 +81,25 @@ Fix:
   - `full` when `GPU_AVAILABLE=true`
   - `minimal` when `GPU_AVAILABLE=false`
 - `.env.example`: no longer hard-sets `LOCAL_AI_MODE=full`; documents the automatic defaulting.
+
+### 6) ExternalMedia turn-taking hardening for local provider (Whisper loop fix)
+
+Problem observed on Vast GPU testing:
+- With `local_ai_server` + `faster_whisper` STT in `externalmedia`, the agent could keep talking over itself and re-triggering turns.
+- `ai_engine` logs showed provider chunks with `encoding=""`, `sample_rate_hz=0`, and `approx_duration_ms=0.0`.
+- `AgentAudioDone` arrived too early, so TTS gating dropped immediately and caller capture resumed while playback was still in flight.
+
+Root cause:
+- `src/providers/local.py` emitted `AgentAudioDone` immediately for each binary chunk and did not attach `encoding`/`sample_rate` to `AgentAudio`.
+
+Fix:
+- Parse and cache `tts_audio` metadata from local-ai-server.
+- Emit `AgentAudio` with normalized `encoding` and `sample_rate`.
+- For binary and `tts_response` audio, compute estimated duration from bytes/rate and emit `AgentAudioDone` with a short delayed timer after expected playout.
+
+Result:
+- Segment gating remains active during playback, preventing STT from re-ingesting agent audio in Whisper mode.
+- Provider chunk logs now carry usable format/duration signals for diagnostics.
 
 ## Validation Checklist
 
