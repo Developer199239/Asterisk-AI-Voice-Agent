@@ -1210,6 +1210,14 @@ async def rebuild_local_ai_server(request: RebuildRequest):
     # Update .env file with new backend settings AND build args BEFORE rebuild
     env_file = os.path.join(PROJECT_ROOT, ".env")
     env_updates = {}
+    previous_env = _read_env_values(
+        env_file,
+        [
+            "KOKORO_VOICE",
+            "KOKORO_MODE",
+            "KOKORO_MODEL_PATH",
+        ],
+    )
     
     # Set build args in .env so docker-compose.yml picks them up
     if request.include_faster_whisper:
@@ -1244,8 +1252,13 @@ async def rebuild_local_ai_server(request: RebuildRequest):
             elif request.tts_backend == "piper":
                 env_updates["LOCAL_TTS_MODEL_PATH"] = request.tts_voice
             elif request.tts_backend == "kokoro":
-                # Keep the semantics consistent with switch endpoint: `tts_voice` is treated as voice id here.
-                env_updates["KOKORO_VOICE"] = request.tts_voice
+                # Backward-compatible: older UI code used to pass the Kokoro *model path* via tts_voice.
+                # If it looks like a path, treat it as model_path and preserve (or default) the voice id.
+                if "/" in request.tts_voice:
+                    env_updates["KOKORO_MODEL_PATH"] = request.tts_voice
+                    env_updates["KOKORO_VOICE"] = (previous_env.get("KOKORO_VOICE") or "af_heart").strip() or "af_heart"
+                else:
+                    env_updates["KOKORO_VOICE"] = request.tts_voice
     
     if env_updates:
         _update_env_file(env_file, env_updates)

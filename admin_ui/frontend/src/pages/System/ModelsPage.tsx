@@ -510,7 +510,15 @@ const ModelsPage = () => {
                     stt_backend: sttSel.backend || undefined,
                     stt_model: sttSel.modelPath || undefined,
                     tts_backend: ttsSel.backend || undefined,
-                    tts_voice: ttsSel.modelPath || undefined
+                    tts_voice: (() => {
+                        if (!ttsSel.backend) return undefined;
+                        if (ttsSel.backend === 'kokoro') {
+                            // Kokoro selection in this dropdown refers to the model directory; voice is configured separately.
+                            // Preserve existing voice (or default).
+                            return (envConfig.KOKORO_VOICE || 'af_heart').trim();
+                        }
+                        return ttsSel.modelPath || undefined;
+                    })()
                 });
 
                 if (!rebuildRes.data?.success) {
