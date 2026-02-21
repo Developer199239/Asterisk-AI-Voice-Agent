@@ -13,7 +13,7 @@ Key outcomes:
 
 ## Status
 
-**Status**: In Progress (hardening + test matrix validation)  
+**Status**: In Progress (remaining gaps: Kroko embedded + Whisper.cpp model provisioning + optional MeloTTS)  
 **Date**: February 2026  
 **Primary environments**: Ubuntu 24.04 host + Docker Compose; RTX 4090 on Vast.ai; Tailscale for SIP/RTP
 
@@ -55,6 +55,13 @@ Fixes:
   - Kroko embedded (requires `KROKO_SERVER_SHA256`)
 - Env page exposes `KROKO_SERVER_SHA256` when Kroko embedded is enabled.
 
+### 3.1) Kroko embedded hot-switch inference (UI reliability)
+
+Problem: selecting Kroko embedded in the UI could “succeed” but still remain in **cloud mode** (because the UI did not pass `kroko_embedded=true` to the hot-switch payload). Without an API key, this looks like a broken STT backend.
+
+Fix:
+- Admin UI now **infers** `kroko_embedded=true` when switching Kroko with a model path under `/app/models/kroko/...` (or a `.onnx/.data` file path), and verifies the embedded flag in status.
+
 ### 4) Whisper.cpp backend support end-to-end
 
 Fixes:
@@ -85,6 +92,18 @@ What it verifies:
 - Uses the same endpoints the Admin UI uses (`/api/local-ai/switch`, `/api/local-ai/models`, `/api/local-ai/capabilities`).
 - Confirms each selected backend/model switches and reports loaded status.
 
+Auth note:
+- The tool can mint a Bearer token from `JWT_SECRET` in `.env` when run from the repo root (or you can pass `--token` / `--jwt-secret` / `--username`+`--password`).
+
+### Vast.ai RTX 4090 verification (VM)
+
+On a Vast.ai Ubuntu VM with an RTX 4090 and Docker GPU runtime configured, the UI-path matrix produced:
+- **OK**: Vosk + Sherpa (STT), Piper voices (TTS), Kokoro voices (TTS), Faster-Whisper (STT base/small/medium)
+- **Skipped**:
+  - Whisper.cpp: backend installed but no ggml `.bin` model present under `models/stt/`
+  - Kroko embedded: requires rebuilding `local_ai_server` with `INCLUDE_KROKO_EMBEDDED=true`
+  - MeloTTS: requires rebuilding `local_ai_server` with `INCLUDE_MELOTTS=true`
+
 ### Whisper.cpp prerequisites
 - `INCLUDE_WHISPER_CPP=true` in the `local_ai_server` image build.
 - A ggml model file present in `models/stt/` (e.g. `ggml-base.en.bin`).
@@ -97,4 +116,3 @@ What it verifies:
 ## Notes / References
 
 - Operational notes for Vast.ai + Asterisk + Tailscale are kept in `archived/GPU-LEARNINGS.md`.
-
