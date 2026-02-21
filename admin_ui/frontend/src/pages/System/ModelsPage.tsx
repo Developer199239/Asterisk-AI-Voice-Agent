@@ -435,7 +435,7 @@ const ModelsPage = () => {
         if (sttSel.backend === 'kroko' && capabilities && !capabilities.stt?.kroko_embedded?.available) {
             issues.push({
                 key: 'kroko_rebuild',
-                message: 'Kroko embedded binary is not installed in this Local AI image. Rebuild is required and needs KROKO_SERVER_SHA256 set in Env.',
+                message: 'Kroko embedded binary is not installed in this Local AI image. Rebuild is required. For production hardening, set KROKO_SERVER_SHA256 in Env to pin the downloaded binary.',
                 requiresRebuild: true
             });
         }

@@ -1190,19 +1190,15 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         build_args.append("--build-arg")
         build_args.append("INCLUDE_MELOTTS=true")
     if request.include_kroko_embedded:
-        # This backend pulls a vendor binary at build time; require an explicit pinned checksum.
+        # This backend pulls a vendor binary at build time. A pinned checksum is recommended
+        # for production hardening, but should not be required for dev/test rebuilds.
         env_file = os.path.join(PROJECT_ROOT, ".env")
         sha = (_read_env_values(env_file, ["KROKO_SERVER_SHA256"]).get("KROKO_SERVER_SHA256") or "").strip()
-        if not sha:
-            return RebuildResponse(
-                success=False,
-                message="Kroko embedded rebuild requires KROKO_SERVER_SHA256 to be set in .env",
-                phase="error",
-            )
         build_args.append("--build-arg")
         build_args.append("INCLUDE_KROKO_EMBEDDED=true")
-        build_args.append("--build-arg")
-        build_args.append(f"KROKO_SERVER_SHA256={sha}")
+        if sha:
+            build_args.append("--build-arg")
+            build_args.append(f"KROKO_SERVER_SHA256={sha}")
     
     if not build_args:
         return RebuildResponse(
