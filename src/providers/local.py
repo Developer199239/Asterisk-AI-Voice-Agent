@@ -51,6 +51,8 @@ class LocalProvider(AIProviderInterface):
         self._was_connected: bool = False
         # Background reconnect task (runs when previously connected server disconnects)
         self._background_reconnect_task: Optional[asyncio.Task] = None
+        # Runtime backend reported by local_ai_server in stt_result payloads.
+        self._runtime_stt_backend: Optional[str] = None
 
     def _parse_ws_url(self, ws_url: str) -> tuple:
         """Parse host and port from WebSocket URL."""
@@ -347,6 +349,7 @@ class LocalProvider(AIProviderInterface):
                 if self._active_call_id and self._active_call_id != call_id:
                     self._tts_audio_meta_by_call.pop(self._active_call_id, None)
                 self._active_call_id = call_id
+                self._runtime_stt_backend = None
                 # Ensure listener and sender tasks are running (may have crashed)
                 if self._listener_task is None or self._listener_task.done():
                     logger.info("Restarting listener task for reused connection", call_id=call_id)
@@ -361,6 +364,7 @@ class LocalProvider(AIProviderInterface):
             if self._active_call_id and self._active_call_id != call_id:
                 self._tts_audio_meta_by_call.pop(self._active_call_id, None)
             self._active_call_id = call_id
+            self._runtime_stt_backend = None
         except Exception:
             logger.error("Failed to start session", call_id=call_id, exc_info=True)
             raise
@@ -471,6 +475,20 @@ class LocalProvider(AIProviderInterface):
             return parsed if parsed > 0 else None
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _normalize_stt_backend(value: Any) -> Optional[str]:
+        backend = str(value or "").strip().lower()
+        return backend or None
+
+    def get_active_stt_backend(self) -> Optional[str]:
+        runtime_backend = self._normalize_stt_backend(self._runtime_stt_backend)
+        if runtime_backend:
+            return runtime_backend
+        return self._normalize_stt_backend(getattr(self.config, "stt_backend", None))
+
+    def is_whisper_stt_active(self) -> bool:
+        return (self.get_active_stt_backend() or "") in {"faster_whisper", "whisper_cpp"}
 
     @staticmethod
     def _bytes_per_sample(encoding: str) -> int:
@@ -694,6 +712,9 @@ class LocalProvider(AIProviderInterface):
                                         logger.debug("Dropping TTS audio - no active call to attribute", size=len(audio_bytes))
                         elif data.get("type") == "stt_result":
                             # Handle STT result - emit as transcript for conversation history
+                            reported_backend = self._normalize_stt_backend(data.get("stt_backend"))
+                            if reported_backend:
+                                self._runtime_stt_backend = reported_backend
                             text = data.get("text", "").strip()
                             call_id = data.get("call_id") or self._active_call_id
                             is_final = data.get("is_final", True)

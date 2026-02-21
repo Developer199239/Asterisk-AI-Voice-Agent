@@ -2758,6 +2758,7 @@ class LocalAIServer:
             "mode": source_mode,
             "is_final": is_final,
             "is_partial": is_partial,
+            "stt_backend": self.stt_backend,
         }
         if confidence is not None:
             payload["confidence"] = confidence
@@ -3143,6 +3144,7 @@ class LocalAIServer:
                     "is_final": True,
                     "is_partial": False,
                     "confidence": None,
+                    "stt_backend": self.stt_backend,
                     "error": "stt_unavailable",
                 }
                 if request_id:

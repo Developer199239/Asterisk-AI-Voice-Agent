@@ -8098,15 +8098,29 @@ class Engine:
                     except Exception:
                         logger.debug("Failed to end segment gating", call_id=call_id, exc_info=True)
                     # CRITICAL FIX #1: Do NOT discard call_id for providers with server-side AEC
-                    # (OpenAI, Deepgram, etc.) — discarding causes 20+ re-gating interruptions.
-                    # BUT google_live lacks server-side echo cancellation, so we MUST re-arm
-                    # gating at each segment boundary so silence frames replace echo during
-                    # the next model response.
-                    _SELF_GATING_PROVIDERS = {'google_live'}
+                    # (OpenAI, Deepgram, etc.) — discarding causes repeated re-gating interruptions.
+                    # Re-arm only for providers/backends that need self-echo suppression.
                     _prov = getattr(session, 'provider_name', None)
-                    if _prov in _SELF_GATING_PROVIDERS:
+                    should_rearm_segment_gating = _prov == "google_live"
+                    if not should_rearm_segment_gating and _prov == "local":
+                        try:
+                            local_provider = self._call_providers.get(call_id)
+                            if local_provider and hasattr(local_provider, "is_whisper_stt_active"):
+                                should_rearm_segment_gating = bool(local_provider.is_whisper_stt_active())
+                        except Exception:
+                            logger.debug(
+                                "Failed detecting LocalProvider STT backend for segment-gating rearm",
+                                call_id=call_id,
+                                exc_info=True,
+                            )
+                    if should_rearm_segment_gating:
                         try:
                             self._segment_tts_active.discard(call_id)
+                            logger.debug(
+                                "Re-armed segment gating after AgentAudioDone",
+                                call_id=call_id,
+                                provider=_prov,
+                            )
                         except Exception:
                             pass
                 else:

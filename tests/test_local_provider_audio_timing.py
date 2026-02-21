@@ -118,3 +118,41 @@ async def test_binary_audio_defaults_to_mulaw_when_metadata_missing():
     assert agent_events[0]["sample_rate"] == 8000
     assert len(done_events) == 1
     await provider.clear_active_call_id()
+
+
+@pytest.mark.asyncio
+async def test_stt_result_updates_runtime_backend_for_whisper():
+    events = []
+
+    async def on_event(event):
+        events.append(event)
+
+    provider = LocalProvider(LocalProviderConfig(stt_backend="vosk"), on_event=on_event)
+    provider._active_call_id = "call-whisper"
+    provider.websocket = _FakeWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "stt_result",
+                    "call_id": "call-whisper",
+                    "text": "hello",
+                    "is_final": True,
+                    "stt_backend": "faster_whisper",
+                }
+            )
+        ]
+    )
+
+    await provider._receive_loop()
+
+    assert provider.get_active_stt_backend() == "faster_whisper"
+    assert provider.is_whisper_stt_active() is True
+
+
+def test_stt_backend_falls_back_to_config_when_runtime_unknown():
+    async def on_event(_event):
+        return None
+
+    provider = LocalProvider(LocalProviderConfig(stt_backend="sherpa"), on_event=on_event)
+    assert provider.get_active_stt_backend() == "sherpa"
+    assert provider.is_whisper_stt_active() is False
