@@ -47,6 +47,9 @@ class LocalAIConfig:
 
     llm_model_path: str = "/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
     llm_threads: int = 4
+    # NOTE: 768 is intentionally small for latency, but it is often too small for
+    # realistic system prompts (e.g. demo contexts). We keep the dataclass default
+    # conservative and choose a smarter default in from_env() based on GPU availability.
     llm_context: int = 768
     llm_batch: int = 128
     llm_max_tokens: int = 64
@@ -106,6 +109,16 @@ class LocalAIConfig:
             if token.strip()
         ] or ["<|user|>", "<|assistant|>", "<|end|>"]
 
+        # Default context window:
+        # - If LOCAL_LLM_CONTEXT is set, respect it.
+        # - Otherwise, if GPU is available (per preflight), default larger so typical
+        #   system prompts don't exceed n_ctx and crash llama.cpp.
+        raw_llm_context = (os.getenv("LOCAL_LLM_CONTEXT") or "").strip()
+        if raw_llm_context:
+            llm_context = int(raw_llm_context)
+        else:
+            llm_context = 2048 if _parse_bool(os.getenv("GPU_AVAILABLE", "0"), default=False) else 768
+
         return cls(
             runtime_mode=runtime_mode,
             ws_host=os.getenv("LOCAL_WS_HOST", "127.0.0.1"),
@@ -142,7 +155,7 @@ class LocalAIConfig:
                 "/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf",
             ),
             llm_threads=int(os.getenv("LOCAL_LLM_THREADS", str(default_threads))),
-            llm_context=int(os.getenv("LOCAL_LLM_CONTEXT", "768")),
+            llm_context=llm_context,
             llm_batch=int(os.getenv("LOCAL_LLM_BATCH", "128")),
             llm_max_tokens=int(os.getenv("LOCAL_LLM_MAX_TOKENS", "64")),
             llm_temperature=float(os.getenv("LOCAL_LLM_TEMPERATURE", "0.4")),

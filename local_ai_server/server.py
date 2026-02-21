@@ -1936,12 +1936,35 @@ class LocalAIServer:
                     logging.warning("LLM model not loaded, using fallback")
                     return "I'm here to help you. How can I assist you today?"
 
+                prompt_tokens = self._count_prompt_tokens(prompt)
+                # Safety margin: llama.cpp may add a token (BOS) depending on configuration.
+                safety_margin = 8
+                remaining = self.llm_context - prompt_tokens - safety_margin
+                if remaining <= 0:
+                    logging.error(
+                        "LLM prompt exceeds context window: prompt_tokens=%s n_ctx=%s (margin=%s)",
+                        prompt_tokens,
+                        self.llm_context,
+                        safety_margin,
+                    )
+                    return "I'm here to help you. How can I assist you today?"
+
+                max_tokens = min(self.llm_max_tokens, max(1, remaining))
+                if max_tokens != self.llm_max_tokens:
+                    logging.warning(
+                        "LLM max_tokens reduced to fit context: requested=%s using=%s prompt_tokens=%s n_ctx=%s",
+                        self.llm_max_tokens,
+                        max_tokens,
+                        prompt_tokens,
+                        self.llm_context,
+                    )
+
                 loop = asyncio.get_running_loop()
                 started = loop.time()
                 output = await asyncio.to_thread(
                     self.llm_model,
                     prompt,
-                    max_tokens=self.llm_max_tokens,
+                    max_tokens=max_tokens,
                     stop=self.llm_stop_tokens,
                     echo=False,
                     temperature=self.llm_temperature,
@@ -1980,7 +2003,15 @@ class LocalAIServer:
 
     def _build_phi_prompt(self, user_text: str) -> str:
         user_text = (user_text or "").strip()
-        segments = ["<|system|>", self.llm_system_prompt.strip(), "<|user|>"]
+        segments = ["<|system|>", (self.llm_system_prompt or "").strip(), "<|user|>"]
+        segments.append(user_text if user_text else "Hello")
+        segments.append("<|assistant|>")
+        return "\n".join(segments) + "\n"
+
+    def _build_phi_prompt_with_system(self, user_text: str, system_prompt: str) -> str:
+        user_text = (user_text or "").strip()
+        system_prompt = (system_prompt or "").strip()
+        segments = ["<|system|>", system_prompt, "<|user|>"]
         segments.append(user_text if user_text else "Hello")
         segments.append("<|assistant|>")
         return "\n".join(segments) + "\n"
@@ -1994,6 +2025,65 @@ class LocalAIServer:
             while cleaned.startswith(marker):
                 cleaned = cleaned[len(marker):].lstrip()
         return cleaned
+
+    def _truncate_system_prompt_to_fit(self, user_text: str, max_prompt_tokens: int) -> Tuple[str, bool]:
+        """
+        Ensure the system prompt doesn't make the total prompt exceed n_ctx.
+
+        This is a last-resort guard to prevent llama.cpp hard failures when the
+        configured context window is too small for a large system prompt.
+        """
+        system_prompt = (self.llm_system_prompt or "").strip()
+        if not system_prompt:
+            return system_prompt, False
+
+        full_prompt = self._build_phi_prompt_with_system(user_text, system_prompt)
+        if self._count_prompt_tokens(full_prompt) <= max_prompt_tokens:
+            return system_prompt, False
+
+        low, high = 0, len(system_prompt)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = system_prompt[:mid].rstrip()
+            prompt = self._build_phi_prompt_with_system(user_text, candidate)
+            tokens = self._count_prompt_tokens(prompt)
+            if tokens <= max_prompt_tokens:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        return best, True
+
+    def _truncate_user_text_to_fit(
+        self, system_prompt: str, user_text: str, max_prompt_tokens: int
+    ) -> Tuple[str, bool]:
+        """
+        Final guard: truncate user text (keep most recent tail) until the prompt fits.
+        """
+        user_text = (user_text or "").strip()
+        if not user_text:
+            return user_text, False
+
+        full_prompt = self._build_phi_prompt_with_system(user_text, system_prompt)
+        if self._count_prompt_tokens(full_prompt) <= max_prompt_tokens:
+            return user_text, False
+
+        low, high = 0, len(user_text)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = user_text[-mid:].lstrip() if mid else ""
+            prompt = self._build_phi_prompt_with_system(candidate, system_prompt)
+            tokens = self._count_prompt_tokens(prompt)
+            if tokens <= max_prompt_tokens:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        return best, True
 
     def _prepare_llm_prompt(
         self, session: SessionContext, new_turn: str
@@ -2014,9 +2104,49 @@ class LocalAIServer:
             truncated = True
 
         trimmed_user_text = "\n\n".join(trimmed_turns).strip()
-        prompt_text = self._build_phi_prompt(trimmed_user_text)
+        # Ensure the final prompt fits the model context window (n_ctx). If the
+        # system prompt alone is too large, truncate it as a last resort.
+        safety_margin = 8
+        max_allowed_prompt_tokens = max(self.llm_context - safety_margin, 32)
+
+        system_prompt = (self.llm_system_prompt or "").strip()
+        prompt_text = self._build_phi_prompt_with_system(trimmed_user_text, system_prompt)
         prompt_text = self._strip_leading_bos(prompt_text)
         prompt_tokens = self._count_prompt_tokens(prompt_text)
+
+        system_truncated = False
+        user_truncated = False
+        if prompt_tokens > max_allowed_prompt_tokens:
+            system_prompt, system_truncated = self._truncate_system_prompt_to_fit(
+                trimmed_user_text, max_allowed_prompt_tokens
+            )
+            prompt_text = self._build_phi_prompt_with_system(trimmed_user_text, system_prompt)
+            prompt_text = self._strip_leading_bos(prompt_text)
+            prompt_tokens = self._count_prompt_tokens(prompt_text)
+
+        if prompt_tokens > max_allowed_prompt_tokens:
+            trimmed_user_text, user_truncated = self._truncate_user_text_to_fit(
+                system_prompt, trimmed_user_text, max_allowed_prompt_tokens
+            )
+            prompt_text = self._build_phi_prompt_with_system(trimmed_user_text, system_prompt)
+            prompt_text = self._strip_leading_bos(prompt_text)
+            prompt_tokens = self._count_prompt_tokens(prompt_text)
+
+        if system_truncated or user_truncated:
+            truncated = True
+            if system_truncated:
+                logging.warning(
+                    "🧠 LLM PROMPT - System prompt truncated to fit context n_ctx=%s max_prompt_tokens=%s",
+                    self.llm_context,
+                    max_allowed_prompt_tokens,
+                )
+            if user_truncated:
+                logging.warning(
+                    "🧠 LLM PROMPT - User text truncated to fit context n_ctx=%s max_prompt_tokens=%s",
+                    self.llm_context,
+                    max_allowed_prompt_tokens,
+                )
+
         session.llm_user_turns = trimmed_turns
         return prompt_text, prompt_tokens, truncated, raw_tokens
 

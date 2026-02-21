@@ -1,138 +1,73 @@
-# Milestone 26: Local AI Server Improvements (GPU Hardening + UI Model Switching)
+# Milestone 26: Local AI Server Improvements (GPU hardening + Whisper stability)
 
 ## Summary
 
-Harden `local_ai_server` so it can be deployed on **real GPU hosts** (e.g. Vast.ai) and reliably **switch/load models via the Admin UI** without confusing “it’s running but not loading” failure modes.
+Harden the fully-local `local_ai_server` path (STT/LLM/TTS over WebSocket) for GPU cloud testing (Vast.ai) with reliable model switching via Admin UI, Whisper STT stability on ExternalMedia, and safe/consistent LLM prompting (including large system prompts).
 
-Key outcomes:
-- Reliable GPU builds respect `.env` build toggles (Compose override parity).
-- Kokoro TTS can be hot-switched even when `llama_cpp` is present (CUDA import-order collision fix).
-- UI prevents selecting unsupported backends (capability-aware gating).
-- CPU-only hosts default to a **minimal** runtime (STT + TTS only) so startup doesn’t depend on LLM files.
-- Added repeatable “UI-path” matrix testing script for STT/TTS.
-- Local provider now emits audio format metadata and delayed segment boundaries to prevent Whisper echo loops in ExternalMedia mode.
+## Status: 🚧 In Progress
 
-## Status
+## Problem Statement
 
-**Status**: In Progress (remaining gaps: Kroko embedded + Whisper.cpp model provisioning + optional MeloTTS)  
-**Date**: February 2026  
-**Primary environments**: Ubuntu 24.04 host + Docker Compose; RTX 4090 on Vast.ai; Tailscale for SIP/RTP
+Testing the “Fully Local” provider on a rented GPU exposed a few reliability gaps:
 
-## Motivation
+- **Whisper STT loop / self-echo**: with ExternalMedia, the agent could re-enter capture too early and keep responding while TTS was still playing.
+- **Local LLM prompt mismatch**: the AI engine’s configured context/system prompt wasn’t consistently applied to `local_ai_server`, leading to irrelevant responses.
+- **LLM context overflow**: large system prompts could exceed `LOCAL_LLM_CONTEXT` (default `768`) and crash llama.cpp with `Requested tokens exceed context window`.
+- **Cloud reality**: Vast container templates don’t provide `systemd`/Docker daemon; the “GA” compose stack requires a VM instance + working NVIDIA Container Toolkit.
 
-Operators need a predictable path to:
-1) spin up a CPU-only local stack (STT+TTS) that starts fast and never blocks on LLM files, and
-2) upgrade to GPU acceleration + richer model matrix (Whisper, Kokoro, etc.) with **UI-managed switching** that matches what the server can actually load.
+## Solution
+
+### 1) Whisper-only stability for continuous-stream transport
+
+Make “segment gating re-arm” behavior apply to the Local provider only when the runtime STT backend is Whisper, to avoid regressions in Vosk/Sherpa/Kroko.
+
+### 2) Prompt sync between AI engine and local_ai_server
+
+At session start, push the AI engine’s system prompt to `local_ai_server` so local LLM inference matches the configured context.
+
+### 3) LLM context hardening
+
+- Default the local server’s context window to **2048** when `GPU_AVAILABLE=true` (unless overridden via `LOCAL_LLM_CONTEXT`).
+- Add server-side guards so **no prompt** can exceed `n_ctx`:
+  - Truncate system prompt as a last resort when the configured context is too small.
+  - Reduce `max_tokens` dynamically based on prompt size.
 
 ## Implementation Details
 
-### 1) GPU Compose override parity
+### Local AI Server
 
-Problem: `docker-compose.gpu.yml` previously replaced the build definition and **dropped build args**, so `.env` toggles like `INCLUDE_FASTER_WHISPER=true` had no effect on GPU builds.
+| File | Change |
+|------|--------|
+| `local_ai_server/config.py` | Default `llm_context` to `2048` when `GPU_AVAILABLE=true` unless `LOCAL_LLM_CONTEXT` is set |
+| `local_ai_server/server.py` | Guard llama.cpp calls: reduce `max_tokens` to fit context, and prevent prompt > `n_ctx` |
+| `local_ai_server/server.py` | Prompt builder hardening: if system prompt alone exceeds `n_ctx`, truncate it (last resort) |
+| `local_ai_server/server.py` | Emit `stt_backend` field in `stt_result` payloads for engine-side backend-aware logic |
 
-Fix:
-- `docker-compose.gpu.yml` forwards the same build args as `docker-compose.yml` (plus Kroko checksum args).
+### AI Engine / Local Provider
 
-### 2) Kokoro TTS hot-switch reliability (CUDA runtime collision)
+| File | Change |
+|------|--------|
+| `src/providers/local.py` | On session start, request `status` from `local_ai_server` and sync `llm_config.system_prompt` (deduped by digest) |
+| `src/providers/local.py` | Track runtime STT backend from `stt_result.stt_backend` (`faster_whisper` / `whisper_cpp`) |
+| `src/engine.py` | Re-arm segment gating for `local` provider **only when** runtime STT backend is Whisper |
 
-Symptom: switching to Kokoro via UI could fail with a misleading “package not installed” message.
+### Tests
 
-Root cause: native extension import order could cause `llama_cpp` to load a CUDA runtime that later breaks `torch` import (required by Kokoro).
+| File | Change |
+|------|--------|
+| `tests/test_local_ai_server_config.py` | Verify `LOCAL_LLM_CONTEXT` default behavior (GPU=2048, CPU=768, env override respected) |
+| `tests/test_local_provider_audio_timing.py` | Coverage for Whisper-only gating + backend detection (added during this milestone) |
 
-Fix:
-- `local_ai_server/optional_imports.py`: best-effort preload `torch` before importing `llama_cpp`.
-- `local_ai_server/tts_backends.py`: log ImportError with traceback (`exc_info=True`) so operators see the real failure.
+## Operational Notes (Vast.ai)
 
-### 3) Capability-aware UI gating + rebuild support
+- **Container/Jupyter templates**: good for quick model/latency benchmarking, but typically **don’t** run Docker daemon (`preflight.sh` will fail).
+- **VM templates**: required for the full compose stack and long-running services.
+- **GPU Docker**: ensure NVIDIA Container Toolkit is configured so Compose can allocate `--gpus`.
 
-Problem: UI allowed selecting backends that the current `local_ai_server` image cannot run (e.g. Kroko embedded without the binary; Whisper backends without packages).
+## Verification Checklist
 
-Fixes:
-- Wizard STT selection now disables incompatible choices based on `/api/local-ai/capabilities`.
-- Models page adds compatibility warnings + force-rebuild flow for:
-  - Faster-Whisper
-  - Whisper.cpp
-  - MeloTTS
-  - Kroko embedded (requires `KROKO_SERVER_SHA256`)
-- Env page exposes `KROKO_SERVER_SHA256` when Kroko embedded is enabled.
+- `local_ai_server` starts on GPU with `LOCAL_LLM_GPU_LAYERS=-1` and `LOCAL_LLM_CONTEXT` unset → `llm_context=2048`.
+- Switching to Whisper STT (Faster-Whisper or whisper.cpp) no longer causes continuous self-talk on ExternalMedia.
+- Switching between STT/TTS/LLM models via Admin UI succeeds for shipped backends; failures are capability-aware and actionable.
+- No `Requested tokens exceed context window` errors in `local_ai_server` logs when using the default `default` context prompt.
 
-### 3.1) Kroko embedded hot-switch inference (UI reliability)
-
-Problem: selecting Kroko embedded in the UI could “succeed” but still remain in **cloud mode** (because the UI did not pass `kroko_embedded=true` to the hot-switch payload). Without an API key, this looks like a broken STT backend.
-
-Fix:
-- Admin UI now **infers** `kroko_embedded=true` when switching Kroko with a model path under `/app/models/kroko/...` (or a `.onnx/.data` file path), and verifies the embedded flag in status.
-
-### 4) Whisper.cpp backend support end-to-end
-
-Fixes:
-- `local_ai_server/control_plane.py`: correctly applies `stt_model_path` to `whisper_cpp_model_path` when switching backend.
-- Admin UI switch payload + env/yaml persistence support `whisper_cpp`.
-- Admin UI model scanner recognizes `models/stt/ggml-*.bin` (or `*whisper*.bin`) as `whisper_cpp` models.
-
-### 5) CPU-first minimal defaults
-
-Goal: on CPU-only hosts, `local_ai_server` should start with **only STT+TTS**, defaulting to:
-- STT: `vosk`
-- TTS: `piper`
-
-Fix:
-- `local_ai_server/config.py`: if `LOCAL_AI_MODE` is unset, default to:
-  - `full` when `GPU_AVAILABLE=true`
-  - `minimal` when `GPU_AVAILABLE=false`
-- `.env.example`: no longer hard-sets `LOCAL_AI_MODE=full`; documents the automatic defaulting.
-
-### 6) ExternalMedia turn-taking hardening for local provider (Whisper loop fix)
-
-Problem observed on Vast GPU testing:
-- With `local_ai_server` + `faster_whisper` STT in `externalmedia`, the agent could keep talking over itself and re-triggering turns.
-- `ai_engine` logs showed provider chunks with `encoding=""`, `sample_rate_hz=0`, and `approx_duration_ms=0.0`.
-- `AgentAudioDone` arrived too early, so TTS gating dropped immediately and caller capture resumed while playback was still in flight.
-
-Root cause:
-- `src/providers/local.py` emitted `AgentAudioDone` immediately for each binary chunk and did not attach `encoding`/`sample_rate` to `AgentAudio`.
-
-Fix:
-- Parse and cache `tts_audio` metadata from local-ai-server.
-- Emit `AgentAudio` with normalized `encoding` and `sample_rate`.
-- For binary and `tts_response` audio, compute estimated duration from bytes/rate and emit `AgentAudioDone` with a short delayed timer after expected playout.
-
-Result:
-- Segment gating remains active during playback, preventing STT from re-ingesting agent audio in Whisper mode.
-- Provider chunk logs now carry usable format/duration signals for diagnostics.
-
-## Validation Checklist
-
-### UI-path model switching matrix (recommended)
-
-Run on the host running Admin UI:
-- `python3 tools/ui_model_matrix.py --all-tts --all-stt --json-out /tmp/aava-model-matrix.json`
-
-What it verifies:
-- Uses the same endpoints the Admin UI uses (`/api/local-ai/switch`, `/api/local-ai/models`, `/api/local-ai/capabilities`).
-- Confirms each selected backend/model switches and reports loaded status.
-
-Auth note:
-- The tool can mint a Bearer token from `JWT_SECRET` in `.env` when run from the repo root (or you can pass `--token` / `--jwt-secret` / `--username`+`--password`).
-
-### Vast.ai RTX 4090 verification (VM)
-
-On a Vast.ai Ubuntu VM with an RTX 4090 and Docker GPU runtime configured, the UI-path matrix produced:
-- **OK**: Vosk + Sherpa (STT), Piper voices (TTS), Kokoro voices (TTS), Faster-Whisper (STT base/small/medium)
-- **Skipped**:
-  - Whisper.cpp: backend installed but no ggml `.bin` model present under `models/stt/`
-  - Kroko embedded: requires rebuilding `local_ai_server` with `INCLUDE_KROKO_EMBEDDED=true`
-  - MeloTTS: requires rebuilding `local_ai_server` with `INCLUDE_MELOTTS=true`
-
-### Whisper.cpp prerequisites
-- `INCLUDE_WHISPER_CPP=true` in the `local_ai_server` image build.
-- A ggml model file present in `models/stt/` (e.g. `ggml-base.en.bin`).
-
-### Kroko embedded prerequisites
-- `INCLUDE_KROKO_EMBEDDED=true`
-- `KROKO_SERVER_SHA256=<sha256>` set in `.env`
-- a Kroko model file under `models/kroko/`
-
-## Notes / References
-
-- Operational notes for Vast.ai + Asterisk + Tailscale are kept in `archived/GPU-LEARNINGS.md`.
