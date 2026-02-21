@@ -4,8 +4,8 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 as builder
 # Build args - keep parity with Dockerfile where possible
 ARG INCLUDE_VOSK=true
 ARG INCLUDE_SHERPA=true
-ARG INCLUDE_FASTER_WHISPER=false
-ARG INCLUDE_WHISPER_CPP=false
+ARG INCLUDE_FASTER_WHISPER=true
+ARG INCLUDE_WHISPER_CPP=true
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false

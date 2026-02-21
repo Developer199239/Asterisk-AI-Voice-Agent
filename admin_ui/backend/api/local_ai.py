@@ -142,6 +142,8 @@ class SwitchModelRequest(BaseModel):
     kroko_url: Optional[str] = None
     # Sherpa explicit path (optional; preferred over model_path)
     sherpa_model_path: Optional[str] = None
+    # Whisper.cpp explicit path (optional; preferred over model_path)
+    whisper_cpp_model_path: Optional[str] = None
     # Kokoro mode/model controls (optional)
     kokoro_mode: Optional[str] = None  # local|api|hf
     kokoro_model_path: Optional[str] = None
@@ -204,6 +206,11 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 if sherpa_path:
                     env_updates["SHERPA_MODEL_PATH"] = sherpa_path
                     yaml_updates["sherpa_model_path"] = sherpa_path
+            elif request.backend == "whisper_cpp":
+                whisper_path = request.whisper_cpp_model_path or request.model_path
+                if whisper_path:
+                    env_updates["WHISPER_CPP_MODEL_PATH"] = whisper_path
+                    yaml_updates["whisper_cpp_model_path"] = whisper_path
             elif request.backend == "faster_whisper":
                 if request.model_path:
                     env_updates["FASTER_WHISPER_MODEL"] = request.model_path
@@ -267,6 +274,10 @@ def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[D
             sherpa_path = request.sherpa_model_path or request.model_path
             if sherpa_path:
                 payload["sherpa_model_path"] = sherpa_path
+        if request.backend == "whisper_cpp":
+            whisper_path = request.whisper_cpp_model_path or request.model_path
+            if whisper_path:
+                payload["stt_model_path"] = whisper_path
         if request.backend == "faster_whisper" and request.model_path:
             payload["stt_config"] = {"model": request.model_path}
         if request.backend == "kroko":
@@ -344,7 +355,8 @@ async def list_available_models():
         "vosk": [],
         "sherpa": [],
         "kroko": [],
-        "faster_whisper": []
+        "faster_whisper": [],
+        "whisper_cpp": [],
     }
     tts_models: Dict[str, List[ModelInfo]] = {
         "piper": [],
@@ -385,6 +397,17 @@ async def list_available_models():
                         type="stt",
                         backend="kroko",
                         size_mb=get_dir_size_mb(item_path)
+                    ))
+            elif os.path.isfile(item_path):
+                lower = item.lower()
+                if lower.endswith(".bin") and (lower.startswith("ggml-") or "whisper" in lower):
+                    stt_models["whisper_cpp"].append(ModelInfo(
+                        id=f"whisper_cpp_{item}",
+                        name=f"Whisper.cpp ({item})",
+                        path=f"/app/models/stt/{item}",
+                        type="stt",
+                        backend="whisper_cpp",
+                        size_mb=get_file_size_mb(item_path),
                     ))
 
     # Scan Kroko embedded models (recommended location: models/kroko/*.data or *.onnx)
@@ -488,7 +511,8 @@ async def get_backend_capabilities():
             "sherpa": {"available": False, "reason": ""},
             "kroko_embedded": {"available": False, "reason": ""},
             "kroko_cloud": {"available": True, "reason": "Cloud API (requires KROKO_API_KEY)"},
-            "faster_whisper": {"available": False, "reason": ""}
+            "faster_whisper": {"available": False, "reason": ""},
+            "whisper_cpp": {"available": False, "reason": ""},
         },
         "tts": {
             "piper": {"available": False, "reason": ""},
@@ -533,6 +557,10 @@ async def get_backend_capabilities():
                     capabilities["stt"]["faster_whisper"] = {"available": True, "reason": "Faster-Whisper installed"}
                 else:
                     capabilities["stt"]["faster_whisper"]["reason"] = "Rebuild with INCLUDE_FASTER_WHISPER=true"
+                if server_caps.get("whisper_cpp"):
+                    capabilities["stt"]["whisper_cpp"] = {"available": True, "reason": "Whisper.cpp installed"}
+                else:
+                    capabilities["stt"]["whisper_cpp"]["reason"] = "Rebuild with INCLUDE_WHISPER_CPP=true"
 
                 # TTS backends
                 if server_caps.get("piper"):
@@ -683,6 +711,9 @@ async def switch_model(request: SwitchModelRequest):
                 return (not expected) or stt.get("path") == expected
             if request.backend == "faster_whisper" and request.model_path:
                 return stt.get("path") == request.model_path
+            if request.backend == "whisper_cpp":
+                expected = request.whisper_cpp_model_path or request.model_path
+                return (not expected) or stt.get("path") == expected
             if request.backend == "kroko":
                 if request.kroko_embedded is not None and bool(kroko.get("embedded")) != bool(request.kroko_embedded):
                     return False
@@ -758,7 +789,7 @@ async def switch_model(request: SwitchModelRequest):
     
     # 1. Save current config for potential rollback
     previous_env = _read_env_values(env_file, [
-        "LOCAL_STT_BACKEND", "LOCAL_STT_MODEL_PATH", "SHERPA_MODEL_PATH",
+        "LOCAL_STT_BACKEND", "LOCAL_STT_MODEL_PATH", "SHERPA_MODEL_PATH", "WHISPER_CPP_MODEL_PATH",
         "KROKO_LANGUAGE", "KROKO_EMBEDDED", "KROKO_PORT", "KROKO_URL", "KROKO_MODEL_PATH",
         "LOCAL_TTS_BACKEND", "LOCAL_TTS_MODEL_PATH",
         "KOKORO_MODE", "KOKORO_VOICE", "KOKORO_MODEL_PATH",
@@ -1061,7 +1092,9 @@ except ImportError:
 class RebuildRequest(BaseModel):
     """Request to rebuild local-ai-server with specific backends."""
     include_faster_whisper: bool = False
+    include_whisper_cpp: bool = False
     include_melotts: bool = False
+    include_kroko_embedded: bool = False
     # STT/TTS config to apply after rebuild
     stt_backend: Optional[str] = None
     stt_model: Optional[str] = None
@@ -1093,9 +1126,26 @@ async def rebuild_local_ai_server(request: RebuildRequest):
     if request.include_faster_whisper:
         build_args.append("--build-arg")
         build_args.append("INCLUDE_FASTER_WHISPER=true")
+    if request.include_whisper_cpp:
+        build_args.append("--build-arg")
+        build_args.append("INCLUDE_WHISPER_CPP=true")
     if request.include_melotts:
         build_args.append("--build-arg")
         build_args.append("INCLUDE_MELOTTS=true")
+    if request.include_kroko_embedded:
+        # This backend pulls a vendor binary at build time; require an explicit pinned checksum.
+        env_file = os.path.join(PROJECT_ROOT, ".env")
+        sha = (_read_env_values(env_file, ["KROKO_SERVER_SHA256"]).get("KROKO_SERVER_SHA256") or "").strip()
+        if not sha:
+            return RebuildResponse(
+                success=False,
+                message="Kroko embedded rebuild requires KROKO_SERVER_SHA256 to be set in .env",
+                phase="error",
+            )
+        build_args.append("--build-arg")
+        build_args.append("INCLUDE_KROKO_EMBEDDED=true")
+        build_args.append("--build-arg")
+        build_args.append(f"KROKO_SERVER_SHA256={sha}")
     
     if not build_args:
         return RebuildResponse(
@@ -1111,18 +1161,38 @@ async def rebuild_local_ai_server(request: RebuildRequest):
     # Set build args in .env so docker-compose.yml picks them up
     if request.include_faster_whisper:
         env_updates["INCLUDE_FASTER_WHISPER"] = "true"
+    if request.include_whisper_cpp:
+        env_updates["INCLUDE_WHISPER_CPP"] = "true"
     if request.include_melotts:
         env_updates["INCLUDE_MELOTTS"] = "true"
+    if request.include_kroko_embedded:
+        env_updates["INCLUDE_KROKO_EMBEDDED"] = "true"
     
     if request.stt_backend:
         env_updates["LOCAL_STT_BACKEND"] = request.stt_backend
         if request.stt_model:
-            env_updates["FASTER_WHISPER_MODEL"] = request.stt_model
-    
+            if request.stt_backend == "faster_whisper":
+                env_updates["FASTER_WHISPER_MODEL"] = request.stt_model
+            elif request.stt_backend == "whisper_cpp":
+                env_updates["WHISPER_CPP_MODEL_PATH"] = request.stt_model
+            elif request.stt_backend == "kroko":
+                env_updates["KROKO_EMBEDDED"] = "1"
+                env_updates["KROKO_MODEL_PATH"] = request.stt_model
+            elif request.stt_backend == "sherpa":
+                env_updates["SHERPA_MODEL_PATH"] = request.stt_model
+            elif request.stt_backend == "vosk":
+                env_updates["LOCAL_STT_MODEL_PATH"] = request.stt_model
+
     if request.tts_backend:
         env_updates["LOCAL_TTS_BACKEND"] = request.tts_backend
         if request.tts_voice:
-            env_updates["MELOTTS_VOICE"] = request.tts_voice
+            if request.tts_backend == "melotts":
+                env_updates["MELOTTS_VOICE"] = request.tts_voice
+            elif request.tts_backend == "piper":
+                env_updates["LOCAL_TTS_MODEL_PATH"] = request.tts_voice
+            elif request.tts_backend == "kokoro":
+                # Keep the semantics consistent with switch endpoint: `tts_voice` is treated as voice id here.
+                env_updates["KOKORO_VOICE"] = request.tts_voice
     
     if env_updates:
         _update_env_file(env_file, env_updates)
@@ -1172,8 +1242,12 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         backends_enabled = []
         if request.include_faster_whisper:
             backends_enabled.append("Faster-Whisper")
+        if request.include_whisper_cpp:
+            backends_enabled.append("Whisper.cpp")
         if request.include_melotts:
             backends_enabled.append("MeloTTS")
+        if request.include_kroko_embedded:
+            backends_enabled.append("Kroko Embedded")
         
         warning_suffix = f" (Warning: {warn_or_err})" if warn_or_err else ""
         return RebuildResponse(

@@ -1717,6 +1717,13 @@ const EnvPage = () => {
                                         checked={isTrue(env['INCLUDE_FASTER_WHISPER'])}
                                         onChange={(e) => updateEnv('INCLUDE_FASTER_WHISPER', e.target.checked ? 'true' : 'false')}
                                     />
+                                    <FormSwitch
+                                        id="include-whisper-cpp"
+                                        label="Whisper.cpp"
+                                        description="Whisper.cpp STT (requires local ggml .bin model file)"
+                                        checked={isTrue(env['INCLUDE_WHISPER_CPP'])}
+                                        onChange={(e) => updateEnv('INCLUDE_WHISPER_CPP', e.target.checked ? 'true' : 'false')}
+                                    />
                                 </div>
                                 
                                 <h4 className="text-sm font-medium text-muted-foreground pt-4">TTS Backends</h4>
@@ -1761,6 +1768,16 @@ const EnvPage = () => {
                                         onChange={(e) => updateEnv('INCLUDE_KROKO_EMBEDDED', e.target.checked ? 'true' : 'false')}
                                     />
                                 </div>
+                                {isTrue(env['INCLUDE_KROKO_EMBEDDED']) && (
+                                    <div className="pt-2">
+                                        <FormInput
+                                            label="Kroko Server SHA256"
+                                            value={env['KROKO_SERVER_SHA256'] || ''}
+                                            onChange={(e) => updateEnv('KROKO_SERVER_SHA256', e.target.value)}
+                                            tooltip="Required when INCLUDE_KROKO_EMBEDDED=true. Pins the vendor kroko-server binary checksum used at build time."
+                                        />
+                                    </div>
+                                )}
                             </div>
                         </ConfigCard>
                     </ConfigSection>

@@ -4,6 +4,12 @@ This directory tracks major project milestones and implementation achievements.
 
 ## Recent Milestones
 
+### **Milestone 26: Local AI Server Improvements (GPU Hardening + UI Model Switching)** 🧠
+- [View Details →](milestone-26-local-ai-server-improvements.md)
+- **Date**: February 2026
+- **Status**: 🚧 In Progress
+- **Impact**: More reliable local_ai_server startup on CPU-only hosts (minimal mode), hardened UI model switching, GPU build parity, Whisper.cpp support, repeatable model matrix tests
+
 ### **Milestone 24: Phase Tools & Tool Enhancements (Pre/In/Post-Call HTTP)** 🔧
 - [View Details →](milestone-24-tools-enhancements.md)
 - **Date**: February 2026 (shipped in v5.3.1)

@@ -65,8 +65,9 @@ class KokoroTTSBackend:
             self._initialized = True
             logging.info("✅ KOKORO - TTS initialized successfully")
             return True
-        except ImportError:
-            logging.error("❌ KOKORO - kokoro package not installed")
+        except ImportError as exc:
+            # This can be a true missing dependency OR a CUDA/native import failure.
+            logging.error("❌ KOKORO - Import failed: %s", exc, exc_info=True)
             return False
         except Exception as exc:
             logging.error("❌ KOKORO - Failed to initialize: %s", exc)
@@ -260,4 +261,3 @@ class MeloTTSBackend:
         self.speaker_ids = None
         self._initialized = False
         logging.info("🛑 MELOTTS - TTS shutdown")
-

@@ -51,6 +51,13 @@ type LocalModelsStatus = {
     status?: { stt_ready?: boolean; llm_ready?: boolean; tts_ready?: boolean };
 };
 
+type BackendCapabilities = {
+    stt?: Record<string, { available: boolean; reason?: string }>;
+    tts?: Record<string, { available: boolean; reason?: string }>;
+    llm?: { available: boolean; reason?: string };
+    error?: string;
+};
+
 const Wizard = () => {
     const navigate = useNavigate();
     const { confirm } = useConfirmDialog();
@@ -80,7 +87,7 @@ const Wizard = () => {
         // Defaults
         local_stt_backend: 'vosk',
         local_stt_model: '',
-        kroko_embedded: true,
+        kroko_embedded: false,
         local_tts_backend: 'piper',
         local_tts_model: '',
         kokoro_mode: 'local',
@@ -207,6 +214,7 @@ exten => s,1,NoOp(AI Agent Call)
     });
 
     const [modelsStatus, setModelsStatus] = useState<LocalModelsStatus | null>(null);
+    const [backendCaps, setBackendCaps] = useState<BackendCapabilities | null>(null);
 
     // Load existing config from .env on mount
     useEffect(() => {
@@ -268,11 +276,21 @@ exten => s,1,NoOp(AI Agent Call)
         }
     }, []);
 
+    const refreshBackendCaps = useCallback(async () => {
+        try {
+            const res = await axios.get('/api/local-ai/capabilities');
+            setBackendCaps(res.data || null);
+        } catch {
+            // Non-fatal; capabilities are best-effort.
+        }
+    }, []);
+
     useEffect(() => {
         if (step !== 3) return;
         if (config.provider !== 'local' && config.provider !== 'local_hybrid') return;
         refreshModelsStatus();
-    }, [step, config.provider, refreshModelsStatus]);
+        refreshBackendCaps();
+    }, [step, config.provider, refreshModelsStatus, refreshBackendCaps]);
 
     // Auto-select first available model when language changes
     useEffect(() => {
@@ -1100,6 +1118,7 @@ exten => s,1,NoOp(AI Agent Call)
 	                                                    value={config.local_stt_backend}
 	                                                    onChange={e => {
 	                                                        const backend = e.target.value;
+                                                            const krokoEmbeddedAvailable = !!backendCaps?.stt?.kroko_embedded?.available;
 	                                                        const candidates = (modelCatalog.stt || []).filter((m: any) => {
 	                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
 	                                                            return langOk && (m.backend || '').toLowerCase() === backend.toLowerCase();
@@ -1107,14 +1126,30 @@ exten => s,1,NoOp(AI Agent Call)
 	                                                        setConfig({
 	                                                            ...config,
 	                                                            local_stt_backend: backend,
+                                                                // Only meaningful for Kroko; keep it off unless explicitly supported/enabled.
+                                                                kroko_embedded:
+                                                                    backend.toLowerCase() === 'kroko'
+                                                                        ? (krokoEmbeddedAvailable ? !!config.kroko_embedded : false)
+                                                                        : config.kroko_embedded,
 	                                                            local_stt_model: candidates[0]?.id || ''
 	                                                        });
 	                                                    }}
 	                                                >
-                                                    <option value="vosk">Vosk (Local)</option>
-                                                    <option value="kroko">Kroko (Local/Cloud)</option>
-                                                    <option value="sherpa">Sherpa (Local)</option>
-                                                    <option value="faster_whisper">Faster-Whisper (Local)</option>
+                                                    <option value="vosk" disabled={backendCaps?.stt?.vosk ? !backendCaps.stt.vosk.available : false}>
+                                                        Vosk (Local){backendCaps?.stt?.vosk && !backendCaps.stt.vosk.available ? ' (unavailable)' : ''}
+                                                    </option>
+                                                    <option value="kroko">
+                                                        Kroko (Local/Cloud)
+                                                    </option>
+                                                    <option value="sherpa" disabled={backendCaps?.stt?.sherpa ? !backendCaps.stt.sherpa.available : false}>
+                                                        Sherpa (Local){backendCaps?.stt?.sherpa && !backendCaps.stt.sherpa.available ? ' (requires rebuild)' : ''}
+                                                    </option>
+                                                    <option
+                                                        value="faster_whisper"
+                                                        disabled={backendCaps?.stt?.faster_whisper ? !backendCaps.stt.faster_whisper.available : false}
+                                                    >
+                                                        Faster-Whisper (Local){backendCaps?.stt?.faster_whisper && !backendCaps.stt.faster_whisper.available ? ' (requires rebuild)' : ''}
+                                                    </option>
                                                 </select>
                                             </div>
                                             {config.local_stt_backend === 'kroko' && (
@@ -1123,14 +1158,23 @@ exten => s,1,NoOp(AI Agent Call)
                                                         <input
                                                             type="checkbox"
                                                             checked={config.kroko_embedded}
+                                                            disabled={backendCaps?.stt?.kroko_embedded ? !backendCaps.stt.kroko_embedded.available : false}
                                                             onChange={e => setConfig({ ...config, kroko_embedded: e.target.checked })}
                                                             className="rounded border-gray-300"
                                                         />
-                                                        <span className="text-sm">Embedded Mode (Local)</span>
+                                                        <span className="text-sm">
+                                                            Embedded Mode (Local)
+                                                            {backendCaps?.stt?.kroko_embedded && !backendCaps.stt.kroko_embedded.available ? ' (requires rebuild)' : ''}
+                                                        </span>
                                                     </label>
                                                 </div>
                                             )}
                                         </div>
+                                        {config.local_stt_backend === 'kroko' && backendCaps?.stt?.kroko_embedded && !backendCaps.stt.kroko_embedded.available && (
+                                            <p className="text-xs text-muted-foreground">
+                                                Embedded Kroko requires a Local AI image rebuild with <code className="px-1 py-0.5 bg-muted rounded text-[11px]">INCLUDE_KROKO_EMBEDDED=true</code> (and a pinned <code className="px-1 py-0.5 bg-muted rounded text-[11px]">KROKO_SERVER_SHA256</code>).
+                                            </p>
+                                        )}
 	                                        {config.local_stt_backend === 'kroko' && !config.kroko_embedded && (
 	                                            <div>
 	                                                <label className="text-sm font-medium">Kroko API Key</label>

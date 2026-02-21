@@ -61,6 +61,8 @@ interface AvailableModels {
 interface BackendCapabilities {
     stt?: {
         faster_whisper?: { available: boolean; reason?: string };
+        kroko_embedded?: { available: boolean; reason?: string };
+        whisper_cpp?: { available: boolean; reason?: string };
     };
     tts?: {
         melotts?: { available: boolean; reason?: string };
@@ -423,6 +425,20 @@ const ModelsPage = () => {
                 requiresRebuild: true
             });
         }
+        if (sttSel.backend === 'whisper_cpp' && capabilities && !capabilities.stt?.whisper_cpp?.available) {
+            issues.push({
+                key: 'whispercpp_rebuild',
+                message: 'Whisper.cpp is not installed in this Local AI image. Full container rebuild is required.',
+                requiresRebuild: true
+            });
+        }
+        if (sttSel.backend === 'kroko' && capabilities && !capabilities.stt?.kroko_embedded?.available) {
+            issues.push({
+                key: 'kroko_rebuild',
+                message: 'Kroko embedded binary is not installed in this Local AI image. Rebuild is required and needs KROKO_SERVER_SHA256 set in Env.',
+                requiresRebuild: true
+            });
+        }
         if (ttsSel.backend === 'melotts' && capabilities && !capabilities.tts?.melotts?.available) {
             issues.push({
                 key: 'melotts_rebuild',
@@ -465,9 +481,11 @@ const ModelsPage = () => {
     const compatibilityIssues = getCompatibilityIssues(pendingChanges);
     const requiresRebuild = {
         fasterWhisper: compatibilityIssues.some(issue => issue.key === 'fw_rebuild'),
-        meloTts: compatibilityIssues.some(issue => issue.key === 'melotts_rebuild')
+        meloTts: compatibilityIssues.some(issue => issue.key === 'melotts_rebuild'),
+        krokoEmbedded: compatibilityIssues.some(issue => issue.key === 'kroko_rebuild'),
+        whisperCpp: compatibilityIssues.some(issue => issue.key === 'whispercpp_rebuild')
     };
-    const requiresAnyRebuild = requiresRebuild.fasterWhisper || requiresRebuild.meloTts;
+    const requiresAnyRebuild = requiresRebuild.fasterWhisper || requiresRebuild.whisperCpp || requiresRebuild.meloTts || requiresRebuild.krokoEmbedded;
 
     const applyPendingChanges = async () => {
         if (Object.keys(pendingChanges).length === 0) return;
@@ -486,7 +504,9 @@ const ModelsPage = () => {
 
                 const rebuildRes = await axios.post('/api/local-ai/rebuild', {
                     include_faster_whisper: requiresRebuild.fasterWhisper,
+                    include_whisper_cpp: requiresRebuild.whisperCpp,
                     include_melotts: requiresRebuild.meloTts,
+                    include_kroko_embedded: requiresRebuild.krokoEmbedded,
                     stt_backend: sttSel.backend || undefined,
                     stt_model: sttSel.modelPath || undefined,
                     tts_backend: ttsSel.backend || undefined,

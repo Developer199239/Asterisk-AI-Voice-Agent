@@ -84,6 +84,20 @@ class LocalAIConfig:
     def from_env(cls) -> "LocalAIConfig":
         default_threads = max(1, min(16, os.cpu_count() or 1))
 
+        # Default runtime mode:
+        # - If LOCAL_AI_MODE is explicitly set, respect it.
+        # - Otherwise, default to minimal mode when GPU is not detected (GPU_AVAILABLE=false),
+        #   so CPU-only systems come up reliably without requiring any LLM model files.
+        raw_runtime_mode = (os.getenv("LOCAL_AI_MODE") or "").strip().lower()
+        if raw_runtime_mode:
+            runtime_mode = raw_runtime_mode
+        else:
+            runtime_mode = (
+                "full"
+                if _parse_bool(os.getenv("GPU_AVAILABLE", "0"), default=False)
+                else "minimal"
+            )
+
         stop_tokens = [
             token.strip()
             for token in (
@@ -93,7 +107,7 @@ class LocalAIConfig:
         ] or ["<|user|>", "<|assistant|>", "<|end|>"]
 
         return cls(
-            runtime_mode=(os.getenv("LOCAL_AI_MODE", "full") or "full").strip().lower(),
+            runtime_mode=runtime_mode,
             ws_host=os.getenv("LOCAL_WS_HOST", "127.0.0.1"),
             ws_port=int(os.getenv("LOCAL_WS_PORT", "8765")),
             ws_auth_token=(os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip(),
@@ -158,4 +172,3 @@ class LocalAIConfig:
             kokoro_api_model=(os.getenv("KOKORO_API_MODEL", "model") or "model").strip(),
             stt_idle_ms=int(os.getenv("LOCAL_STT_IDLE_MS", "5000")),
         )
-

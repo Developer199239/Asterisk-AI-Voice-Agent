@@ -29,6 +29,32 @@ def test_env_and_yaml_updates_faster_whisper_persists_model_id() -> None:
     assert yaml_updates["stt_model"] == "base"
 
 
+def test_ws_payload_whisper_cpp_uses_stt_model_path() -> None:
+    req = SwitchModelRequest(
+        model_type="stt",
+        backend="whisper_cpp",
+        model_path="/app/models/stt/ggml-base.en.bin",
+    )
+    assert _build_local_ai_ws_switch_payload(req) == {
+        "type": "switch_model",
+        "stt_backend": "whisper_cpp",
+        "stt_model_path": "/app/models/stt/ggml-base.en.bin",
+    }
+
+
+def test_env_and_yaml_updates_whisper_cpp_persists_model_path() -> None:
+    req = SwitchModelRequest(
+        model_type="stt",
+        backend="whisper_cpp",
+        model_path="/app/models/stt/ggml-base.en.bin",
+    )
+    env_updates, yaml_updates = _build_local_ai_env_and_yaml_updates(req)
+    assert env_updates["LOCAL_STT_BACKEND"] == "whisper_cpp"
+    assert env_updates["WHISPER_CPP_MODEL_PATH"] == "/app/models/stt/ggml-base.en.bin"
+    assert yaml_updates["stt_backend"] == "whisper_cpp"
+    assert yaml_updates["whisper_cpp_model_path"] == "/app/models/stt/ggml-base.en.bin"
+
+
 def test_ws_payload_melotts_uses_tts_config_voice() -> None:
     req = SwitchModelRequest(model_type="tts", backend="melotts", model_path="EN-US")
     assert _build_local_ai_ws_switch_payload(req) == {
