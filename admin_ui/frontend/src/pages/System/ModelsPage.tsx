@@ -49,7 +49,29 @@ interface DownloadProgress {
 interface ActiveModels {
     stt: { backend: string; path: string; loaded: boolean; display?: string };
     tts: { backend: string; path: string; loaded: boolean; display?: string };
-    llm: { path: string; loaded: boolean; display?: string };
+    llm: {
+        path: string;
+        loaded: boolean;
+        display?: string;
+        config?: {
+            context?: number;
+            batch?: number;
+            threads?: number;
+            max_tokens?: number;
+            gpu_layers?: number | null;
+        };
+        prompt_fit?: {
+            system_prompt_chars?: number;
+            system_prompt_tokens?: number | null;
+            safe_max_tokens?: number | null;
+        };
+        auto_context?: {
+            enabled?: boolean;
+            source?: string;
+            selected_context?: number;
+            candidates?: number[];
+        };
+    };
 }
 
 interface AvailableModels {
@@ -107,6 +129,7 @@ const ModelsPage = () => {
     const [serverStatus, setServerStatus] = useState<'connected' | 'error' | 'loading'>('loading');
     const [restarting, setRestarting] = useState(false);
     const [pendingChanges, setPendingChanges] = useState<{ stt?: string; tts?: string; llm?: string }>({});
+    const [pendingLlmConfig, setPendingLlmConfig] = useState<{ context?: number; max_tokens?: number }>({});
     const [startingServer, setStartingServer] = useState(false);
     const [capabilities, setCapabilities] = useState<BackendCapabilities | null>(null);
     const [envConfig, setEnvConfig] = useState<Record<string, string>>({});
@@ -226,7 +249,10 @@ const ModelsPage = () => {
                     llm: {
                         path: localAI.details?.models?.llm?.path || '',
                         loaded: localAI.details?.models?.llm?.loaded || false,
-                        display: localAI.details?.models?.llm?.display || ''
+                        display: localAI.details?.models?.llm?.display || '',
+                        config: localAI.details?.models?.llm?.config || {},
+                        prompt_fit: localAI.details?.models?.llm?.prompt_fit || {},
+                        auto_context: localAI.details?.models?.llm?.auto_context || {}
                     }
                 });
             } else {
@@ -491,7 +517,9 @@ const ModelsPage = () => {
     const requiresAnyRebuild = requiresRebuild.fasterWhisper || requiresRebuild.whisperCpp || requiresRebuild.meloTts || requiresRebuild.krokoEmbedded;
 
     const applyPendingChanges = async () => {
-        if (Object.keys(pendingChanges).length === 0) return;
+        const hasModelChanges = Object.keys(pendingChanges).length > 0;
+        const hasLlmTuningChanges = Object.keys(pendingLlmConfig).length > 0;
+        if (!hasModelChanges && !hasLlmTuningChanges) return;
         if (compatibilityIssues.length > 0 && !forceIncompatibleApply) {
             showToast('Resolve compatibility warnings or enable force apply.', 'warning');
             return;
@@ -533,18 +561,27 @@ const ModelsPage = () => {
                 if (requiresRebuild.meloTts) delete remainingChanges.tts;
             }
 
+            // Apply LLM changes (model and/or tuning) in one request to avoid multiple reloads.
+            if (remainingChanges.llm || hasLlmTuningChanges) {
+                await axios.post('/api/local-ai/switch', {
+                    model_type: 'llm',
+                    model_path: remainingChanges.llm || undefined,
+                    llm_context: pendingLlmConfig.context || undefined,
+                    llm_max_tokens: pendingLlmConfig.max_tokens || undefined,
+                    force_incompatible_apply: forceIncompatibleApply
+                });
+                delete remainingChanges.llm;
+            }
+
             for (const [type, value] of Object.entries(remainingChanges)) {
                 if (!value) continue;
-                if (type === 'llm') {
-                    await handleModelSwitch('llm', '', value, forceIncompatibleApply);
-                } else {
-                    const [backend, ...pathParts] = value.split(':');
-                    await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'), forceIncompatibleApply);
-                }
+                const [backend, ...pathParts] = value.split(':');
+                await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'), forceIncompatibleApply);
             }
 
             showToast(requiresAnyRebuild ? 'Compatibility override applied. Local AI has been rebuilt/restarted.' : 'Model switch requested. Server will restart.', 'success');
             setPendingChanges({});
+            setPendingLlmConfig({});
             setForceIncompatibleApply(false);
             setTimeout(() => {
                 fetchActiveModels();
@@ -757,6 +794,59 @@ const ModelsPage = () => {
                             <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.llm.display || activeModels.llm.path}>
                                 {activeModels.llm.display || getModelName(activeModels.llm.path)}
                             </div>
+                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                <label className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-2 py-1">
+                                    <span className="text-muted-foreground">Context (n_ctx)</span>
+                                    <select
+                                        value={pendingLlmConfig.context ?? activeModels.llm.config?.context ?? ''}
+                                        onChange={(e) => {
+                                            const v = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                                            setPendingLlmConfig(prev => ({ ...prev, context: v }));
+                                        }}
+                                        className="px-2 py-1 rounded-md border border-border bg-background"
+                                        disabled={restarting}
+                                        title="Change requires LLM reload. Leave blank to keep current value."
+                                    >
+                                        <option value="">(unchanged)</option>
+                                        {[768, 1024, 1536, 2048, 3072, 4096].map(v => (
+                                            <option key={v} value={v}>{v}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-2 py-1">
+                                    <span className="text-muted-foreground">Max tokens</span>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        value={pendingLlmConfig.max_tokens ?? activeModels.llm.config?.max_tokens ?? ''}
+                                        onChange={(e) => {
+                                            const v = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                                            setPendingLlmConfig(prev => ({ ...prev, max_tokens: v }));
+                                        }}
+                                        className="w-24 px-2 py-1 rounded-md border border-border bg-background"
+                                        disabled={restarting}
+                                        title="Upper bound for each local LLM response."
+                                    />
+                                </label>
+                            </div>
+                            {(activeModels.llm.prompt_fit?.system_prompt_tokens != null || activeModels.llm.prompt_fit?.safe_max_tokens != null) && (
+                                <div className="mt-2 rounded-md border border-border bg-muted/20 p-2 text-xs space-y-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-muted-foreground">System prompt tokens</span>
+                                        <span className="font-mono">{activeModels.llm.prompt_fit?.system_prompt_tokens ?? '—'}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-muted-foreground">Safe max tokens</span>
+                                        <span className="font-mono">{activeModels.llm.prompt_fit?.safe_max_tokens ?? '—'}</span>
+                                    </div>
+                                    {activeModels.llm.auto_context?.enabled && (
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-muted-foreground">Auto ctx source</span>
+                                            <span className="font-mono">{activeModels.llm.auto_context?.source || 'auto'}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* TTS Model */}

@@ -14,6 +14,7 @@ import tempfile
 import wave
 import urllib.request
 import urllib.error
+from dataclasses import replace
 from time import monotonic, time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -728,6 +729,8 @@ class LocalAIServer:
         self.startup_errors: Dict[str, str] = {}
         # Track runtime fallbacks (e.g. CUDA -> CPU) for operator visibility.
         self.runtime_fallbacks: Dict[str, Dict[str, Any]] = {}
+        # Last effective llama.cpp GPU layer selection (for status/UI).
+        self._llm_gpu_layers_effective: int = 0
         # Cached runtime GPU probe for status responses (avoid probing every request).
         self._gpu_runtime_status_cache: Dict[str, Any] = {}
         self._gpu_runtime_status_checked_mono: float = 0.0
@@ -755,6 +758,92 @@ class LocalAIServer:
         self.buffer_size_bytes = PCM16_TARGET_RATE * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
         # Process buffer after N ms of silence (idle finalizer).
         self.buffer_timeout_ms = self.config.stt_idle_ms
+        # Track startup-only auto-tuning so reload_models() doesn't re-run it.
+        self._startup_tuning_applied = False
+        # Best-effort metadata for UI/status.
+        self._llm_auto_ctx_meta: Dict[str, Any] = {}
+
+    def _llm_auto_ctx_cache_path(self) -> str:
+        """
+        Persist startup auto-tuning decisions in the models volume (if writable).
+
+        We prefer /app/models because it is already mounted in docker-compose.yml.
+        If that isn't writable, we still run auto-tuning but won't persist it.
+        """
+        return "/app/models/.aava/llm_auto_ctx_cache.json"
+
+    def _llm_auto_ctx_cache_key(self, gpu: Dict[str, Any]) -> str:
+        model_path = (self.llm_model_path or "").strip()
+        gpu_name = (gpu.get("name") or "").strip()
+        mem = gpu.get("memory_gb")
+        return f"{model_path}|{gpu_name}|{mem}"
+
+    def _read_llm_auto_ctx_cache(self, gpu: Dict[str, Any]) -> Optional[int]:
+        path = self._llm_auto_ctx_cache_path()
+        try:
+            if not os.path.exists(path):
+                return None
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+            key = self._llm_auto_ctx_cache_key(gpu)
+            entry = (payload.get("entries") or {}).get(key) or {}
+            value = entry.get("context")
+            if value is None:
+                return None
+            return int(value)
+        except Exception:  # pragma: no cover - best-effort cache
+            return None
+
+    def _write_llm_auto_ctx_cache(self, gpu: Dict[str, Any], context: int) -> None:
+        path = self._llm_auto_ctx_cache_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload: Dict[str, Any] = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        payload = json.load(f) or {}
+                except Exception:
+                    payload = {}
+            entries = payload.get("entries")
+            if not isinstance(entries, dict):
+                entries = {}
+            key = self._llm_auto_ctx_cache_key(gpu)
+            entries[key] = {
+                "context": int(context),
+                "model_path": (self.llm_model_path or "").strip(),
+                "gpu_name": gpu.get("name"),
+                "gpu_memory_gb": gpu.get("memory_gb"),
+                "at_epoch_ms": int(time() * 1000),
+            }
+            payload["entries"] = entries
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, sort_keys=True)
+        except Exception:  # pragma: no cover - best-effort cache
+            return
+
+    def _llm_auto_ctx_candidates(self, gpu: Dict[str, Any]) -> List[int]:
+        """
+        Choose an ordered context ladder based on GPU memory.
+
+        We cap at 4096 for the current shipped Phi-3-mini-4k models. Operators can
+        override via LOCAL_LLM_CONTEXT for other models.
+        """
+        mem = gpu.get("memory_gb")
+        try:
+            mem_gb = float(mem) if mem is not None else None
+        except Exception:
+            mem_gb = None
+
+        if mem_gb is None:
+            return [4096, 3072, 2048, 1536, 1024, 768]
+        if mem_gb >= 20:
+            return [4096, 3072, 2048, 1536, 1024, 768]
+        if mem_gb >= 12:
+            return [3072, 2048, 1536, 1024, 768]
+        if mem_gb >= 8:
+            return [2048, 1536, 1024, 768]
+        return [1536, 1024, 768]
 
     @staticmethod
     def _parse_optional_bool(raw: Optional[str]) -> Optional[bool]:
@@ -939,7 +1028,7 @@ class LocalAIServer:
             logging.debug("Vosk model path resolution skipped", exc_info=True)
         return path
 
-    async def initialize_models(self):
+    async def initialize_models(self, *, startup: bool = False):
         """Initialize all AI models.
 
         Default behavior is "degraded start": failures are logged and reflected
@@ -966,7 +1055,7 @@ class LocalAIServer:
             )
             self.llm_model = None
         else:
-            await self._load_llm_model()
+            await self._load_llm_model(allow_auto_ctx=bool(startup))
             await self.run_startup_latency_check()
         await self._load_tts_model()
 
@@ -1352,7 +1441,7 @@ class LocalAIServer:
             "at_epoch_ms": int(time() * 1000),
         }
 
-    async def _load_llm_model(self):
+    async def _load_llm_model(self, *, allow_auto_ctx: bool = False):
         """Load LLM model with optimized parameters for faster inference"""
         if Llama is None:
             logging.warning(
@@ -1368,19 +1457,95 @@ class LocalAIServer:
 
             # Determine GPU layers
             gpu_layers = self._detect_gpu_layers()
+            self._llm_gpu_layers_effective = gpu_layers
             gpu_status = f"GPU ({gpu_layers} layers)" if gpu_layers > 0 else "CPU only"
 
-            self.llm_model = Llama(
-                model_path=self.llm_model_path,
-                n_ctx=self.llm_context,
-                n_threads=self.llm_threads,
-                n_batch=self.llm_batch,
-                n_gpu_layers=gpu_layers,
-                verbose=False,
-                use_mmap=True,
-                use_mlock=self.llm_use_mlock,
-                add_bos=False,
+            explicit_ctx_raw = (os.getenv("LOCAL_LLM_CONTEXT") or "").strip()
+            has_explicit_ctx = bool(explicit_ctx_raw)
+            can_auto_ctx = (
+                bool(allow_auto_ctx)
+                and not self._startup_tuning_applied
+                and not has_explicit_ctx
+                and gpu_layers > 0
             )
+
+            gpu_runtime = {}
+            try:
+                gpu_runtime = self.get_gpu_runtime_status(refresh=True) or {}
+            except Exception:
+                gpu_runtime = {}
+
+            selected_ctx_source = "env" if has_explicit_ctx else "config"
+            cached_ctx: Optional[int] = None
+            if can_auto_ctx:
+                cached_ctx = self._read_llm_auto_ctx_cache(gpu_runtime)
+                if cached_ctx:
+                    selected_ctx_source = "cache"
+
+            if cached_ctx:
+                ctx_candidates = [cached_ctx]
+            elif can_auto_ctx:
+                ctx_candidates = self._llm_auto_ctx_candidates(gpu_runtime)
+                selected_ctx_source = "auto"
+            else:
+                ctx_candidates = [int(self.llm_context)]
+
+            last_exc: Optional[Exception] = None
+            loaded = False
+            contexts_to_try = list(ctx_candidates)
+            idx = 0
+            while idx < len(contexts_to_try):
+                ctx = int(contexts_to_try[idx])
+                idx += 1
+
+                # Keep server + config consistent so subsequent model switches preserve tuned ctx.
+                self.llm_context = ctx
+                try:
+                    self.config = replace(self.config, llm_context=ctx)
+                except Exception:
+                    pass
+
+                try:
+                    self.llm_model = Llama(
+                        model_path=self.llm_model_path,
+                        n_ctx=ctx,
+                        n_threads=self.llm_threads,
+                        n_batch=self.llm_batch,
+                        n_gpu_layers=gpu_layers,
+                        verbose=False,
+                        use_mmap=True,
+                        use_mlock=self.llm_use_mlock,
+                        add_bos=False,
+                    )
+                    loaded = True
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    self.llm_model = None
+
+                    if cached_ctx and ctx == int(cached_ctx):
+                        logging.warning(
+                            "❌ Cached LLM context failed to load (ctx=%s). Falling back to auto ladder.",
+                            cached_ctx,
+                        )
+                        cached_ctx = None
+                        selected_ctx_source = "auto"
+                        contexts_to_try = list(self._llm_auto_ctx_candidates(gpu_runtime))
+                        idx = 0
+                        continue
+
+                    if can_auto_ctx and len(contexts_to_try) > 1:
+                        logging.warning(
+                            "❌ LLM load failed with ctx=%s; trying smaller context. error=%s",
+                            ctx,
+                            str(exc)[:200],
+                        )
+                        continue
+                    break
+
+            if not loaded:
+                raise last_exc or RuntimeError("Failed to load LLM model")
+
             logging.info("✅ LLM model loaded: %s (%s)", self.llm_model_path, gpu_status)
             logging.info(
                 "📊 LLM Config: ctx=%s, threads=%s, batch=%s, max_tokens=%s, temp=%s, gpu_layers=%s",
@@ -1391,6 +1556,24 @@ class LocalAIServer:
                 self.llm_temperature,
                 gpu_layers,
             )
+
+            if can_auto_ctx:
+                self._startup_tuning_applied = True
+                self._llm_auto_ctx_meta = {
+                    "enabled": True,
+                    "source": selected_ctx_source,
+                    "selected_context": int(self.llm_context),
+                    "candidates": list(contexts_to_try),
+                    "cache_path": self._llm_auto_ctx_cache_path(),
+                }
+                if selected_ctx_source in ("auto", "cache"):
+                    self._write_llm_auto_ctx_cache(gpu_runtime, int(self.llm_context))
+            else:
+                self._llm_auto_ctx_meta = {
+                    "enabled": False,
+                    "source": selected_ctx_source,
+                    "selected_context": int(self.llm_context),
+                }
         except Exception as exc:
             logging.error("❌ Failed to load LLM model: %s", exc)
             self.llm_model = None
@@ -1691,7 +1874,7 @@ class LocalAIServer:
             return
         try:
             await self._cleanup_kroko_backend()
-            await self.initialize_models()
+            await self.initialize_models(startup=False)
             logging.info("✅ Models reloaded successfully")
         except Exception as exc:
             logging.error("❌ Model reload failed: %s", exc)
@@ -3624,7 +3807,7 @@ async def main():
     """Main server function"""
     server = LocalAIServer()
     try:
-        await server.initialize_models()
+        await server.initialize_models(startup=True)
 
         # SECURITY: Default to localhost. Set LOCAL_WS_HOST=0.0.0.0 for remote access.
         # If binding non-localhost, LOCAL_WS_AUTH_TOKEN should be set (enforced in handler).

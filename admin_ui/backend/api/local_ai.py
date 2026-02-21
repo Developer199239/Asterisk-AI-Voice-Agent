@@ -150,6 +150,9 @@ class SwitchModelRequest(BaseModel):
     kokoro_api_base_url: Optional[str] = None
     kokoro_api_key: Optional[str] = None
     kokoro_api_model: Optional[str] = None
+    # LLM tuning (optional)
+    llm_context: Optional[int] = None
+    llm_max_tokens: Optional[int] = None
     # Allow intentional override for incompatible runtime/device combinations.
     force_incompatible_apply: Optional[bool] = False
 
@@ -301,6 +304,10 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
     elif request.model_type == "llm":
         if request.model_path:
             env_updates["LOCAL_LLM_MODEL_PATH"] = request.model_path
+        if request.llm_context is not None:
+            env_updates["LOCAL_LLM_CONTEXT"] = str(int(request.llm_context))
+        if request.llm_max_tokens is not None:
+            env_updates["LOCAL_LLM_MAX_TOKENS"] = str(int(request.llm_max_tokens))
 
     return env_updates, yaml_updates
 
@@ -752,9 +759,14 @@ async def switch_model(request: SwitchModelRequest):
         kokoro = data.get("kokoro") or {}
 
         if request.model_type == "llm":
-            if not request.model_path:
-                return True
-            return bool(llm.get("loaded")) and llm.get("path") == request.model_path
+            if request.model_path and not (bool(llm.get("loaded")) and llm.get("path") == request.model_path):
+                return False
+            cfg = llm.get("config") or {}
+            if request.llm_context is not None and int(cfg.get("context") or 0) != int(request.llm_context):
+                return False
+            if request.llm_max_tokens is not None and int(cfg.get("max_tokens") or 0) != int(request.llm_max_tokens):
+                return False
+            return True
 
         if request.model_type == "stt":
             if request.backend and data.get("stt_backend") != request.backend:
@@ -852,7 +864,7 @@ async def switch_model(request: SwitchModelRequest):
         "KOKORO_MODE", "KOKORO_VOICE", "KOKORO_MODEL_PATH",
         "KOKORO_API_BASE_URL", "KOKORO_API_KEY", "KOKORO_API_MODEL",
         "MELOTTS_VOICE", "MELOTTS_DEVICE", "FASTER_WHISPER_MODEL", "FASTER_WHISPER_DEVICE",
-        "LOCAL_LLM_MODEL_PATH", "GPU_AVAILABLE"
+        "LOCAL_LLM_MODEL_PATH", "LOCAL_LLM_CONTEXT", "LOCAL_LLM_MAX_TOKENS", "GPU_AVAILABLE"
     ])
 
     # Guard CUDA-only backend selection when runtime GPU is unavailable.
@@ -906,35 +918,42 @@ async def switch_model(request: SwitchModelRequest):
         requires_restart = False
 
     elif request.model_type == "llm":
-        if request.model_path:
+        wants_llm_change = bool(request.model_path) or request.llm_context is not None or request.llm_max_tokens is not None
+        if wants_llm_change:
             # LLM flow supports best-effort hot switch + verification before falling back to recreate.
-            env_updates["LOCAL_LLM_MODEL_PATH"] = request.model_path
-            # Prefer model switch without restart.
-            ws_resp = await _try_ws_switch({"type": "switch_model", "llm_model_path": request.model_path})
+            payload: Dict[str, Any] = {"type": "switch_model"}
+            if request.model_path:
+                payload["llm_model_path"] = request.model_path
+            llm_cfg: Dict[str, Any] = {}
+            if request.llm_context is not None:
+                llm_cfg["context"] = int(request.llm_context)
+            if request.llm_max_tokens is not None:
+                llm_cfg["max_tokens"] = int(request.llm_max_tokens)
+            if llm_cfg:
+                payload["llm_config"] = llm_cfg
+
+            ws_resp = await _try_ws_switch(payload)
             if ws_resp and ws_resp.get("type") == "switch_response" and ws_resp.get("status") == "success":
                 _update_env_file(env_file, env_updates)
-                verified = await _wait_for_status(timeout_sec=30.0)
+                verified = await _wait_for_status(timeout_sec=45.0)
                 if verified:
                     return SwitchModelResponse(
                         success=True,
-                        message=f"LLM model switched to {request.model_path} via hot-switch",
+                        message="LLM settings applied via hot-switch",
                         requires_restart=False,
                     )
-                # Rollback on verification failure (best-effort hot rollback, then enforce by recreate)
+                # Rollback on verification failure (enforce by recreate)
                 try:
                     _update_env_file(env_file, previous_env)
                 except Exception:
                     pass
-                prev_llm = (previous_env.get("LOCAL_LLM_MODEL_PATH") or "").strip()
-                if prev_llm:
-                    await _try_ws_switch({"type": "switch_model", "llm_model_path": prev_llm})
                 try:
                     await _recreate_via_compose("local_ai_server")
                 except Exception:
                     pass
                 return SwitchModelResponse(
                     success=False,
-                    message="LLM switch did not verify as loaded within 30s; rolled back to previous configuration.",
+                    message="LLM switch did not verify as loaded within 45s; rolled back to previous configuration.",
                     requires_restart=True,
                 )
             requires_restart = True

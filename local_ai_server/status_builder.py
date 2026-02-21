@@ -76,6 +76,24 @@ def build_status_response(server) -> Dict[str, Any]:
     if runtime_mode == "minimal":
         llm_loaded = False
 
+    # Prompt-fit diagnostics (best-effort; used for UI guidance).
+    system_prompt = (getattr(server, "llm_system_prompt", "") or "").strip()
+    system_prompt_chars = len(system_prompt)
+    system_prompt_tokens = None
+    safe_max_tokens = None
+    try:
+        # Estimate tokens using the same wrapper the model sees.
+        if hasattr(server, "_build_phi_prompt_with_system"):
+            estimate_prompt = server._build_phi_prompt_with_system("Hello", system_prompt)
+        else:
+            estimate_prompt = server._build_phi_prompt("Hello")
+        system_prompt_tokens = int(server._count_prompt_tokens(estimate_prompt))
+        margin = 8
+        safe_max_tokens = max(1, int(server.llm_context) - system_prompt_tokens - margin)
+    except Exception:
+        system_prompt_tokens = None
+        safe_max_tokens = None
+
     gpu_status: Dict[str, Any]
     try:
         gpu_status = server.get_gpu_runtime_status()
@@ -112,7 +130,18 @@ def build_status_response(server) -> Dict[str, Any]:
                     "context": server.llm_context,
                     "threads": server.llm_threads,
                     "batch": server.llm_batch,
+                    "max_tokens": getattr(server, "llm_max_tokens", None),
+                    "temperature": getattr(server, "llm_temperature", None),
+                    "top_p": getattr(server, "llm_top_p", None),
+                    "repeat_penalty": getattr(server, "llm_repeat_penalty", None),
+                    "gpu_layers": getattr(server, "_llm_gpu_layers_effective", None),
                 },
+                "prompt_fit": {
+                    "system_prompt_chars": system_prompt_chars,
+                    "system_prompt_tokens": system_prompt_tokens,
+                    "safe_max_tokens": safe_max_tokens,
+                },
+                "auto_context": dict(getattr(server, "_llm_auto_ctx_meta", {}) or {}),
             },
             "tts": {
                 "backend": server.tts_backend,

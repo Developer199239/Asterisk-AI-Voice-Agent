@@ -28,6 +28,7 @@ At session start, push the AI engine’s system prompt to `local_ai_server` so l
 ### 3) LLM context hardening
 
 - Default the local server’s context window to **2048** when `GPU_AVAILABLE=true` (unless overridden via `LOCAL_LLM_CONTEXT`).
+- Add startup-only **auto context** tuning (GPU only): select a working `n_ctx` from a safe ladder, then cache it per model/GPU so subsequent restarts reuse it.
 - Add server-side guards so **no prompt** can exceed `n_ctx`:
   - Truncate system prompt as a last resort when the configured context is too small.
   - Reduce `max_tokens` dynamically based on prompt size.
@@ -41,6 +42,7 @@ At session start, push the AI engine’s system prompt to `local_ai_server` so l
 | `local_ai_server/config.py` | Default `llm_context` to `2048` when `GPU_AVAILABLE=true` unless `LOCAL_LLM_CONTEXT` is set |
 | `local_ai_server/server.py` | Guard llama.cpp calls: reduce `max_tokens` to fit context, and prevent prompt > `n_ctx` |
 | `local_ai_server/server.py` | Prompt builder hardening: if system prompt alone exceeds `n_ctx`, truncate it (last resort) |
+| `local_ai_server/server.py` | Startup-only auto-tune `llm_context` on GPU and cache selection (skip on reload/switch) |
 | `local_ai_server/server.py` | Emit `stt_backend` field in `stt_result` payloads for engine-side backend-aware logic |
 
 ### AI Engine / Local Provider
@@ -50,6 +52,13 @@ At session start, push the AI engine’s system prompt to `local_ai_server` so l
 | `src/providers/local.py` | On session start, request `status` from `local_ai_server` and sync `llm_config.system_prompt` (deduped by digest) |
 | `src/providers/local.py` | Track runtime STT backend from `stt_result.stt_backend` (`faster_whisper` / `whisper_cpp`) |
 | `src/engine.py` | Re-arm segment gating for `local` provider **only when** runtime STT backend is Whisper |
+
+### Admin UI
+
+| File | Change |
+|------|--------|
+| `admin_ui/frontend/src/pages/System/ModelsPage.tsx` | Show LLM “Prompt fit” diagnostics (system prompt tokens, safe max tokens) and allow tuning `n_ctx` + `max_tokens` |
+| `admin_ui/backend/api/local_ai.py` | Allow `/api/local-ai/switch` to apply `llm_context` + `llm_max_tokens` (best-effort hot switch, fallback recreate) |
 
 ### Tests
 
@@ -67,7 +76,7 @@ At session start, push the AI engine’s system prompt to `local_ai_server` so l
 ## Verification Checklist
 
 - `local_ai_server` starts on GPU with `LOCAL_LLM_GPU_LAYERS=-1` and `LOCAL_LLM_CONTEXT` unset → `llm_context=2048`.
+- `local_ai_server` auto-tunes `llm_context` on first boot (GPU) and reports source (`auto`/`cache`) in status.
 - Switching to Whisper STT (Faster-Whisper or whisper.cpp) no longer causes continuous self-talk on ExternalMedia.
 - Switching between STT/TTS/LLM models via Admin UI succeeds for shipped backends; failures are capability-aware and actionable.
 - No `Requested tokens exceed context window` errors in `local_ai_server` logs when using the default `default` context prompt.
-

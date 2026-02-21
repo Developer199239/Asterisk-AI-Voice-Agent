@@ -283,10 +283,12 @@ verify_fstab_bind_mount() {
 # Parse args
 LOCAL_AI_MODE_OVERRIDE=""
 PERSIST_MEDIA_MOUNT=false
+LOCAL_SERVER_ONLY=false
 for arg in "$@"; do
     case $arg in
         --apply-fixes) APPLY_FIXES=true ;;
         --force) FORCE_MODE=true ;;
+        --local-server|--local-ai-server) LOCAL_SERVER_ONLY=true ;;
         --local-ai-mode=*) LOCAL_AI_MODE_OVERRIDE="${arg#*=}" ;;
         --local-ai-minimal) LOCAL_AI_MODE_OVERRIDE="minimal" ;;
         --local-ai-full) LOCAL_AI_MODE_OVERRIDE="full" ;;
@@ -299,6 +301,7 @@ for arg in "$@"; do
             echo "Options:"
             echo "  --apply-fixes  Apply fixes automatically (requires root/sudo)"
             echo "  --force        Downgrade unsupported-OS failure to warning (for users with Docker pre-installed)"
+            echo "  --local-server Run only checks needed to bring up local_ai_server (skips Asterisk/Admin UI)"
             echo "  --local-ai-mode=MODE  Set LOCAL_AI_MODE in .env (MODE=full|minimal)"
             echo "  --local-ai-minimal    Shortcut for --local-ai-mode=minimal"
             echo "  --local-ai-full       Shortcut for --local-ai-mode=full"
@@ -2339,6 +2342,29 @@ check_ports() {
     fi
 }
 
+check_ports_local_server() {
+    # Local AI Server is WS-only. Default port is 8765 (LOCAL_WS_PORT).
+    local port="${LOCAL_WS_PORT:-8765}"
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        # shellcheck disable=SC1090
+        source "$SCRIPT_DIR/.env" >/dev/null 2>&1 || true
+        port="${LOCAL_WS_PORT:-$port}"
+    fi
+    if command -v ss &>/dev/null; then
+        if ss -tln | grep -q ":$port "; then
+            log_warn "Port $port already in use (Local AI Server WS port)"
+        else
+            log_ok "Port $port available"
+        fi
+    elif command -v netstat &>/dev/null; then
+        if netstat -tln | grep -q ":$port "; then
+            log_warn "Port $port already in use (Local AI Server WS port)"
+        else
+            log_ok "Port $port available"
+        fi
+    fi
+}
+
 # ============================================================================
 # Apply Fixes
 # ============================================================================
@@ -2421,6 +2447,19 @@ print_summary() {
         touch "$SCRIPT_DIR/.preflight-ok"
         echo -e "${GREEN}✓ All checks passed!${NC}"
         echo ""
+
+        if [ "$LOCAL_SERVER_ONLY" = true ]; then
+            echo "Next steps (Local AI Server only):"
+            echo ""
+            echo "  1. Start Local AI Server:"
+            echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d --build local_ai_server"
+            echo ""
+            echo "  2. Verify WS health:"
+            echo "     cd local_ai_server && python3 smoke_test_ws.py --url ws://127.0.0.1:${LOCAL_WS_PORT:-8765} --auth-token \"\\$LOCAL_WS_AUTH_TOKEN\" --verbose"
+            echo ""
+            return
+        fi
+
         echo "╔═══════════════════════════════════════════════════════════════════════════╗"
         echo "║  ⚠️  SECURITY NOTICE                                                       ║"
         echo "╠═══════════════════════════════════════════════════════════════════════════╣"
@@ -2544,12 +2583,19 @@ main() {
     check_secrets_permissions  # AAVA-191: Vertex AI credentials directory
     check_selinux
     check_env
-    check_docker_gid
-    check_asterisk
-    check_asterisk_uid_gid
-    check_asterisk_config
-    check_gpu
-    check_ports
+
+    if [ "$LOCAL_SERVER_ONLY" = true ]; then
+        # Local AI Server onboarding path: skip Asterisk/Admin UI checks.
+        check_gpu
+        check_ports_local_server
+    else
+        check_docker_gid
+        check_asterisk
+        check_asterisk_uid_gid
+        check_asterisk_config
+        check_gpu
+        check_ports
+    fi
     
     # Apply fixes if requested
     if [ "$APPLY_FIXES" = true ]; then
