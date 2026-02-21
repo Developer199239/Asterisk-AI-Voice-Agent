@@ -161,6 +161,50 @@ class SwitchModelResponse(BaseModel):
     requires_restart: bool = False
 
 
+def _infer_kroko_embedded(backend: str, model_path: Optional[str], kroko_url: Optional[str], explicit: Optional[bool]) -> Optional[bool]:
+    """
+    Infer whether Kroko should run in embedded mode for hot-switch requests.
+
+    Rationale:
+    - In the UI, selecting a Kroko "installed model" implies embedded mode.
+    - Historically, the UI did not pass kroko_embedded=true, so hot-switch would
+      update KROKO_MODEL_PATH but keep kroko_embedded=false, leading to confusing
+      "loaded" status while actually targeting the cloud endpoint (and failing without an API key).
+    """
+    if backend != "kroko":
+        return explicit
+    if explicit is not None:
+        return bool(explicit)
+    if model_path:
+        # Installed/embedded Kroko models are mounted under /app/models/kroko (preferred)
+        # and sometimes under /app/models/stt (legacy).
+        if model_path.startswith("/app/models/kroko/") or model_path.startswith("/app/models/stt/"):
+            return True
+        # Fallback heuristic: if operator provided a model file path, treat as embedded.
+        low = model_path.lower()
+        if low.endswith(".onnx") or low.endswith(".data"):
+            return True
+    if kroko_url and "app.kroko.ai" in kroko_url:
+        return False
+    return explicit
+
+
+def _normalize_switch_request(request: SwitchModelRequest) -> SwitchModelRequest:
+    backend = (request.backend or "").strip().lower()
+    if request.model_type == "stt" and backend == "kroko":
+        inferred = _infer_kroko_embedded(
+            backend=backend,
+            model_path=request.model_path,
+            kroko_url=request.kroko_url,
+            explicit=request.kroko_embedded,
+        )
+        if inferred is not None and request.kroko_embedded is None:
+            updater = getattr(request, "model_copy", None) or getattr(request, "copy", None)
+            if updater:
+                return updater(update={"kroko_embedded": bool(inferred)})
+    return request
+
+
 def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[Dict[str, str], Dict[str, Any]]:
     """
     Pure mapping from SwitchModelRequest -> env_updates/yaml_updates.
@@ -180,6 +224,12 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 env_updates["LOCAL_STT_MODEL_PATH"] = request.model_path
                 yaml_updates["stt_model"] = request.model_path
             elif request.backend == "kroko":
+                effective_embedded = _infer_kroko_embedded(
+                    backend="kroko",
+                    model_path=request.model_path,
+                    kroko_url=request.kroko_url,
+                    explicit=request.kroko_embedded,
+                )
                 if request.language:
                     env_updates["KROKO_LANGUAGE"] = request.language
                     yaml_updates["kroko_language"] = request.language
@@ -188,16 +238,16 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 # For embedded mode: set KROKO_EMBEDDED=1 and auto-detect model if not provided
                 if request.model_path:
                     env_updates["KROKO_MODEL_PATH"] = request.model_path
-                    env_updates["KROKO_EMBEDDED"] = "1"
+                    env_updates["KROKO_EMBEDDED"] = "1" if effective_embedded is not False else "0"
                     yaml_updates["kroko_model_path"] = request.model_path
-                elif request.kroko_embedded:
+                elif effective_embedded:
                     # Auto-detect Kroko model file when embedded=true but no path specified
                     env_updates["KROKO_EMBEDDED"] = "1"
                     detected_path = _auto_detect_kroko_model()
                     if detected_path:
                         env_updates["KROKO_MODEL_PATH"] = detected_path
                         yaml_updates["kroko_model_path"] = detected_path
-                elif request.kroko_embedded is not None:
+                elif effective_embedded is not None:
                     env_updates["KROKO_EMBEDDED"] = "0"  # Cloud mode
                 if request.kroko_port is not None:
                     env_updates["KROKO_PORT"] = str(request.kroko_port)
@@ -281,14 +331,20 @@ def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[D
         if request.backend == "faster_whisper" and request.model_path:
             payload["stt_config"] = {"model": request.model_path}
         if request.backend == "kroko":
+            effective_embedded = _infer_kroko_embedded(
+                backend="kroko",
+                model_path=request.model_path,
+                kroko_url=request.kroko_url,
+                explicit=request.kroko_embedded,
+            )
             if request.language:
                 payload["kroko_language"] = request.language
             if request.kroko_url:
                 payload["kroko_url"] = request.kroko_url
             if request.kroko_port is not None:
                 payload["kroko_port"] = request.kroko_port
-            if request.kroko_embedded is not None:
-                payload["kroko_embedded"] = request.kroko_embedded
+            if effective_embedded is not None:
+                payload["kroko_embedded"] = bool(effective_embedded)
             if request.model_path:
                 payload["kroko_model_path"] = request.model_path
         return payload
@@ -640,6 +696,7 @@ async def switch_model(request: SwitchModelRequest):
     from api.config import update_yaml_provider_field
     from api.system import _recreate_via_compose
 
+    request = _normalize_switch_request(request)
     env_file = os.path.join(PROJECT_ROOT, ".env")
     env_updates: Dict[str, str] = {}
     yaml_updates: Dict[str, Any] = {}  # Track YAML updates for sync

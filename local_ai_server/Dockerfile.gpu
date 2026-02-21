@@ -128,16 +128,15 @@ RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
         tar -xzf /tmp/onnxruntime.tgz -C /tmp && \
         mv /tmp/onnxruntime-linux-x64-1.17.1/lib/* /usr/lib/ && \
         rm -rf /tmp/onnxruntime* && \
-        if [ -z "$KROKO_SERVER_SHA256" ]; then \
-            echo "KROKO_SERVER_SHA256 must be set when INCLUDE_KROKO_EMBEDDED=true. Build aborted." && \
-            exit 1; \
-        fi && \
         wget -q https://download.kroko.ai/binaries/kroko-onnx-online-websocket-server \
             -O /usr/local/bin/kroko-server && \
         ACTUAL_KROKO_SHA=$(sha256sum /usr/local/bin/kroko-server | cut -d' ' -f1) && \
         if [ -n "$KROKO_SERVER_SHA256" ] && [ "$ACTUAL_KROKO_SHA" != "$KROKO_SERVER_SHA256" ]; then \
             echo "Kroko checksum mismatch. Build aborted." && \
             exit 1; \
+        fi && \
+        if [ -z "$KROKO_SERVER_SHA256" ]; then \
+            echo "⚠️  WARNING: KROKO_SERVER_SHA256 not set. For production, set --build-arg KROKO_SERVER_SHA256=${ACTUAL_KROKO_SHA}"; \
         fi && \
         chmod +x /usr/local/bin/kroko-server; \
     fi

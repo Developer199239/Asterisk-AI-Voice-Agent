@@ -55,6 +55,34 @@ def test_env_and_yaml_updates_whisper_cpp_persists_model_path() -> None:
     assert yaml_updates["whisper_cpp_model_path"] == "/app/models/stt/ggml-base.en.bin"
 
 
+def test_ws_payload_kroko_infers_embedded_when_model_path_points_to_models_kroko() -> None:
+    req = SwitchModelRequest(
+        model_type="stt",
+        backend="kroko",
+        model_path="/app/models/kroko/kroko-en-v1.0.onnx",
+    )
+    assert _build_local_ai_ws_switch_payload(req) == {
+        "type": "switch_model",
+        "stt_backend": "kroko",
+        "kroko_embedded": True,
+        "kroko_model_path": "/app/models/kroko/kroko-en-v1.0.onnx",
+    }
+
+
+def test_env_updates_kroko_sets_embedded_0_for_cloud_url_without_model_path() -> None:
+    req = SwitchModelRequest(
+        model_type="stt",
+        backend="kroko",
+        model_path=None,
+        kroko_url="wss://app.kroko.ai/api/v1/transcripts/streaming",
+    )
+    env_updates, yaml_updates = _build_local_ai_env_and_yaml_updates(req)
+    assert env_updates["LOCAL_STT_BACKEND"] == "kroko"
+    assert env_updates["KROKO_URL"].startswith("wss://app.kroko.ai/")
+    assert env_updates["KROKO_EMBEDDED"] == "0"
+    assert yaml_updates["stt_backend"] == "kroko"
+
+
 def test_ws_payload_melotts_uses_tts_config_voice() -> None:
     req = SwitchModelRequest(model_type="tts", backend="melotts", model_path="EN-US")
     assert _build_local_ai_ws_switch_payload(req) == {
