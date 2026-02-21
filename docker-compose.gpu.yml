@@ -39,8 +39,9 @@ services:
       args:
         - INCLUDE_VOSK=${INCLUDE_VOSK:-true}
         - INCLUDE_SHERPA=${INCLUDE_SHERPA:-true}
-        - INCLUDE_FASTER_WHISPER=${INCLUDE_FASTER_WHISPER:-false}
-        - INCLUDE_WHISPER_CPP=${INCLUDE_WHISPER_CPP:-false}
+        # On GPU builds, include Whisper backends by default so UI switching works out of the box.
+        - INCLUDE_FASTER_WHISPER=${INCLUDE_FASTER_WHISPER:-true}
+        - INCLUDE_WHISPER_CPP=${INCLUDE_WHISPER_CPP:-true}
         - INCLUDE_PIPER=${INCLUDE_PIPER:-true}
         - INCLUDE_KOKORO=${INCLUDE_KOKORO:-true}
         - INCLUDE_MELOTTS=${INCLUDE_MELOTTS:-false}
