@@ -45,20 +45,20 @@ def _tts_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
         display = os.path.basename(server.tts_model_path)
         return loaded, path, display
     if server.tts_backend == "kokoro":
+        # For UI consistency, keep `models.tts.path` stable as the configured Kokoro model path
+        # (matches the value returned by /api/local-ai/models) regardless of kokoro_mode.
+        #
+        # kokoro_mode and API base_url are still exposed under the top-level "kokoro" object.
+        stable_path = server.kokoro_model_path
         if server.kokoro_mode == "api":
             loaded = server.mock_models or bool(server.kokoro_api_base_url)
-            path = server.kokoro_api_base_url
             display = f"Kokoro Web API ({server.kokoro_voice})"
-            return loaded, path, display
+            return loaded, stable_path, display
 
         loaded = server.mock_models or server.kokoro_backend is not None
-        path = (
-            server.kokoro_model_path
-            if server.kokoro_mode != "hf"
-            else "hf://hexgrad/Kokoro-82M"
-        )
-        display = f"Kokoro ({server.kokoro_voice})"
-        return loaded, path, display
+        suffix = f", mode={server.kokoro_mode}" if server.kokoro_mode else ""
+        display = f"Kokoro ({server.kokoro_voice}{suffix})"
+        return loaded, stable_path, display
     if server.tts_backend == "melotts":
         loaded = server.mock_models or server.melotts_backend is not None
         path = server.melotts_voice

@@ -47,9 +47,9 @@ interface DownloadProgress {
 }
 
 interface ActiveModels {
-    stt: { backend: string; path: string; loaded: boolean };
-    tts: { backend: string; path: string; loaded: boolean };
-    llm: { path: string; loaded: boolean };
+    stt: { backend: string; path: string; loaded: boolean; display?: string };
+    tts: { backend: string; path: string; loaded: boolean; display?: string };
+    llm: { path: string; loaded: boolean; display?: string };
 }
 
 interface AvailableModels {
@@ -214,16 +214,19 @@ const ModelsPage = () => {
                     stt: {
                         backend: localAI.details?.models?.stt?.backend || 'unknown',
                         path: localAI.details?.models?.stt?.path || '',
-                        loaded: localAI.details?.models?.stt?.loaded || false
+                        loaded: localAI.details?.models?.stt?.loaded || false,
+                        display: localAI.details?.models?.stt?.display || ''
                     },
                     tts: {
                         backend: localAI.details?.models?.tts?.backend || 'unknown',
                         path: localAI.details?.models?.tts?.path || '',
-                        loaded: localAI.details?.models?.tts?.loaded || false
+                        loaded: localAI.details?.models?.tts?.loaded || false,
+                        display: localAI.details?.models?.tts?.display || ''
                     },
                     llm: {
                         path: localAI.details?.models?.llm?.path || '',
-                        loaded: localAI.details?.models?.llm?.loaded || false
+                        loaded: localAI.details?.models?.llm?.loaded || false,
+                        display: localAI.details?.models?.llm?.display || ''
                     }
                 });
             } else {
@@ -723,8 +726,8 @@ const ModelsPage = () => {
                                     <option value="faster_whisper:medium">Whisper Medium</option>
                                 </optgroup>
                             </select>
-                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.stt.path}>
-                                {getModelName(activeModels.stt.path)}
+                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.stt.display || activeModels.stt.path}>
+                                {activeModels.stt.display || getModelName(activeModels.stt.path)}
                             </div>
                         </div>
 
@@ -751,8 +754,8 @@ const ModelsPage = () => {
                                     <option key={m.path} value={m.path}>{m.name}</option>
                                 ))}
                             </select>
-                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.llm.path}>
-                                {getModelName(activeModels.llm.path)}
+                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.llm.display || activeModels.llm.path}>
+                                {activeModels.llm.display || getModelName(activeModels.llm.path)}
                             </div>
                         </div>
 
@@ -793,8 +796,8 @@ const ModelsPage = () => {
                                     <option value="melotts:EN-AU">MeloTTS AU</option>
                                 </optgroup>
                             </select>
-                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.tts.path}>
-                                {getModelName(activeModels.tts.path)}
+                            <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.tts.display || activeModels.tts.path}>
+                                {activeModels.tts.display || getModelName(activeModels.tts.path)}
                             </div>
                         </div>
                     </div>
