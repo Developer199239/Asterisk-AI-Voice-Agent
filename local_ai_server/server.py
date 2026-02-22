@@ -56,6 +56,23 @@ from model_manager import ModelManager
 from ws_protocol import WebSocketProtocol
 
 
+# Local LLM tool-call guardrails (server-side) to prevent accidental hangups.
+# This is intentionally conservative: we only allow hangup_call when the user's
+# transcript contains explicit end-of-call intent markers.
+_END_CALL_MARKERS: Tuple[str, ...] = (
+    "no transcript",
+    "no transcript needed",
+    "don't send a transcript",
+    "no thanks",
+    "that's all",
+    "nothing else",
+    "end call",
+    "hang up",
+    "goodbye",
+    "bye",
+)
+
+
 class _LegacyKrokoSTTBackend:
     """
     Kroko ASR streaming STT backend via WebSocket.
@@ -3116,27 +3133,105 @@ class LocalAIServer:
     def _strip_tool_calls_for_tts(self, text: str) -> str:
         """
         Strip tool call markup from text before TTS to avoid speaking tags.
-        Returns the clean spoken text without <tool_call>...</tool_call> blocks.
+        Returns the clean spoken text without tool-call wrappers.
+
+        Notes:
+        - Local LLMs sometimes emit named-tag tool wrappers like <hangup_call>...</hangup_call>
+          even when instructed to use <tool_call>...</tool_call>. We strip both forms.
+        - We also strip leaked chat/template tokens like <|system|>, <|user|>, etc.
         """
         import re
         if not text:
             return ""
-        
-        # Remove <tool_call>...</tool_call> blocks (including newlines inside)
-        clean = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        
-        # Also handle potential JSON tool calls without tags
+
+        tool_names = [
+            "hangup_call",
+            "transfer",
+            "blind_transfer",
+            "attended_transfer",
+            "cancel_transfer",
+            "leave_voicemail",
+            "send_email_summary",
+            "request_transcript",
+        ]
+
+        clean = text
+
+        # Strip <tool_call>...</tool_call> blocks (including newlines inside).
+        clean = re.sub(r"<tool_call\b[^>]*>.*?</tool_call>", "", clean, flags=re.DOTALL | re.IGNORECASE)
+
+        # Strip named-tag wrappers like <hangup_call>...</hangup_call>.
+        for name in tool_names:
+            clean = re.sub(
+                rf"<{re.escape(name)}\b[^>]*>.*?</{re.escape(name)}>",
+                "",
+                clean,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+
+        # Remove any leftover orphan tags for known tool wrappers.
+        clean = re.sub(r"</?\s*tool_call\b[^>]*>", "", clean, flags=re.IGNORECASE)
+        for name in tool_names:
+            clean = re.sub(rf"</?\s*{re.escape(name)}\b[^>]*>", "", clean, flags=re.IGNORECASE)
+
+        # Strip leaked chat/template tokens that should never be spoken.
+        clean = re.sub(r"<\|\s*(?:system|assistant|user|enduser|end)\s*\|>", "", clean, flags=re.IGNORECASE)
+
+        # Also handle potential JSON tool calls without tags (best-effort).
         # e.g., {"name": "hangup_call", ...}
-        clean = re.sub(r'\{["\']name["\']\s*:\s*["\'](?:hangup_call|transfer|request_transcript)["\'].*?\}', '', clean, flags=re.DOTALL)
-        
-        # Clean up extra whitespace
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        
-        if clean != text.strip():
+        names_pattern = "|".join(re.escape(n) for n in tool_names)
+        clean = re.sub(
+            rf"\{{[^{{}}]*[\"']name[\"']\s*:\s*[\"'](?:{names_pattern})[\"'][^{{}}]*\}}",
+            "",
+            clean,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+        # Remove stray standalone braces that can be left after partial stripping.
+        clean = re.sub(r"(?:^|\s)[}\]]+(?=\s|$)", " ", clean)
+
+        # Normalize whitespace.
+        clean = re.sub(r"\s+", " ", clean).strip()
+
+        if clean != (text or "").strip():
             logging.info("🔇 TTS - Stripped tool call markup: original=%d chars, clean=%d chars", 
                         len(text), len(clean))
         
         return clean
+
+    def _text_has_end_call_intent(self, text: str) -> bool:
+        import re
+        t = _normalize_text(text or "")
+        if not t:
+            return False
+        for marker in _END_CALL_MARKERS:
+            m = _normalize_text(marker)
+            if not m:
+                continue
+            if " " in m:
+                if m in t:
+                    return True
+                continue
+            if re.search(rf"(?:^|\b){re.escape(m)}(?:\b|$)", t):
+                return True
+        return False
+
+    def _text_has_hangup_tool_call(self, text: str) -> bool:
+        import re
+        s = text or ""
+        if not s:
+            return False
+        if re.search(r"<\s*hangup_call\b", s, flags=re.IGNORECASE):
+            return True
+        if re.search(r"<\s*tool_call\b", s, flags=re.IGNORECASE) and re.search(
+            r"[\"']name[\"']\s*:\s*[\"']hangup_call[\"']",
+            s,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        if re.search(r"[\"']name[\"']\s*:\s*[\"']hangup_call[\"']", s, flags=re.IGNORECASE):
+            return True
+        return False
 
     async def _emit_llm_response(
         self,
@@ -3372,6 +3467,36 @@ class LocalAIServer:
                 exc_info=True,
             )
             llm_response = "I'm here to help you. Could you please repeat that?"
+
+        # Guardrail: some local LLMs occasionally emit a hangup_call tool wrapper even when the user
+        # hasn't indicated they want to end the call (e.g., "how to set up the project").
+        # When this happens, retry once with an explicit "no tools" instruction.
+        if mode == "full" and llm_response and self._text_has_hangup_tool_call(llm_response):
+            if not self._text_has_end_call_intent(clean_text):
+                logging.warning(
+                    "⚠️ LLM emitted hangup_call without end-of-call intent; retrying without tools call_id=%s mode=%s preview=%s",
+                    session.call_id,
+                    mode,
+                    clean_text[:80],
+                )
+                retry_prompt = (
+                    f"{prompt_text}\n\n"
+                    "IMPORTANT: Do NOT output any tool calls or tool tags. "
+                    "Do NOT include <tool_call>...</tool_call> or <hangup_call>...</hangup_call>. "
+                    "Respond with plain conversational text only."
+                )
+                try:
+                    llm_retry = await asyncio.wait_for(
+                        asyncio.shield(self.process_llm(retry_prompt)), timeout=infer_timeout
+                    )
+                    if llm_retry and isinstance(llm_retry, str):
+                        llm_response = llm_retry
+                except Exception:
+                    logging.debug(
+                        "LLM retry without tools failed; keeping original response call_id=%s",
+                        session.call_id,
+                        exc_info=True,
+                    )
 
         # Record assistant turn for subsequent prompts (avoid tool-call markup in history).
         assistant_text = self._strip_tool_calls_for_tts(llm_response or "").strip()

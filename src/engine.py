@@ -63,7 +63,12 @@ from .core.models import CallSession
 from .core.outbound_store import get_outbound_store
 from .utils.audio_capture import AudioCaptureManager
 from src.pipelines.base import LLMResponse
-from src.tools.telephony.hangup_policy import resolve_hangup_policy, text_contains_marker_word, normalize_marker_list
+from src.tools.telephony.hangup_policy import (
+    resolve_hangup_policy,
+    text_contains_marker,
+    text_contains_marker_word,
+    normalize_marker_list,
+)
 
 logger = get_logger(__name__)
 
@@ -8414,14 +8419,35 @@ class Engine:
                 # Handle tool calls from local LLM (parsed from text response)
                 tool_calls = event.get("tool_calls", [])
                 text_response = event.get("text")
-                
+
                 logger.info(
                     "🔧 Tool calls parsed from local LLM",
                     call_id=call_id,
                     tools=[tc.get("name") for tc in tool_calls],
                     has_text=bool(text_response),
                 )
-                
+
+                # Guardrail: local LLMs can hallucinate terminal tool calls (especially hangup_call).
+                # Require explicit end-of-call intent in the *user's* transcript before honoring hangup_call.
+                if tool_calls and any((tc.get("name") or "").strip() == "hangup_call" for tc in tool_calls):
+                    hangup_policy = resolve_hangup_policy(getattr(self.config, "tools", None))
+                    policy_mode = str(hangup_policy.get("mode") or "normal").strip().lower()
+                    if policy_mode != "relaxed":
+                        end_markers = (hangup_policy.get("markers") or {}).get("end_call", [])
+                        user_text = (getattr(session, "last_transcript", None) or "").strip()
+                        has_end_intent = text_contains_marker(user_text, end_markers)
+                        if not has_end_intent:
+                            before_count = len(tool_calls)
+                            tool_calls = [tc for tc in tool_calls if (tc.get("name") or "").strip() != "hangup_call"]
+                            dropped = before_count - len(tool_calls)
+                            if dropped:
+                                logger.warning(
+                                    "Dropping hangup_call tool call from local LLM (no end-of-call intent detected)",
+                                    call_id=call_id,
+                                    guardrail_mode=policy_mode,
+                                    transcript_preview=user_text[:160],
+                                )
+
                 # Execute each tool call
                 for tool_call in tool_calls:
                     tool_name = tool_call.get("name")
