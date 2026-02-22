@@ -32,6 +32,17 @@ Run:
 
 - `docker compose build local_ai_server` (default settings)
 
+### Profile: `local-gpu` (GPU-accelerated)
+
+Uses `Dockerfile.gpu` for CUDA-enabled llama.cpp + Faster Whisper. Includes all backends from `local-full` plus CUDA support.
+
+Run:
+
+- `docker compose -f docker-compose.yml -f docker-compose.gpu.yml build local_ai_server`
+- `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d local_ai_server`
+
+Prerequisites: NVIDIA GPU, nvidia-container-toolkit. See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for full GPU setup.
+
 ## Embedded Kroko (Default: Off)
 
 `INCLUDE_KROKO_EMBEDDED` is **off by default** (lighter image). Enable it only if you specifically want the embedded Kroko ONNX websocket server inside `local_ai_server`.
@@ -44,9 +55,11 @@ Run:
 - **GPU (if used):** large variance by GPU + model; tune `LOCAL_LLM_GPU_LAYERS` and thread counts.
 - **RAM:** ensure the model(s) you choose fit comfortably; leave headroom for Docker + Asterisk.
 
-## Typical Disk/RAM Footprints (Local-Core)
+## Typical Disk/RAM Footprints
 
 These are **approximate** and vary by model variant/quantization and OS memory behavior. Verify with `du -sh` on your actual model files.
+
+### Local-Core (CPU)
 
 | Component | Example default | Disk (approx) | RAM (approx) | Notes |
 |---|---|---:|---:|---|
@@ -54,6 +67,15 @@ These are **approximate** and vary by model variant/quantization and OS memory b
 | LLM | Phi-3-mini GGUF `Q4_K_M` | ~2.0–2.6 GB | ~3–5 GB | CPU-only can be slow; GPU layers reduce CPU load |
 | TTS | Piper `en_US-lessac-medium.onnx` | ~50–150 MB | ~0.2–0.6 GB | Voice/model dependent |
 | **Total (core)** | Vosk + Phi-3-mini + Piper | **~3.6–4.8 GB** | **~4–7 GB** | Add headroom for Docker + Asterisk |
+
+### Local-GPU (Recommended with NVIDIA GPU)
+
+| Component | Example default | Disk (approx) | RAM/VRAM (approx) | Notes |
+|---|---|---:|---:|---|
+| STT | Faster Whisper `base` | ~150 MB | ~0.5 GB VRAM | CUDA accelerated; `tiny` to `large-v3` available |
+| LLM | Phi-3-mini GGUF `Q4_K_M` | ~2.0–2.6 GB | ~3–5 GB VRAM | `LOCAL_LLM_GPU_LAYERS=-1` for full offload |
+| TTS | Kokoro (HF mode) | ~300–500 MB | ~0.5–1.0 GB | Auto-downloads from HuggingFace Hub |
+| **Total (GPU)** | Faster Whisper + Phi-3 + Kokoro | **~2.5–3.3 GB** | **~4–7 GB VRAM** | Validated ~665ms E2E on RTX 4090 |
 
 Practical guidance:
 

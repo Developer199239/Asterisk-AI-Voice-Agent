@@ -427,6 +427,8 @@ You will be asked to choose an AI provider.
 - **[2] Deepgram Voice Agent**: Cloud STT/TTS with strong latency/quality.
 - **[3] Local Hybrid**: Local STT/TTS + cloud LLM (audio stays local).
 
+> **GPU users:** If you selected Local Hybrid (or plan to run Fully Local), and you have an NVIDIA GPU, build with the GPU compose overlay for dramatically faster inference (~10-30x). See **[LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md)** for full GPU setup including `docker-compose.gpu.yml`, nvidia-container-toolkit, and split-server topologies.
+
 #### Provider Configuration
 
 Based on your selection, you will need to provide API keys.
@@ -469,6 +471,13 @@ docker compose -p asterisk-ai-voice-agent up --build -d
 > ```
 >
 > Subsequent restarts are typically much faster due to OS page cache. If startup is too slow for your hardware, consider using MEDIUM or LIGHT tier models and update the `.env` model paths accordingly.
+>
+> **GPU acceleration:** Use `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build local_ai_server` for CUDA-accelerated LLM inference. Set `LOCAL_LLM_GPU_LAYERS=-1` in `.env`. See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for the full guide.
+>
+> **Runtime mode:** `local_ai_server` auto-selects runtime based on GPU availability:
+> - `GPU_AVAILABLE=true` → `full` mode (STT + LLM + TTS preloaded)
+> - `GPU_AVAILABLE=false` → `minimal` mode (STT + TTS only; LLM loaded on demand)
+> Override with `LOCAL_AI_MODE=full` or `LOCAL_AI_MODE=minimal` in `.env`.
 
 ## 3. Verifying the Installation
 

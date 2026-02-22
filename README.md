@@ -79,6 +79,8 @@ Follow the **Setup Wizard** to configure your providers and make a test call.
 
 ### 4. Verify Installation
 
+> **GPU users:** If you have an NVIDIA GPU for local AI inference, see **[docs/LOCAL_ONLY_SETUP.md](docs/LOCAL_ONLY_SETUP.md)** for the GPU compose overlay (`docker-compose.gpu.yml`) before building.
+
 ```bash
 # Start ai_engine (required for health checks)
 docker compose -p asterisk-ai-voice-agent up -d --build ai_engine
@@ -296,10 +298,18 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 ### Fully Local (Optional)
 
-AVA also supports a **Fully Local** mode (100% on-premises, no cloud APIs). This is **not** one of the golden baselines because performance depends heavily on your hardware (especially the local LLM).
+AVA also supports a **Fully Local** mode (100% on-premises, no cloud APIs). Three topologies are supported:
 
-- See: `docs/LOCAL_ONLY_SETUP.md`
-- Hardware guidance: `docs/HARDWARE_REQUIREMENTS.md`
+| Topology | Latency | Best For |
+|----------|---------|----------|
+| **CPU-Only** | 5-15s/turn | Privacy, testing |
+| **GPU (same box)** | 0.5-2s/turn | Production local |
+| **Split-Server** (remote GPU) | 1-3s/turn | PBX on VPS + GPU box |
+
+GPU setup uses `docker-compose.gpu.yml` overlay with CUDA-enabled llama.cpp. Community-validated: RTX 4090 achieves ~665ms E2E.
+
+- See: **[docs/LOCAL_ONLY_SETUP.md](docs/LOCAL_ONLY_SETUP.md)** (canonical guide for all local topologies)
+- Hardware guidance: **[docs/HARDWARE_REQUIREMENTS.md](docs/HARDWARE_REQUIREMENTS.md)**
 
 ### 🏠 Self-Hosted LLM with Ollama (No API Key Required)
 
@@ -535,10 +545,12 @@ graph LR
 
 ### Minimum System Requirements
 
-| Type | CPU | RAM | Disk |
-|------|-----|-----|------|
-| **Cloud** (OpenAI/Deepgram) | 2+ cores | 4GB | 1GB |
-| **Local Hybrid** | 4+ cores | 8GB+ | 2GB |
+| Type | CPU | RAM | GPU | Disk |
+|------|-----|-----|-----|------|
+| **Cloud** (OpenAI/Deepgram) | 2+ cores | 4GB | None | 1GB |
+| **Local Hybrid** (cloud LLM) | 4+ cores | 8GB+ | None | 2GB |
+| **Fully Local** (CPU) | 4+ cores (2020+) | 8-16GB | None | 5GB |
+| **Fully Local** (GPU) | 4+ cores | 8-16GB | RTX 3060+ | 10GB |
 
 ### Software Requirements
 
