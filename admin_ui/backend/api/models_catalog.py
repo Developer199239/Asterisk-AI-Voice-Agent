@@ -225,6 +225,8 @@ KROKO_STT_MODELS = [
 FASTER_WHISPER_STT_MODELS = [
     # Faster-Whisper models auto-download from HuggingFace on first use
     # Requires: docker build --build-arg INCLUDE_FASTER_WHISPER=true
+    
+    # === Multilingual Models ===
     {"id": "faster_whisper_tiny", "name": "Whisper Tiny (39M)", "language": "multi", "region": "global", "backend": "faster_whisper",
      "size_mb": 75, "size_display": "75 MB", "model_path": "tiny",
      "download_url": None, "auto_download": True,
@@ -250,12 +252,80 @@ FASTER_WHISPER_STT_MODELS = [
      "download_url": None, "auto_download": True,
      "description": "Best accuracy, requires GPU for acceptable speed.",
      "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_large_v3_turbo", "name": "Whisper Large v3 Turbo (809M)", "language": "multi", "region": "global", "backend": "faster_whisper",
+     "size_mb": 1600, "size_display": "1.6 GB", "model_path": "large-v3-turbo",
+     "download_url": None, "auto_download": True,
+     "description": "Pruned large-v3, best speed/quality ratio. Recommended for GPU.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_distil_large_v3", "name": "Distil-Whisper Large v3 (756M)", "language": "multi", "region": "global", "backend": "faster_whisper",
+     "size_mb": 1500, "size_display": "1.5 GB", "model_path": "distil-large-v3",
+     "download_url": None, "auto_download": True,
+     "description": "Within 1% WER of large-v3, 2x faster. Best for production.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    
+    # === English-Only Models (slightly better for English) ===
+    {"id": "faster_whisper_tiny_en", "name": "Whisper Tiny.en (39M)", "language": "en-US", "region": "global", "backend": "faster_whisper",
+     "size_mb": 75, "size_display": "75 MB", "model_path": "tiny.en",
+     "download_url": None, "auto_download": True,
+     "description": "English-only, fastest option.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_base_en", "name": "Whisper Base.en (74M)", "language": "en-US", "region": "global", "backend": "faster_whisper",
+     "size_mb": 145, "size_display": "145 MB", "model_path": "base.en",
+     "download_url": None, "auto_download": True,
+     "description": "English-only, good for real-time English transcription.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_small_en", "name": "Whisper Small.en (244M)", "language": "en-US", "region": "global", "backend": "faster_whisper",
+     "size_mb": 465, "size_display": "465 MB", "model_path": "small.en",
+     "download_url": None, "auto_download": True,
+     "description": "English-only, excellent accuracy for English calls.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_medium_en", "name": "Whisper Medium.en (769M)", "language": "en-US", "region": "global", "backend": "faster_whisper",
+     "size_mb": 1500, "size_display": "1.5 GB", "model_path": "medium.en",
+     "download_url": None, "auto_download": True,
+     "description": "English-only, near-perfect accuracy with GPU.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+]
+
+WHISPER_CPP_STT_MODELS = [
+    # Whisper.cpp (ggml) models - requires INCLUDE_WHISPER_CPP=true in Docker build
+    # Download URLs from official ggml Whisper releases
+    {"id": "whisper_cpp_tiny_en", "name": "Whisper.cpp Tiny.en", "language": "en-US", "region": "global", "backend": "whisper_cpp",
+     "size_mb": 75, "size_display": "75 MB", "model_path": "ggml-tiny.en.bin",
+     "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+     "description": "Fastest English-only model for CPU.",
+     "note": "Requires INCLUDE_WHISPER_CPP=true in Docker build"},
+    {"id": "whisper_cpp_base_en", "name": "Whisper.cpp Base.en", "language": "en-US", "region": "global", "backend": "whisper_cpp",
+     "size_mb": 142, "size_display": "142 MB", "model_path": "ggml-base.en.bin",
+     "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+     "recommended": True,
+     "description": "Good balance for English on CPU.",
+     "note": "Requires INCLUDE_WHISPER_CPP=true in Docker build"},
+    {"id": "whisper_cpp_small_en", "name": "Whisper.cpp Small.en", "language": "en-US", "region": "global", "backend": "whisper_cpp",
+     "size_mb": 466, "size_display": "466 MB", "model_path": "ggml-small.en.bin",
+     "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+     "description": "Higher accuracy English model.",
+     "note": "Requires INCLUDE_WHISPER_CPP=true in Docker build"},
+    {"id": "whisper_cpp_medium_en", "name": "Whisper.cpp Medium.en", "language": "en-US", "region": "global", "backend": "whisper_cpp",
+     "size_mb": 1500, "size_display": "1.5 GB", "model_path": "ggml-medium.en.bin",
+     "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
+     "description": "Near-best English accuracy.",
+     "note": "Requires INCLUDE_WHISPER_CPP=true in Docker build"},
+    {"id": "whisper_cpp_large_v3", "name": "Whisper.cpp Large v3", "language": "multi", "region": "global", "backend": "whisper_cpp",
+     "size_mb": 3000, "size_display": "3 GB", "model_path": "ggml-large-v3.bin",
+     "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+     "description": "Best multilingual accuracy, needs GPU.",
+     "note": "Requires INCLUDE_WHISPER_CPP=true in Docker build"},
+    {"id": "whisper_cpp_large_v3_turbo", "name": "Whisper.cpp Large v3 Turbo", "language": "multi", "region": "global", "backend": "whisper_cpp",
+     "size_mb": 1600, "size_display": "1.6 GB", "model_path": "ggml-large-v3-turbo.bin",
+     "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+     "description": "Faster large-v3 variant, excellent speed/quality.",
+     "note": "Requires INCLUDE_WHISPER_CPP=true in Docker build"},
 ]
 
 # ============== TTS Models (Text-to-Speech) ==============
 
 PIPER_TTS_MODELS = [
-    # === English ===
+    # === English (US) - Multiple voice options ===
     {"id": "piper_en_us_lessac_medium", "name": "Lessac (en-US, Male)", "language": "en-US", "region": "global", "backend": "piper",
      "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
      "model_path": "en_US-lessac-medium.onnx", "recommended": True,
@@ -266,11 +336,38 @@ PIPER_TTS_MODELS = [
      "model_path": "en_US-lessac-high.onnx",
      "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx",
      "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx.json"},
+    {"id": "piper_en_us_amy_medium", "name": "Amy (en-US, Female)", "language": "en-US", "region": "global", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "en_US-amy-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx.json"},
+    {"id": "piper_en_us_ryan_medium", "name": "Ryan (en-US, Male)", "language": "en-US", "region": "global", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "en_US-ryan-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/medium/en_US-ryan-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json"},
+    {"id": "piper_en_us_joe_medium", "name": "Joe (en-US, Male)", "language": "en-US", "region": "global", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "en_US-joe-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/joe/medium/en_US-joe-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/joe/medium/en_US-joe-medium.onnx.json"},
+    
+    # === English (GB) - Multiple voice options ===
     {"id": "piper_en_gb_alba_medium", "name": "Alba (en-GB, Female)", "language": "en-GB", "region": "europe", "backend": "piper",
      "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
      "model_path": "en_GB-alba-medium.onnx",
      "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
      "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json"},
+    {"id": "piper_en_gb_alan_medium", "name": "Alan (en-GB, Male)", "language": "en-GB", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "en_GB-alan-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alan/medium/en_GB-alan-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json"},
+    {"id": "piper_en_gb_jenny_dioco_medium", "name": "Jenny (en-GB, Female)", "language": "en-GB", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "en_GB-jenny_dioco-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx.json"},
     
     # === European Languages ===
     {"id": "piper_de_thorsten_medium", "name": "Thorsten (de-DE, Male)", "language": "de-DE", "region": "europe", "backend": "piper",
@@ -418,10 +515,21 @@ KOKORO_TTS_MODELS = [
      "config_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json",
      "supported_languages": ["en-US", "en-GB", "ja-JP", "zh-CN", "es-ES", "fr-FR", "hi-IN", "it-IT", "pt-BR"],
      "voice_files": {
+         # American English Female
          "af_heart": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_heart.pt",
          "af_bella": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_bella.pt",
+         "af_nicole": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_nicole.pt",
+         "af_sarah": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_sarah.pt",
+         "af_sky": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_sky.pt",
+         # American English Male
          "am_adam": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_adam.pt",
-         "am_michael": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_michael.pt"
+         "am_michael": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_michael.pt",
+         # British English Female
+         "bf_emma": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/bf_emma.pt",
+         "bf_isabella": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/bf_isabella.pt",
+         # British English Male
+         "bm_george": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/bm_george.pt",
+         "bm_lewis": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/bm_lewis.pt",
      }},
 ]
 
@@ -548,7 +656,7 @@ LLM_MODELS = [
 def get_full_catalog():
     """Get the complete model catalog organized by type."""
     return {
-        "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + FASTER_WHISPER_STT_MODELS,
+        "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + FASTER_WHISPER_STT_MODELS + WHISPER_CPP_STT_MODELS,
         "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS + MELOTTS_MODELS,
         "llm": LLM_MODELS,
     }
