@@ -78,6 +78,7 @@ services:
       - .env
     volumes:
       - ./models:/app/models
+      - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
       # Note: All LOCAL_* variables are loaded from .env via env_file directive above

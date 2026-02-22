@@ -767,9 +767,14 @@ class LocalAIServer:
         """
         Persist startup auto-tuning decisions in the models volume (if writable).
 
-        We prefer /app/models because it is already mounted in docker-compose.yml.
-        If that isn't writable, we still run auto-tuning but won't persist it.
+        We prefer /app/data because preflight ensures it is writable by containers.
+        If it isn't available, fall back to /app/models (best-effort).
         """
+        try:
+            if os.path.isdir("/app/data") and os.access("/app/data", os.W_OK):
+                return "/app/data/local_ai_server/llm_auto_ctx_cache.json"
+        except Exception:
+            pass
         return "/app/models/.aava/llm_auto_ctx_cache.json"
 
     def _llm_auto_ctx_cache_key(self, gpu: Dict[str, Any]) -> str:
