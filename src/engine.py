@@ -8059,7 +8059,23 @@ class Engine:
                         # Track provider bytes
                         try:
                             if call_id not in self._provider_segment_start_ts:
-                                self._provider_segment_start_ts[call_id] = time.time()
+                                seg_start_ts = time.time()
+                                self._provider_segment_start_ts[call_id] = seg_start_ts
+                                # Latency instrumentation (Milestone 21): compute turn latency for
+                                # providers that stream audio directly (e.g., local_ai_server).
+                                try:
+                                    t0 = float(getattr(session, "last_transcription_ts", 0.0) or 0.0)
+                                    if t0 > 0.0 and seg_start_ts >= t0:
+                                        latency_ms = (seg_start_ts - t0) * 1000.0
+                                        # Ignore extreme values to avoid polluting call history due to clock jumps.
+                                        if 0.0 <= latency_ms <= 120_000.0:
+                                            session.turn_latencies_ms.append(latency_ms)
+                                            session.last_turn_latency_s = float(latency_ms) / 1000.0
+                                            session.last_response_start_ts = float(seg_start_ts)
+                                            # Clear so subsequent segments aren't counted as new turns.
+                                            session.last_transcription_ts = 0.0
+                                except Exception:
+                                    logger.debug("Provider latency instrumentation failed", call_id=call_id, exc_info=True)
                         except Exception:
                             pass
                         self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else sum(len(f) for f in (out_chunk if isinstance(out_chunk, list) else [out_chunk])))
@@ -8582,6 +8598,15 @@ class Engine:
                     # Keep a quick-access copy for guardrails (e.g., hangup intent) and observability.
                     try:
                         session.last_transcript = text
+                    except Exception:
+                        pass
+                    # Latency instrumentation: record when the final transcript arrived.
+                    try:
+                        now_ts = time.time()
+                        session.last_transcription_ts = float(now_ts)
+                        # For providers that don't report precise VAD end timestamps, treat transcript time
+                        # as the best-available proxy for "user finished speaking".
+                        session.last_user_speech_end_ts = float(now_ts)
                     except Exception:
                         pass
                     # Add to conversation history
