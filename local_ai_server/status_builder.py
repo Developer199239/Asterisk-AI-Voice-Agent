@@ -171,6 +171,7 @@ def build_status_response(server) -> Dict[str, Any]:
             "debug_audio": DEBUG_AUDIO_FLOW,
             "mock_models": server.mock_models,
             "runtime_mode": runtime_mode,
+            "tool_gateway_enabled": bool(getattr(server, "tool_gateway_enabled", True)),
             "degraded": bool(server.startup_errors),
             "startup_errors": dict(server.startup_errors) if server.startup_errors else {},
             "runtime_fallbacks": dict(getattr(server, "runtime_fallbacks", {}) or {}),

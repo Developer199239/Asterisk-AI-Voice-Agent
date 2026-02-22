@@ -1392,6 +1392,7 @@ providers:
     farewell_mode: ${LOCAL_FAREWELL_MODE:=asterisk}
     farewell_timeout_sec: ${LOCAL_FAREWELL_TIMEOUT:=30.0}
     tool_call_policy: ${LOCAL_TOOL_CALL_POLICY:=auto}
+    tool_gateway_enabled: ${LOCAL_TOOL_GATEWAY_ENABLED:=true}
     greeting: Hello! I'm your local AI assistant running entirely on-premises.
     instructions: >-
       You are a helpful voice assistant running locally. Be concise and

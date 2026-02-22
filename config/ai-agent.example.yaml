@@ -148,6 +148,8 @@ providers:
     ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
     # auto|strict|compatible|off (auto follows Local AI Server tool capability probe)
     tool_call_policy: "${LOCAL_TOOL_CALL_POLICY:-auto}"
+    # Structured tool gateway for full local provider mode.
+    tool_gateway_enabled: "${LOCAL_TOOL_GATEWAY_ENABLED:-true}"
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
     chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}

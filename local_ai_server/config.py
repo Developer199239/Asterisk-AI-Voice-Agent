@@ -65,6 +65,7 @@ class LocalAIConfig:
     )
     llm_use_mlock: bool = False
     llm_infer_timeout_sec: float = 20.0
+    tool_gateway_enabled: bool = True
 
     tts_backend: str = "piper"
     tts_model_path: str = "/app/models/tts/en_US-lessac-medium.onnx"
@@ -169,6 +170,7 @@ class LocalAIConfig:
             llm_stop_tokens=stop_tokens,
             llm_use_mlock=_parse_bool(os.getenv("LOCAL_LLM_USE_MLOCK", "0")),
             llm_infer_timeout_sec=float(os.getenv("LOCAL_LLM_INFER_TIMEOUT_SEC", "20.0")),
+            tool_gateway_enabled=_parse_bool(os.getenv("LOCAL_TOOL_GATEWAY_ENABLED", "1"), default=True),
             tts_backend=(os.getenv("LOCAL_TTS_BACKEND", "piper") or "piper").strip().lower(),
             tts_model_path=os.getenv(
                 "LOCAL_TTS_MODEL_PATH", "/app/models/tts/en_US-lessac-medium.onnx"

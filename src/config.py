@@ -105,6 +105,8 @@ class LocalProviderConfig(BaseModel):
     # - compatible: compact instructions + parser recovery
     # - off: disable prompt injection for tools
     tool_call_policy: str = Field(default="auto")
+    # Structured tool gateway for full-local provider. Keeps modular local STT/TTS paths unchanged.
+    tool_gateway_enabled: bool = Field(default=True)
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
     temperature: float = Field(default=0.4)

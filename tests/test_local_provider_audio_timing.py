@@ -11,6 +11,8 @@ from src.providers.local import LocalProvider
 class _FakeWebSocket:
     def __init__(self, messages):
         self._messages = list(messages)
+        self.sent = []
+        self.state = type("State", (), {"name": "OPEN"})()
 
     def __aiter__(self):
         return self
@@ -19,6 +21,40 @@ class _FakeWebSocket:
         if not self._messages:
             raise StopAsyncIteration
         return self._messages.pop(0)
+
+    async def send(self, message):
+        self.sent.append(message)
+
+
+class _GatewayFakeWebSocket(_FakeWebSocket):
+    async def send(self, message):
+        await super().send(message)
+        try:
+            payload = json.loads(message)
+        except Exception:
+            return
+        if payload.get("type") != "llm_tool_request":
+            return
+        self._messages.append(
+            json.dumps(
+                {
+                    "type": "llm_tool_response",
+                    "call_id": payload.get("call_id", "call-gateway"),
+                    "request_id": payload.get("request_id"),
+                    "text": "Thanks for calling. Goodbye!",
+                    "tool_calls": [
+                        {
+                            "name": "hangup_call",
+                            "parameters": {"farewell_message": "Thanks for calling. Goodbye!"},
+                        }
+                    ],
+                    "finish_reason": "tool_calls",
+                    "tool_path": "structured",
+                    "tool_parse_failures": 0,
+                    "repair_attempts": 0,
+                }
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -206,3 +242,71 @@ def test_local_tool_policy_can_be_overridden_in_config():
     provider = LocalProvider(LocalProviderConfig(tool_call_policy="strict"), on_event=on_event)
     provider._tool_capability = {"level": "none"}
     assert provider._resolve_tool_policy() == "strict"
+
+
+@pytest.mark.asyncio
+async def test_full_local_uses_structured_tool_gateway_for_tool_events():
+    events = []
+
+    async def on_event(event):
+        events.append(event)
+
+    provider = LocalProvider(LocalProviderConfig(tool_gateway_enabled=True), on_event=on_event)
+    provider._mode = "full"
+    provider._effective_tool_policy = "compatible"
+    provider._allowed_tools = {"hangup_call"}
+    provider._active_call_id = "call-gateway"
+    provider.websocket = _GatewayFakeWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "llm_response",
+                    "call_id": "call-gateway",
+                    "text": "Goodbye and thank you.",
+                }
+            )
+        ]
+    )
+
+    await provider._receive_loop()
+
+    sent_payloads = [json.loads(msg) for msg in provider.websocket.sent]
+    assert any(payload.get("type") == "llm_tool_request" for payload in sent_payloads)
+    tool_events = [e for e in events if e.get("type") == "ToolCall"]
+    assert len(tool_events) == 1
+    assert tool_events[0]["tool_calls"][0]["name"] == "hangup_call"
+    transcript_events = [e for e in events if e.get("type") == "agent_transcript"]
+    assert transcript_events
+
+
+@pytest.mark.asyncio
+async def test_modular_mode_skips_structured_tool_gateway():
+    events = []
+
+    async def on_event(event):
+        events.append(event)
+
+    provider = LocalProvider(LocalProviderConfig(tool_gateway_enabled=True), on_event=on_event)
+    provider._mode = "stt"
+    provider._effective_tool_policy = "compatible"
+    provider._allowed_tools = {"hangup_call"}
+    provider._active_call_id = "call-modular"
+    provider.websocket = _FakeWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "llm_response",
+                    "call_id": "call-modular",
+                    "text": '<tool_call>{"name":"hangup_call","arguments":{"farewell_message":"Bye"}}'
+                            "</tool_call>",
+                }
+            )
+        ]
+    )
+
+    await provider._receive_loop()
+
+    sent_payloads = [json.loads(msg) for msg in provider.websocket.sent]
+    assert not any(payload.get("type") == "llm_tool_request" for payload in sent_payloads)
+    tool_events = [e for e in events if e.get("type") == "ToolCall"]
+    assert len(tool_events) == 1

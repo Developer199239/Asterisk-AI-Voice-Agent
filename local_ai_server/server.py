@@ -790,6 +790,9 @@ class LocalAIServer:
             "level": "unknown",
             "source": "init",
             "notes": "llm_not_probed",
+            "structured_mode": "none",
+            "validated_at": int(time() * 1000),
+            "model_fingerprint": "unknown",
         }
 
     def _llm_auto_ctx_cache_path(self) -> str:
@@ -1029,6 +1032,7 @@ class LocalAIServer:
         self.llm_system_prompt = config.llm_system_prompt
         self.llm_stop_tokens = list(config.llm_stop_tokens)
         self.llm_use_mlock = config.llm_use_mlock
+        self.tool_gateway_enabled = bool(config.tool_gateway_enabled)
 
         # TTS configuration
         self.tts_backend = config.tts_backend
@@ -1092,6 +1096,9 @@ class LocalAIServer:
                 "level": "none",
                 "source": "runtime_mode",
                 "notes": "runtime_mode=minimal",
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": self._llm_model_fingerprint(),
             }
         else:
             await self._load_llm_model(allow_auto_ctx=bool(startup))
@@ -1621,6 +1628,9 @@ class LocalAIServer:
                 "level": "none",
                 "source": "load_failed",
                 "notes": str(exc),
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": self._llm_model_fingerprint(),
             }
             self.startup_errors["llm"] = str(exc)
             if self.fail_fast:
@@ -1635,6 +1645,7 @@ class LocalAIServer:
         - partial: references tools but not in strict format
         - none: no observable tool-call behavior
         """
+        model_fingerprint = self._llm_model_fingerprint()
         model_name = os.path.basename(self.llm_model_path or "") or self.llm_model_path or "unknown"
         if self.runtime_mode == "minimal":
             return {
@@ -1642,6 +1653,9 @@ class LocalAIServer:
                 "source": "runtime_mode",
                 "model": model_name,
                 "notes": "runtime_mode=minimal",
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
             }
         if not self.llm_model:
             return {
@@ -1649,6 +1663,9 @@ class LocalAIServer:
                 "source": "unloaded",
                 "model": model_name,
                 "notes": "llm_model_unavailable",
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
             }
 
         probe_prompt = (
@@ -1706,6 +1723,9 @@ class LocalAIServer:
                 "source": "startup_probe",
                 "model": model_name,
                 "notes": notes,
+                "structured_mode": "json_schema" if level == "strict" else "parser_fallback",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
             }
             logging.info(
                 "🧪 LLM TOOL-CALL PROBE - level=%s model=%s notes=%s preview=%s",
@@ -1722,7 +1742,23 @@ class LocalAIServer:
                 "source": "probe_failed",
                 "model": model_name,
                 "notes": str(exc),
+                "structured_mode": "parser_fallback",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
             }
+
+    def _llm_model_fingerprint(self) -> str:
+        model_path = (self.llm_model_path or "").strip()
+        model_name = os.path.basename(model_path) or "unknown"
+        ctx = int(getattr(self, "llm_context", 0) or 0)
+        gpu_layers = int(getattr(self, "_llm_gpu_layers_effective", getattr(self, "llm_gpu_layers", 0)) or 0)
+        if not model_path:
+            return f"{model_name}|ctx={ctx}|gpu={gpu_layers}"
+        try:
+            st = os.stat(model_path)
+            return f"{model_name}|size={st.st_size}|mtime={int(st.st_mtime)}|ctx={ctx}|gpu={gpu_layers}"
+        except Exception:
+            return f"{model_name}|ctx={ctx}|gpu={gpu_layers}"
 
     async def run_startup_latency_check(self) -> None:
         """Run a lightweight LLM inference at startup to log baseline latency."""
@@ -3354,6 +3390,299 @@ class LocalAIServer:
             return True
         return False
 
+    @staticmethod
+    def _normalize_tool_policy(raw_policy: Any) -> str:
+        value = str(raw_policy or "auto").strip().lower()
+        if value in {"strict", "compatible", "off"}:
+            return value
+        return "auto"
+
+    @staticmethod
+    def _extract_allowed_tool_names(payload: Dict[str, Any]) -> List[str]:
+        names: List[str] = []
+        raw_names = payload.get("allowed_tools")
+        if isinstance(raw_names, list):
+            for item in raw_names:
+                name = str(item or "").strip()
+                if name:
+                    names.append(name)
+        if not names:
+            raw_tools = payload.get("tools")
+            if isinstance(raw_tools, list):
+                for item in raw_tools:
+                    if isinstance(item, dict):
+                        name = str(item.get("name") or "").strip()
+                        if name:
+                            names.append(name)
+        deduped: List[str] = []
+        seen = set()
+        for name in names:
+            lowered = name.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped.append(name)
+        return deduped
+
+    @staticmethod
+    def _normalize_tool_calls(
+        calls: List[Dict[str, Any]], allowed_tools: List[str]
+    ) -> List[Dict[str, Any]]:
+        if not calls:
+            return []
+        allowed = {str(name).strip() for name in allowed_tools if str(name).strip()}
+        normalized: List[Dict[str, Any]] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name") or "").strip()
+            if not name:
+                continue
+            if allowed and name not in allowed:
+                continue
+            params = call.get("parameters")
+            if params is None:
+                params = call.get("arguments")
+            if not isinstance(params, dict):
+                params = {}
+            normalized.append({"name": name, "parameters": params})
+        return normalized
+
+    @staticmethod
+    def _looks_like_tool_output(text: str, allowed_tools: List[str]) -> bool:
+        import re
+
+        sample = (text or "").strip().lower()
+        if not sample:
+            return False
+        if "<tool_call" in sample:
+            return True
+        if "\"name\"" in sample and "arguments" in sample:
+            return True
+        for tool in allowed_tools:
+            marker = str(tool or "").strip().lower()
+            if not marker:
+                continue
+            if f"<{marker}" in sample or f"*{marker}*" in sample or marker in sample:
+                return True
+            if re.search(rf"[\"']name[\"']\s*:\s*[\"']{re.escape(marker)}[\"']", sample):
+                return True
+        return False
+
+    def _extract_tool_calls_from_text(
+        self,
+        text: str,
+        allowed_tools: List[str],
+    ) -> Tuple[str, List[Dict[str, Any]], int]:
+        import re
+
+        raw = text or ""
+        parse_failures = 0
+        calls: List[Dict[str, Any]] = []
+
+        def _parse_json_object(candidate: str) -> Optional[Dict[str, Any]]:
+            nonlocal parse_failures
+            candidate = (candidate or "").strip()
+            if not candidate:
+                return None
+            try:
+                data = json.loads(candidate)
+            except Exception:
+                parse_failures += 1
+                return None
+            if not isinstance(data, dict):
+                return None
+            name = str(data.get("name") or "").strip()
+            args = data.get("arguments")
+            if args is None:
+                args = data.get("parameters")
+            if not isinstance(args, dict):
+                args = {}
+            if not name:
+                return None
+            return {"name": name, "parameters": args}
+
+        for match in re.finditer(r"<tool_call\b[^>]*>(.*?)</tool_call>", raw, flags=re.IGNORECASE | re.DOTALL):
+            parsed = _parse_json_object(match.group(1))
+            if parsed:
+                calls.append(parsed)
+
+        if not calls:
+            for tool in allowed_tools:
+                escaped = re.escape(tool)
+                pattern = rf"<{escaped}\b[^>]*>(.*?)</{escaped}>"
+                for match in re.finditer(pattern, raw, flags=re.IGNORECASE | re.DOTALL):
+                    parsed = _parse_json_object(match.group(1))
+                    if parsed:
+                        if parsed.get("name") != tool:
+                            parsed["name"] = tool
+                        calls.append(parsed)
+
+        if not calls:
+            for tool in allowed_tools:
+                escaped = re.escape(tool)
+                patterns = [
+                    rf"\*+\s*{escaped}\s*\*+\s*(\{{.*?\}})",
+                    rf"(?:^|\s){escaped}\s*(\{{.*?\}})",
+                ]
+                for pattern in patterns:
+                    for match in re.finditer(pattern, raw, flags=re.IGNORECASE | re.DOTALL):
+                        parsed = _parse_json_object(match.group(1))
+                        if parsed:
+                            if parsed.get("name") != tool:
+                                parsed["name"] = tool
+                            calls.append(parsed)
+
+        if not calls and raw.strip().startswith("{") and raw.strip().endswith("}"):
+            parsed = _parse_json_object(raw.strip())
+            if parsed:
+                calls.append(parsed)
+
+        normalized_calls = self._normalize_tool_calls(calls, allowed_tools)
+        clean_text = self._strip_tool_calls_for_tts(raw)
+        return clean_text, normalized_calls, parse_failures
+
+    async def _attempt_tool_call_repair(
+        self,
+        candidate_text: str,
+        allowed_tools: List[str],
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        if not self.llm_model or not allowed_tools:
+            return [], 0
+
+        tool_list = ", ".join(sorted(set(allowed_tools)))
+        preview = (candidate_text or "").strip()
+        if len(preview) > 1200:
+            preview = f"{preview[:700]}\n...\n{preview[-400:]}"
+
+        repair_prompt = (
+            "You are a strict tool-call normalizer.\n"
+            f"Allowed tools: {tool_list}\n"
+            "Return EXACTLY one output:\n"
+            "1) <tool_call>{\"name\":\"tool_name\",\"arguments\":{}}</tool_call>\n"
+            "2) NONE\n"
+            "No prose. No markdown. No extra text.\n\n"
+            "Candidate assistant output:\n"
+            f"{preview}"
+        )
+
+        async with self._llm_lock:
+            try:
+                output = await asyncio.to_thread(
+                    self.llm_model,
+                    repair_prompt,
+                    max_tokens=min(96, max(32, int(getattr(self, "llm_max_tokens", 64) or 64))),
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                choices = output.get("choices", []) if isinstance(output, dict) else []
+                if not choices:
+                    return [], 0
+                repaired_text = str(choices[0].get("text", "") or "").strip()
+            except Exception:
+                logging.debug("Tool-call repair inference failed", exc_info=True)
+                return [], 0
+
+        if repaired_text.upper() == "NONE":
+            return [], 0
+
+        _, repaired_calls, parse_failures = self._extract_tool_calls_from_text(repaired_text, allowed_tools)
+        return repaired_calls, parse_failures
+
+    async def _handle_llm_tool_request(
+        self,
+        websocket,
+        session: SessionContext,
+        data: Dict[str, Any],
+    ) -> None:
+        request_id = str(data.get("request_id") or "").strip()
+        call_id = data.get("call_id")
+        if call_id:
+            session.call_id = call_id
+        text = str(data.get("text") or "")
+        if not text.strip():
+            await self._send_json(
+                websocket,
+                {
+                    "type": "llm_tool_response",
+                    "call_id": session.call_id,
+                    "request_id": request_id,
+                    "text": "",
+                    "tool_calls": [],
+                    "finish_reason": "stop",
+                    "tool_path": "none",
+                    "tool_parse_failures": 0,
+                    "repair_attempts": 0,
+                    "protocol_version": 2,
+                },
+            )
+            return
+
+        allowed_tools = self._extract_allowed_tool_names(data)
+        policy = self._normalize_tool_policy(data.get("tool_policy"))
+        if policy == "auto":
+            capability_level = str((self._llm_tool_capability_meta or {}).get("level") or "").strip().lower()
+            if capability_level == "strict":
+                policy = "strict"
+            elif capability_level == "none":
+                policy = "off"
+            else:
+                policy = "compatible"
+        tool_choice = str(data.get("tool_choice") or "auto").strip().lower()
+
+        clean_text, tool_calls, parse_failures = self._extract_tool_calls_from_text(text, allowed_tools)
+        tool_path = "parser" if tool_calls else "none"
+        repair_attempts = 0
+
+        should_try_repair = (
+            bool(getattr(self, "tool_gateway_enabled", True))
+            and policy in {"strict", "compatible"}
+            and tool_choice != "none"
+            and not tool_calls
+            and bool(allowed_tools)
+            and self._looks_like_tool_output(text, allowed_tools)
+        )
+        if should_try_repair:
+            repair_attempts = 1
+            repaired_calls, repair_failures = await self._attempt_tool_call_repair(text, allowed_tools)
+            parse_failures += repair_failures
+            if repaired_calls:
+                tool_calls = repaired_calls
+                tool_path = "repair"
+
+        if tool_choice == "none":
+            tool_calls = []
+            tool_path = "none"
+
+        finish_reason = "tool_calls" if tool_calls else "stop"
+        payload = {
+            "type": "llm_tool_response",
+            "call_id": session.call_id,
+            "text": clean_text,
+            "tool_calls": tool_calls,
+            "finish_reason": finish_reason,
+            "tool_path": tool_path if finish_reason == "tool_calls" else "none",
+            "tool_parse_failures": parse_failures,
+            "repair_attempts": repair_attempts,
+            "protocol_version": 2,
+        }
+        if request_id:
+            payload["request_id"] = request_id
+
+        logging.info(
+            "🧩 LLM TOOL GATEWAY - call_id=%s policy=%s tool_path=%s tools=%s parse_failures=%s repair_attempts=%s",
+            session.call_id,
+            policy,
+            payload["tool_path"],
+            [tc.get("name") for tc in tool_calls],
+            parse_failures,
+            repair_attempts,
+        )
+        await self._send_json(websocket, payload)
+
     async def _emit_llm_response(
         self,
         websocket,
@@ -4046,6 +4375,10 @@ class LocalAIServer:
 
         if msg_type == "llm_request":
             await self._handle_llm_request(websocket, session, data)
+            return
+
+        if msg_type == "llm_tool_request":
+            await self._handle_llm_tool_request(websocket, session, data)
             return
 
         if msg_type == "reload_models":

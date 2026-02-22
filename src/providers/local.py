@@ -65,10 +65,14 @@ class LocalProvider(AIProviderInterface):
         self._allowed_tools: set[str] = set()
         # Request-id keyed futures for internal LLM repair turns.
         self._pending_llm_responses: Dict[str, asyncio.Future] = {}
+        self._pending_llm_tool_responses: Dict[str, Dict[str, Any]] = {}
+        self._llm_tool_timeout_tasks: Dict[str, asyncio.Task] = {}
         # LLM tool-calling capability metadata from local_ai_server status.
         self._tool_capability: Dict[str, Any] = {"level": "unknown", "source": "init"}
         # Effective per-call policy: strict | compatible | off
         self._effective_tool_policy: str = "compatible"
+        # Feature flag: structured tool gateway for full-local provider only.
+        self._tool_gateway_enabled: bool = bool(getattr(config, "tool_gateway_enabled", True))
 
     def _parse_ws_url(self, ws_url: str) -> tuple:
         """Parse host and port from WebSocket URL."""
@@ -225,6 +229,210 @@ class LocalProvider(AIProviderInterface):
             tools=[tc.get("name") for tc in filtered],
         )
         return filtered
+
+    def _is_structured_tool_gateway_active(self) -> bool:
+        return (
+            bool(self._tool_gateway_enabled)
+            and str(self._mode or "").strip().lower() == "full"
+            and self._effective_tool_policy != "off"
+            and bool(self._allowed_tools)
+        )
+
+    def _cancel_gateway_timeout(self, request_id: str) -> None:
+        task = self._llm_tool_timeout_tasks.pop(request_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    async def _emit_local_llm_result(
+        self,
+        *,
+        call_id: Optional[str],
+        llm_text: str,
+        clean_text: Optional[str],
+        tool_calls: Optional[List[Dict[str, Any]]],
+        tool_path: str,
+        parse_failures: int = 0,
+        repair_attempts: int = 0,
+    ) -> None:
+        # Emit agent transcript for conversation history (use clean text).
+        response_text = (clean_text if clean_text is not None else llm_text) or ""
+        response_text = response_text.strip()
+        if response_text and self.on_event:
+            await self.on_event({
+                "type": "agent_transcript",
+                "call_id": call_id,
+                "text": response_text,
+            })
+            logger.debug("Emitted agent transcript for history", call_id=call_id, text=response_text[:50])
+
+        allowed = sorted(self._allowed_tools)
+        normalized_tool_calls: Optional[List[Dict[str, Any]]] = tool_calls
+        if normalized_tool_calls and self._allowed_tools:
+            filtered: List[Dict[str, Any]] = []
+            for tc in normalized_tool_calls:
+                if validate_tool_call(tc, allowed):
+                    filtered.append(tc)
+            if filtered:
+                normalized_tool_calls = filtered
+            else:
+                logger.info(
+                    "Dropping tool calls from local LLM (not allowlisted)",
+                    call_id=call_id,
+                    tools=[tc.get("name") for tc in normalized_tool_calls],
+                )
+                normalized_tool_calls = None
+
+        logger.info(
+            "Local tool gateway result",
+            call_id=call_id,
+            tool_path=tool_path,
+            parse_failures=parse_failures,
+            repair_attempts=repair_attempts,
+            tool_count=len(normalized_tool_calls or []),
+        )
+
+        if normalized_tool_calls:
+            logger.info(
+                "🔧 Tool calls detected in local LLM response",
+                call_id=call_id,
+                tools=[tc.get("name") for tc in normalized_tool_calls]
+            )
+            if self.on_event:
+                await self.on_event({
+                    "type": "ToolCall",
+                    "call_id": call_id,
+                    "tool_calls": normalized_tool_calls,
+                    "text": response_text,
+                })
+        else:
+            logger.debug(
+                "LLM response received (no tools)",
+                call_id=call_id,
+                preview=llm_text[:80] if llm_text else "(empty)",
+                tool_path=tool_path,
+            )
+
+    async def _process_llm_text_fallback(
+        self,
+        *,
+        llm_text: str,
+        call_id: Optional[str],
+        tool_path: str = "parser",
+    ) -> None:
+        clean_text, tool_calls = parse_response_with_tools(llm_text)
+        parse_failures = 0
+        repair_attempts = 0
+        allowed = sorted(self._allowed_tools)
+        if self._effective_tool_policy == "off":
+            tool_calls = None
+        elif not tool_calls and allowed and has_tool_intent_markers(llm_text, allowed):
+            repair_attempts = 1
+            tool_path = "repair"
+            tool_calls = await self._attempt_tool_call_repair(
+                llm_text=llm_text,
+                call_id=call_id,
+                allowed_tools=allowed,
+            )
+        await self._emit_local_llm_result(
+            call_id=call_id,
+            llm_text=llm_text,
+            clean_text=clean_text,
+            tool_calls=tool_calls,
+            tool_path=tool_path,
+            parse_failures=parse_failures,
+            repair_attempts=repair_attempts,
+        )
+
+    async def _dispatch_llm_tool_gateway_request(
+        self,
+        *,
+        llm_text: str,
+        call_id: Optional[str],
+    ) -> bool:
+        if not self.websocket or self.websocket.state.name != "OPEN":
+            return False
+
+        request_id = f"tool-gateway-{uuid4().hex}"
+        payload = {
+            "type": "llm_tool_request",
+            "mode": "llm",
+            "protocol_version": 2,
+            "request_id": request_id,
+            "call_id": call_id or self._active_call_id,
+            "text": llm_text,
+            "allowed_tools": sorted(self._allowed_tools),
+            "tool_policy": self._effective_tool_policy,
+            "tool_choice": "auto",
+        }
+        self._pending_llm_tool_responses[request_id] = {
+            "call_id": call_id or self._active_call_id,
+            "llm_text": llm_text,
+        }
+        try:
+            await self.websocket.send(json.dumps(payload))
+        except Exception:
+            self._pending_llm_tool_responses.pop(request_id, None)
+            logger.debug("Failed to dispatch llm_tool_request", call_id=call_id, exc_info=True)
+            return False
+
+        async def _timeout_fallback() -> None:
+            try:
+                await asyncio.sleep(max(1.0, min(3.0, self.response_timeout)))
+                pending = self._pending_llm_tool_responses.pop(request_id, None)
+                if not pending:
+                    return
+                logger.warning(
+                    "llm_tool_request timed out; falling back to parser path",
+                    call_id=pending.get("call_id"),
+                    request_id=request_id,
+                )
+                await self._process_llm_text_fallback(
+                    llm_text=str(pending.get("llm_text") or ""),
+                    call_id=pending.get("call_id"),
+                    tool_path="parser",
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.error("llm_tool_request timeout fallback failed", call_id=call_id, exc_info=True)
+            finally:
+                self._llm_tool_timeout_tasks.pop(request_id, None)
+
+        self._llm_tool_timeout_tasks[request_id] = asyncio.create_task(_timeout_fallback())
+        return True
+
+    async def _handle_llm_tool_response(self, data: Dict[str, Any]) -> bool:
+        request_id = str(data.get("request_id") or "").strip()
+        if not request_id:
+            return False
+        pending = self._pending_llm_tool_responses.pop(request_id, None)
+        if not pending:
+            logger.debug("Dropping stale llm_tool_response", request_id=request_id)
+            return False
+        self._cancel_gateway_timeout(request_id)
+
+        call_id = data.get("call_id") or pending.get("call_id") or self._active_call_id
+        llm_text = str(pending.get("llm_text") or "")
+        clean_text = str(data.get("text") or "").strip()
+        if not clean_text:
+            parsed_clean, _ = parse_response_with_tools(llm_text)
+            clean_text = (parsed_clean or llm_text or "").strip()
+        raw_tool_calls = data.get("tool_calls")
+        tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else None
+        tool_path = str(data.get("tool_path") or "structured").strip().lower() or "structured"
+        parse_failures = int(data.get("tool_parse_failures") or 0)
+        repair_attempts = int(data.get("repair_attempts") or 0)
+
+        await self._emit_local_llm_result(
+            call_id=call_id,
+            llm_text=llm_text,
+            clean_text=clean_text,
+            tool_calls=tool_calls,
+            tool_path=tool_path,
+            parse_failures=parse_failures,
+            repair_attempts=repair_attempts,
+        )
+        return True
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -590,7 +798,15 @@ class LocalProvider(AIProviderInterface):
             # - compatible: compact instructions (lower leakage risk on weaker models)
             # - off: no injection; rely on text-only interaction / heuristics
             try:
-                if allowed_tools and "## Available Tools" not in prompt and self._effective_tool_policy != "off":
+                use_gateway = self._is_structured_tool_gateway_active()
+                if use_gateway and allowed_tools:
+                    logger.info(
+                        "Local tool-call prompt injection skipped (structured gateway active)",
+                        call_id=call_id,
+                        policy=self._effective_tool_policy,
+                        allowed_tools=sorted(self._allowed_tools),
+                    )
+                elif allowed_tools and "## Available Tools" not in prompt and self._effective_tool_policy != "off":
                     from src.tools.registry import tool_registry
 
                     if self._effective_tool_policy == "strict":
@@ -883,6 +1099,11 @@ class LocalProvider(AIProviderInterface):
                     self._send_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+
+        if self._pending_llm_tool_responses:
+            for request_id in list(self._pending_llm_tool_responses.keys()):
+                self._pending_llm_tool_responses.pop(request_id, None)
+                self._cancel_gateway_timeout(request_id)
         
         # DON'T clear the active call ID immediately - keep it for AgentAudio processing
         # The call_id will be cleared when the TTS playback is complete
@@ -897,6 +1118,14 @@ class LocalProvider(AIProviderInterface):
             done_task = self._agent_audio_done_tasks.pop(old_call_id, None)
             if done_task and not done_task.done():
                 done_task.cancel()
+            stale_ids = [
+                rid
+                for rid, pending in self._pending_llm_tool_responses.items()
+                if str((pending or {}).get("call_id") or "") == str(old_call_id)
+            ]
+            for rid in stale_ids:
+                self._pending_llm_tool_responses.pop(rid, None)
+                self._cancel_gateway_timeout(rid)
         self._active_call_id = None
         logger.info("Active call ID cleared after TTS completion.")
 
@@ -1007,6 +1236,10 @@ class LocalProvider(AIProviderInterface):
                                     "text": text,
                                 })
                                 logger.debug("Emitted user transcript for history", call_id=call_id, text=text[:50])
+                        elif data.get("type") == "llm_tool_response":
+                            handled = await self._handle_llm_tool_response(data)
+                            if not handled:
+                                logger.debug("Received unmatched llm_tool_response", request_id=data.get("request_id"))
                         elif data.get("type") == "llm_response":
                             request_id = str(data.get("request_id") or "").strip()
                             if request_id:
@@ -1017,66 +1250,27 @@ class LocalProvider(AIProviderInterface):
                                 if request_id.startswith("tool-repair-"):
                                     logger.debug("Dropping stale tool-repair response", call_id=self._active_call_id, request_id=request_id)
                                     continue
-                            # Handle LLM response - parse for tool calls
                             llm_text = data.get("text", "")
                             call_id = data.get("call_id") or self._active_call_id
-                            
-                            # Parse the response for tool calls
-                            clean_text, tool_calls = parse_response_with_tools(llm_text)
-                            allowed = sorted(self._allowed_tools)
-                            if self._effective_tool_policy == "off":
-                                tool_calls = None
-                            elif not tool_calls and allowed and has_tool_intent_markers(llm_text, allowed):
-                                tool_calls = await self._attempt_tool_call_repair(
+
+                            # Structured tool gateway is enabled only for full local provider mode.
+                            if self._is_structured_tool_gateway_active():
+                                dispatched = await self._dispatch_llm_tool_gateway_request(
                                     llm_text=llm_text,
                                     call_id=call_id,
-                                    allowed_tools=allowed,
                                 )
-                            if tool_calls and self._allowed_tools:
-                                filtered: List[Dict[str, Any]] = []
-                                for tc in tool_calls:
-                                    if validate_tool_call(tc, allowed):
-                                        filtered.append(tc)
-                                if filtered:
-                                    tool_calls = filtered
-                                else:
-                                    logger.info(
-                                        "Dropping tool calls from local LLM (not allowlisted)",
-                                        call_id=call_id,
-                                        tools=[tc.get("name") for tc in tool_calls],
-                                    )
-                                    tool_calls = None
-                            
-                            # Emit agent transcript for conversation history (use clean text)
-                            response_text = clean_text if clean_text else llm_text
-                            if response_text and self.on_event:
-                                await self.on_event({
-                                    "type": "agent_transcript",
-                                    "call_id": call_id,
-                                    "text": response_text,
-                                })
-                                logger.debug("Emitted agent transcript for history", call_id=call_id, text=response_text[:50])
-                            
-                            if tool_calls:
-                                logger.info(
-                                    "🔧 Tool calls detected in local LLM response",
+                                if dispatched:
+                                    continue
+                                logger.warning(
+                                    "llm_tool_request dispatch failed; using parser fallback",
                                     call_id=call_id,
-                                    tools=[tc.get("name") for tc in tool_calls]
                                 )
-                                # Emit tool call event for engine to handle
-                                if self.on_event:
-                                    await self.on_event({
-                                        "type": "ToolCall",
-                                        "call_id": call_id,
-                                        "tool_calls": tool_calls,
-                                        "text": clean_text,  # Text to speak (if any)
-                                    })
-                            else:
-                                logger.debug(
-                                    "LLM response received (no tools)",
-                                    call_id=call_id,
-                                    preview=llm_text[:80] if llm_text else "(empty)"
-                                )
+
+                            await self._process_llm_text_fallback(
+                                llm_text=llm_text,
+                                call_id=call_id,
+                                tool_path="parser",
+                            )
                         else:
                             logger.debug("Received JSON message from Local AI Server", message=data)
                     except json.JSONDecodeError:

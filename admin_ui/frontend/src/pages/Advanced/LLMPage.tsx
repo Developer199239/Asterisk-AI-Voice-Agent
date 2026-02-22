@@ -16,6 +16,8 @@ const LLMPage = () => {
     const [saving, setSaving] = useState(false);
     const [pendingRestart, setPendingRestart] = useState(false);
     const [restartingEngine, setRestartingEngine] = useState(false);
+    const [localCapability, setLocalCapability] = useState<any>(null);
+    const [localConnected, setLocalConnected] = useState(false);
 
     useEffect(() => {
         fetchConfig();
@@ -23,7 +25,16 @@ const LLMPage = () => {
 
     const fetchConfig = async () => {
         try {
-            const res = await axios.get('/api/config/yaml');
+            const [yamlRes, healthRes] = await Promise.allSettled([
+                axios.get('/api/config/yaml'),
+                axios.get('/api/system/health')
+            ]);
+
+            if (yamlRes.status !== 'fulfilled') {
+                throw new Error('Failed to load yaml');
+            }
+
+            const res = yamlRes.value;
             if (res.data.yaml_error) {
                 setYamlError(res.data.yaml_error);
                 setConfig({});
@@ -32,9 +43,20 @@ const LLMPage = () => {
                 setConfig(parsed || {});
                 setYamlError(null);
             }
+
+            if (healthRes.status === 'fulfilled') {
+                const localDetails = healthRes.value.data?.local_ai_server?.details || {};
+                setLocalConnected(healthRes.value.data?.local_ai_server?.status === 'connected');
+                setLocalCapability(localDetails?.models?.llm?.tool_capability || null);
+            } else {
+                setLocalConnected(false);
+                setLocalCapability(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             setYamlError(null);
+            setLocalConnected(false);
+            setLocalCapability(null);
         } finally {
             setLoading(false);
         }
@@ -101,6 +123,21 @@ const LLMPage = () => {
         });
     };
 
+    const updateLocalProviderConfig = (field: string, value: any) => {
+        const providers = config.providers || {};
+        const local = providers.local || {};
+        setConfig({
+            ...config,
+            providers: {
+                ...providers,
+                local: {
+                    ...local,
+                    [field]: value
+                }
+            }
+        });
+    };
+
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
 
     if (yamlError) return (
@@ -110,6 +147,17 @@ const LLMPage = () => {
     );
 
     const llmConfig = config.llm || {};
+    const localProviderConfig = config.providers?.local || {};
+    const configuredToolPolicy = String(localProviderConfig.tool_call_policy || 'auto').trim().toLowerCase();
+    const toolCapabilityLevel = String(localCapability?.level || 'unknown').trim().toLowerCase();
+    const resolvedToolPolicy = configuredToolPolicy !== 'auto'
+        ? configuredToolPolicy
+        : (toolCapabilityLevel === 'strict' ? 'strict' : toolCapabilityLevel === 'none' ? 'off' : 'compatible');
+    const policyMismatchWarning = (
+        configuredToolPolicy !== 'auto' &&
+        ((configuredToolPolicy === 'strict' && toolCapabilityLevel === 'none') ||
+            (configuredToolPolicy === 'off' && toolCapabilityLevel === 'strict'))
+    );
 
     return (
         <div className="space-y-6">
@@ -177,6 +225,68 @@ const LLMPage = () => {
                                 The core personality and instructions for the AI.
                             </p>
                         </div>
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            <ConfigSection title="Local Tool Calling" description="Full-local provider tool execution policy and structured gateway controls.">
+                <ConfigCard>
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Tool Policy Override</label>
+                                <select
+                                    className="w-full p-2 rounded border border-input bg-background"
+                                    value={configuredToolPolicy || 'auto'}
+                                    onChange={(e) => updateLocalProviderConfig('tool_call_policy', e.target.value)}
+                                >
+                                    <option value="auto">Auto (recommended)</option>
+                                    <option value="strict">Strict</option>
+                                    <option value="compatible">Compatible</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <p className="text-xs text-muted-foreground">
+                                    Auto resolves from model capability. Override only if you need deterministic behavior for a specific model.
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Structured Tool Gateway</label>
+                                <label className="flex items-center gap-2 p-2 rounded border border-input bg-background">
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(localProviderConfig.tool_gateway_enabled ?? true)}
+                                        onChange={(e) => updateLocalProviderConfig('tool_gateway_enabled', e.target.checked)}
+                                    />
+                                    <span className="text-sm">Enable for full-local provider only</span>
+                                </label>
+                                <p className="text-xs text-muted-foreground">
+                                    Keeps modular local STT-only/TTS-only paths unchanged.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="rounded-md border border-border bg-muted/20 p-3 text-xs space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Local AI Server</span>
+                                <span className={`font-mono ${localConnected ? 'text-green-600' : 'text-yellow-600'}`}>
+                                    {localConnected ? 'connected' : 'not-connected'}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Capability</span>
+                                <span className="font-mono">{toolCapabilityLevel || 'unknown'}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Resolved policy</span>
+                                <span className="font-mono">{resolvedToolPolicy}</span>
+                            </div>
+                        </div>
+
+                        {policyMismatchWarning && (
+                            <div className="text-xs rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-yellow-700 dark:text-yellow-300">
+                                Current override may not match detected model capability. Use Auto unless you are intentionally forcing this mode.
+                            </div>
+                        )}
                     </div>
                 </ConfigCard>
             </ConfigSection>

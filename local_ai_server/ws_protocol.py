@@ -91,6 +91,10 @@ class WebSocketProtocol:
             await self._server._handle_llm_request(websocket, session, data)
             return
 
+        if msg_type == "llm_tool_request":
+            await self._server._handle_llm_tool_request(websocket, session, data)
+            return
+
         if msg_type == "reload_models":
             logging.info("🔄 RELOAD REQUEST - Hot reloading all models...")
             await self._server.reload_models()

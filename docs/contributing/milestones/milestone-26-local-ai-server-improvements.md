@@ -103,6 +103,10 @@ These changes come from a deep audit of the Local AI Server experience, focused 
 | `src/engine.py` | Use fuzzy end-call matcher for local and pipeline hangup guardrails | Keep guardrail conservative but tolerant to STT noise | Validate no premature hangups on normal queries; valid goodbye phrases still pass |
 | `admin_ui/frontend/src/pages/System/ModelsPage.tsx` | Show active LLM tool capability + effective tool policy | Make local provider behavior explicit for operators | Models page displays `Tool capability` and `Tool policy` fields |
 | `config/ai-agent.yaml`, `.env.example`, `config/ai-agent.example.yaml` | Add `LOCAL_TOOL_CALL_POLICY` wiring | Allow operator override when auto policy is not preferred | Set `LOCAL_TOOL_CALL_POLICY=strict|compatible|off` and restart |
+| `local_ai_server/protocol_contract.py`, `local_ai_server/ws_protocol.py`, `local_ai_server/server.py` | Add `llm_tool_request` / `llm_tool_response` protocol and structured tool normalization path | Stabilize tool execution for full-local provider while preserving parser fallback | Confirm logs show `LLM TOOL GATEWAY` and parsed tool calls for full-local calls |
+| `src/providers/local.py` | Full-local-only gateway routing (`tool_gateway_enabled`) with timeout fallback and modular bypass | Keep STT-only/TTS-only modular adapters unchanged while hardening full-local tool calls | Verify full-local emits `llm_tool_request`; modular local adapters do not |
+| `admin_ui/frontend/src/pages/Advanced/LLMPage.tsx` | Add Local Tool Calling panel with capability + resolved policy + override controls | Give operators visibility/control in LLM Defaults | Confirm page shows capability/resolved policy and persists `providers.local.tool_call_policy` |
+| `local_ai_server/status_builder.py` | Expose `structured_mode`, `validated_at`, `model_fingerprint` via status | Make capability detection traceable and debuggable per model/runtime | Check `/api/system/health` local LLM status includes these fields |
 
 ## Verification Checklist
 

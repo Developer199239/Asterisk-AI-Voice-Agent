@@ -38,3 +38,17 @@ def test_llm_context_respects_env_override(monkeypatch):
     config_mod = _load_local_ai_config_module()
     cfg = config_mod.LocalAIConfig.from_env()
     assert cfg.llm_context == 1536
+
+
+def test_tool_gateway_enabled_defaults_true(monkeypatch):
+    monkeypatch.delenv("LOCAL_TOOL_GATEWAY_ENABLED", raising=False)
+    config_mod = _load_local_ai_config_module()
+    cfg = config_mod.LocalAIConfig.from_env()
+    assert cfg.tool_gateway_enabled is True
+
+
+def test_tool_gateway_enabled_respects_env_false(monkeypatch):
+    monkeypatch.setenv("LOCAL_TOOL_GATEWAY_ENABLED", "0")
+    config_mod = _load_local_ai_config_module()
+    cfg = config_mod.LocalAIConfig.from_env()
+    assert cfg.tool_gateway_enabled is False
