@@ -64,12 +64,19 @@ _END_CALL_MARKERS: Tuple[str, ...] = (
     "no transcript needed",
     "don't send a transcript",
     "no thanks",
+    "no thank you",
+    "thank you",
+    "thanks",
     "that's all",
     "nothing else",
     "end call",
     "hang up",
     "goodbye",
     "bye",
+    "have a good day",
+    "have a great day",
+    "take care",
+    "talk to you later",
 )
 
 
