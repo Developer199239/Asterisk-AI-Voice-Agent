@@ -22,6 +22,14 @@ TOOL_CALL_PATTERN = re.compile(
     re.DOTALL | re.IGNORECASE
 )
 
+# Some models occasionally wrap tool calls in a tag named after the tool, e.g.
+# <hangup_call>{...}</hangup_call>. We treat these as tool calls too, but the
+# caller should validate allowlisted tool names before executing anything.
+NAMED_TOOL_CALL_PATTERN = re.compile(
+    r'<(?P<tag>[a-zA-Z0-9_]+)>\s*(?P<json>\{.*?\})\s*</(?P=tag)>',
+    re.DOTALL
+)
+
 # Alternative patterns for fallback parsing
 FUNCTOOLS_PATTERN = re.compile(
     r'functools\[(\[.*?\])\]',
@@ -72,6 +80,37 @@ def parse_tool_calls(response: str) -> List[Dict[str, Any]]:
     
     if tool_calls:
         return tool_calls
+
+    # Try named-tag format: <hangup_call>{...}</hangup_call>
+    # Note: This is a best-effort fallback. Downstream must validate tool names.
+    for tag, json_str in NAMED_TOOL_CALL_PATTERN.findall(response):
+        if tag.lower() == "tool_call":
+            continue
+        try:
+            tool_data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse named tool call JSON: %s", e)
+            continue
+
+        name = tool_data.get("name") or tag
+        parameters = tool_data.get("arguments") or tool_data.get("parameters")
+        if parameters is None:
+            # Allow compact forms like: <hangup_call>{"farewell_message":"Bye"}</hangup_call>
+            parameters = {k: v for k, v in tool_data.items() if k != "name"}
+
+        tool_calls.append({
+            "name": name,
+            "parameters": parameters if isinstance(parameters, dict) else {},
+        })
+        logger.debug(
+            "Parsed tool call (named tag): tool=%s tag=%s params=%s",
+            name,
+            tag,
+            parameters if isinstance(parameters, dict) else {},
+        )
+
+    if tool_calls:
+        return tool_calls
     
     # Try functools format: functools[{...}]
     functools_matches = FUNCTOOLS_PATTERN.findall(response)
@@ -118,6 +157,9 @@ def extract_text_without_tools(response: str) -> str:
     """
     # Remove <tool_call>...</tool_call> blocks
     clean = TOOL_CALL_PATTERN.sub('', response)
+
+    # Remove <tool_name>...</tool_name> blocks with embedded JSON
+    clean = NAMED_TOOL_CALL_PATTERN.sub('', clean)
     
     # Remove functools[...] blocks
     clean = FUNCTOOLS_PATTERN.sub('', clean)

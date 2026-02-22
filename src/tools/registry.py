@@ -410,6 +410,8 @@ After outputting a tool call, provide a brief spoken response.
 {tools_json}
 
 ### Important Rules:
+- Tool calls MUST use the exact <tool_call>...</tool_call> wrapper shown above. Do NOT invent other wrappers like <hangup_call>...</hangup_call>.
+- Tool name MUST match exactly one of the Tool Definitions. Never invent tool names. If no tool applies, respond normally without any tool call.
 - When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
 - When the user asks to email the transcript, use request_transcript tool
 - When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer
@@ -443,6 +445,8 @@ After outputting a tool call, provide a brief spoken response.
 {tools_json}
 
 ### Important Rules:
+- Tool calls MUST use the exact <tool_call>...</tool_call> wrapper shown above. Do NOT invent other wrappers like <hangup_call>...</hangup_call>.
+- Tool name MUST match exactly one of the Tool Definitions. Never invent tool names. If no tool applies, respond normally without any tool call.
 - When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
 - When the user asks to email the transcript, use request_transcript tool
 - When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer

@@ -13,7 +13,7 @@ import audioop
 from ..config import LocalProviderConfig
 from ..audio.resampler import resample_audio
 from .base import AIProviderInterface
-from ..tools.parser import parse_response_with_tools
+from ..tools.parser import parse_response_with_tools, validate_tool_call
 
 logger = get_logger(__name__)
 
@@ -60,6 +60,8 @@ class LocalProvider(AIProviderInterface):
         self._status_lock: asyncio.Lock = asyncio.Lock()
         # Track last applied system prompt to avoid spamming switch_model.
         self._last_system_prompt_digest: Optional[str] = None
+        # Per-call tool allowlist (from context.tools). Used to drop hallucinated tool calls.
+        self._allowed_tools: set[str] = set()
 
     def _parse_ws_url(self, ws_url: str) -> tuple:
         """Parse host and port from WebSocket URL."""
@@ -441,6 +443,10 @@ class LocalProvider(AIProviderInterface):
                     allowed_tools = [str(x).strip() for x in tools_raw if str(x).strip()]
         except Exception:
             prompt = ""
+        try:
+            self._allowed_tools = set(allowed_tools or [])
+        except Exception:
+            self._allowed_tools = set()
         if not prompt:
             try:
                 prompt = str(getattr(self.config, "instructions", None) or "").strip()
@@ -854,6 +860,21 @@ class LocalProvider(AIProviderInterface):
                             
                             # Parse the response for tool calls
                             clean_text, tool_calls = parse_response_with_tools(llm_text)
+                            if tool_calls and self._allowed_tools:
+                                allowed = sorted(self._allowed_tools)
+                                filtered: List[Dict[str, Any]] = []
+                                for tc in tool_calls:
+                                    if validate_tool_call(tc, allowed):
+                                        filtered.append(tc)
+                                if filtered:
+                                    tool_calls = filtered
+                                else:
+                                    logger.info(
+                                        "Dropping tool calls from local LLM (not allowlisted)",
+                                        call_id=call_id,
+                                        tools=[tc.get("name") for tc in tool_calls],
+                                    )
+                                    tool_calls = None
                             
                             # Emit agent transcript for conversation history (use clean text)
                             response_text = clean_text if clean_text else llm_text
