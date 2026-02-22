@@ -118,6 +118,11 @@ sudo ./preflight.sh --apply-fixes
 # Preflight detects GPU and sets GPU_AVAILABLE=true in .env
 ```
 
+> **Tip:** If this machine is a dedicated GPU inference server (no Asterisk), use `--local-server` to skip Asterisk/Admin UI checks:
+> ```bash
+> sudo ./preflight.sh --apply-fixes --local-server
+> ```
+
 ### 2. Environment Variables (.env)
 
 ```bash
@@ -185,7 +190,9 @@ This is common for production: a small VPS runs Asterisk/ai_engine, and a beefy 
 ```bash
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
 cd Asterisk-AI-Voice-Agent
-sudo ./preflight.sh --apply-fixes
+
+# --local-server skips Asterisk/Admin UI checks (not needed on GPU-only box)
+sudo ./preflight.sh --apply-fixes --local-server
 ```
 
 **.env on GPU machine:**

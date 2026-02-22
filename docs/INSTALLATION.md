@@ -117,6 +117,12 @@ Preflight also audits Asterisk configuration (when Asterisk is on the same host)
 - Checks ARI enabled, ARI user, HTTP server, dialplan context, and required modules
 - Writes results to `data/asterisk_status.json` — the Admin UI **System → Asterisk** page reads this manifest to display a configuration checklist with guided fix commands
 
+> **Standalone GPU server?** If this machine only runs `local_ai_server` (no Asterisk, no Admin UI), use the `--local-server` flag to skip Asterisk/media checks:
+> ```bash
+> sudo ./preflight.sh --apply-fixes --local-server
+> ```
+> This only runs GPU detection, `.env` seeding, and port 8765 availability checks. See [LOCAL_ONLY_SETUP.md — Topology 3](LOCAL_ONLY_SETUP.md#topology-3-split-server-remote-gpu) for the full split-server guide.
+
 > Note: Admin UI health checks validate the media directory from within the `admin_ui` container.
 > On some systems Asterisk uses a non-default group ID; newer releases auto-detect this at `admin_ui` startup so the UI doesn't incorrectly warn after reboot.
 
