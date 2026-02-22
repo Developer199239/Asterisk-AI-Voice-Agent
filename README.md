@@ -482,6 +482,8 @@ curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/mai
 ```bash
 agent setup               # Interactive setup wizard (recommended)
 agent check               # Standard diagnostics report (share this output when asking for help)
+agent check --local       # Verify local AI server (STT, LLM, TTS) on this host
+agent check --remote <ip> # Verify local AI server on a remote GPU machine
 agent update              # Pull latest code + rebuild/restart as needed
 agent rca --call <call_id> # Post-call RCA (use Call History to find call_id)
 agent version             # Version information

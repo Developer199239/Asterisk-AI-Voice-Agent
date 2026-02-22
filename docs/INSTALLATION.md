@@ -196,6 +196,11 @@ docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate local_a
 ```bash
 curl -sS http://localhost:15000/health
 agent check
+
+# If using local AI server (GPU or CPU), also verify STT/LLM/TTS:
+agent check --local
+# Or for a remote GPU server:
+# agent check --remote <gpu-ip>
 ```
 
 > ⚠️ **Operator note (production hardening):** `ai_engine` exposes a health/metrics server on port `15000`.
