@@ -428,11 +428,78 @@ def parse_tool_calls(lines: int = 15000) -> List[Dict[str, Any]]:
             })
             continue
 
+        # Post-call tool completed / failed
+        if "Post-call tool completed" in line:
+            tool_calls.append({
+                "name": _extract_kv(line, "tool") or "unknown",
+                "status": "success",
+                "result": "success",
+                "source": "post_call",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        if "Post-call tool failed" in line:
+            tool_calls.append({
+                "name": _extract_kv(line, "tool") or "unknown",
+                "status": "failed",
+                "result": "failed",
+                "error": _extract_kv(line, "error") or "",
+                "source": "post_call",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        # Pre-call tool completed / timed out / failed
+        if "Pre-call tool completed" in line:
+            tool_calls.append({
+                "name": _extract_kv(line, "tool") or "unknown",
+                "status": "success",
+                "result": "success",
+                "source": "pre_call",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        if "Pre-call tool timed out" in line:
+            tool_calls.append({
+                "name": _extract_kv(line, "tool") or "unknown",
+                "status": "timeout",
+                "result": "failed",
+                "source": "pre_call",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        # LLM emitted <tool_call> markup but engine did NOT parse it as a tool call
+        # (logged as "LLM response received (no tools)" with <tool_call> in preview)
+        # This is important for evaluating LLM tool-calling quality across models.
+        clean = _strip_ansi(line)
+        if "LLM response received (no tools)" in clean and "<tool_call>" in clean:
+            # Extract tool name from the preview text
+            tc_match = re.search(r'"name"\s*:\s*"([^"]+)"', clean)
+            tc_name = tc_match.group(1) if tc_match else "unknown"
+            tool_calls.append({
+                "name": tc_name,
+                "status": "not_parsed",
+                "result": "attempted_not_executed",
+                "source": "llm_markup",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
     return tool_calls
 
 
 def summarize_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Summarize tool calls."""
+    """Summarize tool calls into a compact report.
+
+    Groups by tool name with counts for success, failed, blocked,
+    and attempted_not_executed (LLM emitted markup but engine didn't parse it).
+    """
+    if not tool_calls:
+        return {}
+
     summary: Dict[str, Any] = {}
 
     for call in tool_calls:
@@ -441,13 +508,29 @@ def summarize_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
             summary[name] = {
                 "success": 0,
                 "failed": 0,
+                "blocked": 0,
+                "attempted_not_executed": 0,
+                "sources": set(),
                 "errors": [],
             }
-        if call["result"] == "success":
+        result = call.get("result", "success")
+        if result == "success":
             summary[name]["success"] += 1
+        elif "blocked" in result:
+            summary[name]["blocked"] += 1
+        elif result == "attempted_not_executed":
+            summary[name]["attempted_not_executed"] += 1
         else:
             summary[name]["failed"] += 1
-            summary[name]["errors"].append(call.get("error", ""))
+            err = call.get("error", "")
+            if err:
+                summary[name]["errors"].append(err)
+
+        summary[name]["sources"].add(call.get("source", "unknown"))
+
+    # Convert sets to lists for JSON serialization
+    for name in summary:
+        summary[name]["sources"] = sorted(summary[name]["sources"])
 
     return summary
 
@@ -582,10 +665,33 @@ def format_template(
     if tool_calls:
         lines.append("**Tool Calls**:")
         for tool, stats in tool_calls.items():
-            ok = stats['success']
-            fail = stats['failed']
-            icon = "\u2705" if fail == 0 else "\u274c"
-            lines.append(f"  {icon} {tool}: {ok} success, {fail} failed")
+            ok = stats.get('success', 0)
+            fail = stats.get('failed', 0)
+            blocked = stats.get('blocked', 0)
+            attempted = stats.get('attempted_not_executed', 0)
+            sources = stats.get('sources', [])
+
+            # Pick icon based on worst outcome
+            if fail > 0:
+                icon = "\u274c"
+            elif blocked > 0 or attempted > 0:
+                icon = "\u26a0\ufe0f"
+            else:
+                icon = "\u2705"
+
+            parts = []
+            if ok:
+                parts.append(f"{ok} executed")
+            if fail:
+                parts.append(f"{fail} failed")
+            if blocked:
+                parts.append(f"{blocked} blocked")
+            if attempted:
+                parts.append(f"{attempted} attempted (not executed)")
+
+            source_hint = f" [{', '.join(sources)}]" if sources else ""
+            lines.append(f"  {icon} {tool}: {', '.join(parts)}{source_hint}")
+
             if fail > 0 and stats.get("errors"):
                 errs = [e for e in stats["errors"] if e]
                 if errs:
