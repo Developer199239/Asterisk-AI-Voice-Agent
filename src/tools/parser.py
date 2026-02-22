@@ -38,6 +38,15 @@ TOOL_CALL_TAG_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Some models output a "tool name" prefix followed by a JSON payload, without
+# any XML-like wrapper, e.g:
+#   hangup_call {"name":"hangup_call","arguments":{"farewell_message":"Bye"}}
+# We'll parse this as a best-effort fallback and rely on downstream allowlisting
+# to decide whether it can be executed.
+BARE_TOOL_CALL_PREFIX_PATTERN = re.compile(
+    r'(?P<tool>[a-zA-Z0-9_]{2,64})\s*\{',
+)
+
 # Alternative patterns for fallback parsing
 FUNCTOOLS_PATTERN = re.compile(
     r'functools\[(\[.*?\])\]',
@@ -150,6 +159,45 @@ def parse_tool_calls(response: str) -> List[Dict[str, Any]]:
             logger.warning("Failed to parse tool call JSON: %s", e)
             continue
     
+    if tool_calls:
+        return tool_calls
+
+    # Try bare "toolname {json}" format.
+    try:
+        text = response or ""
+        for m in BARE_TOOL_CALL_PREFIX_PATTERN.finditer(text):
+            tool_hint = (m.group("tool") or "").strip()
+            json_start = m.start() + (m.group(0).rfind("{"))
+            extracted = _extract_json_object(text, json_start)
+            if not extracted:
+                continue
+            json_str, _end = extracted
+            try:
+                tool_data = json.loads(json_str)
+            except json.JSONDecodeError:
+                continue
+
+            if not isinstance(tool_data, dict):
+                continue
+
+            # Prefer explicit name in JSON; otherwise fall back to the prefix token.
+            name = tool_data.get("name") or tool_hint
+            if not name:
+                continue
+
+            parameters = tool_data.get("arguments", tool_data.get("parameters", {}))
+            tool_calls.append({
+                "name": name,
+                "parameters": parameters if isinstance(parameters, dict) else {},
+            })
+            logger.debug(
+                "Parsed tool call (bare prefix): tool=%s hint=%s",
+                name,
+                tool_hint,
+            )
+    except Exception:
+        pass
+
     if tool_calls:
         return tool_calls
 
@@ -278,6 +326,22 @@ def extract_text_without_tools(response: str) -> str:
                 clean = clean[:start] + clean[json_end:]
             else:
                 clean = clean[:start] + clean[end:]
+    except Exception:
+        pass
+
+    # Remove bare "toolname {json}" blocks (best-effort).
+    try:
+        while True:
+            m = BARE_TOOL_CALL_PREFIX_PATTERN.search(clean)
+            if not m:
+                break
+            json_start = m.start() + (m.group(0).rfind("{"))
+            extracted = _extract_json_object(clean, json_start)
+            if not extracted:
+                break
+            _json_str, json_end = extracted
+            # Drop from the start of the tool token through the end of JSON.
+            clean = clean[: m.start()] + clean[json_end:]
     except Exception:
         pass
     

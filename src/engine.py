@@ -8502,14 +8502,40 @@ class Engine:
                             )
                             
                             if farewell_mode == "tts":
-                                # Use TTS farewell - best for fast hardware
-                                # Wait for TTS from LLM response to complete
+                                # Use TTS farewell: rely on cleanup_after_tts + AgentAudioDone to hang up
+                                # after the local provider finishes speaking. This avoids fixed sleeps and
+                                # keeps behavior consistent across LLMs/voices.
                                 logger.info(
-                                    "⏳ Waiting for TTS farewell",
+                                    "⏳ Farewell mode=tts: waiting for AgentAudioDone (cleanup_after_tts)",
                                     call_id=call_id,
                                     timeout_sec=farewell_timeout,
                                 )
-                                await asyncio.sleep(farewell_timeout)
+                                # Fallback: if no audio is ever emitted (tool-only response / silent TTS),
+                                # force a hangup after the configured timeout.
+                                async def _hangup_fallback() -> None:
+                                    try:
+                                        await asyncio.sleep(max(0.5, float(farewell_timeout)))
+                                        current = await self.session_store.get_by_call_id(call_id)
+                                        if current and getattr(current, "cleanup_after_tts", False):
+                                            logger.warning(
+                                                "Farewell timeout reached; forcing hangup",
+                                                call_id=call_id,
+                                                timeout_sec=farewell_timeout,
+                                            )
+                                            try:
+                                                await self.ari_client.hangup_channel(current.caller_channel_id)
+                                            except Exception:
+                                                logger.debug(
+                                                    "Forced hangup failed (may already be hung up)",
+                                                    call_id=call_id,
+                                                )
+                                    except asyncio.CancelledError:
+                                        return
+                                    except Exception:
+                                        logger.debug("Farewell fallback task failed", call_id=call_id, exc_info=True)
+
+                                asyncio.create_task(_hangup_fallback())
+                                break
                             else:
                                 # Use Asterisk's built-in goodbye sound - reliable for slow hardware
                                 try:
@@ -8529,8 +8555,8 @@ class Engine:
                                     await asyncio.sleep(1.0)
                             
                             logger.info("✅ Farewell wait complete", call_id=call_id)
-                            
-                            # Explicitly hang up after farewell TTS
+
+                            # Explicitly hang up after farewell playback (asterisk mode only)
                             try:
                                 await self.ari_client.hangup_channel(session.caller_channel_id)
                                 logger.info("✅ Call hung up after farewell", call_id=call_id)
@@ -8553,6 +8579,11 @@ class Engine:
                 # User speech transcript from provider (ElevenLabs, etc.)
                 text = event.get("text", "").strip()
                 if text and text != "...":
+                    # Keep a quick-access copy for guardrails (e.g., hangup intent) and observability.
+                    try:
+                        session.last_transcript = text
+                    except Exception:
+                        pass
                     # Add to conversation history
                     if not hasattr(session, 'conversation_history') or session.conversation_history is None:
                         session.conversation_history = []

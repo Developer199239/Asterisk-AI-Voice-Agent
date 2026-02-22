@@ -72,3 +72,14 @@ def test_strip_control_tokens_from_clean_text():
     clean_text, tool_calls = parse_response_with_tools(response)
     assert tool_calls and tool_calls[0]["name"] == "hangup_call"
     assert clean_text == "Bye"
+
+
+def test_parse_tool_call_bare_prefix_json():
+    response = (
+        'hangup_call {"name":"hangup_call","arguments":{"farewell_message":"Bye"}}\n'
+        "Bye"
+    )
+    clean_text, tool_calls = parse_response_with_tools(response)
+
+    assert clean_text == "Bye"
+    assert tool_calls == [{"name": "hangup_call", "parameters": {"farewell_message": "Bye"}}]
