@@ -7,6 +7,20 @@ Submit your results via [GitHub Issue](https://github.com/hkjarral/Asterisk-AI-V
 
 ## How to Contribute
 
+### Automated (recommended)
+
+After making a test call with the local provider, run:
+
+```bash
+agent rca --local
+# or directly:
+python3 scripts/local_test_report.py
+```
+
+This auto-detects your hardware, queries the Local AI Server for model info, parses docker logs for latency, and outputs a ready-to-paste submission template. Add `--json` for machine-readable output.
+
+### Manual
+
 1. **Run a test call** using a Local AI Server configuration (any STT + TTS + LLM combination).
 2. **Record your results** using the template below or the GitHub issue template.
 3. **Submit** a PR adding a row to the results table, or open an issue with the `community-test` label.
