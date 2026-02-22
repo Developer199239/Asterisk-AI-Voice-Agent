@@ -68,9 +68,36 @@ This auto-detects your hardware, queries the Local AI Server for model info, par
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2025-07-14 | @maintainer | Vast.ai A100 40GB | A100 | vosk | en-us-0.22 | piper | lessac-medium | phi-3-mini Q4_K_M | 2048 | em | ~2s | 3 | Baseline GPU test |
 | 2025-07-14 | @maintainer | Vast.ai A100 40GB | A100 | faster_whisper | base | kokoro | af_heart | phi-3-mini Q4_K_M | 2048 | em | ~1.5s | 4 | Whisper + Kokoro combo |
+| 2026-02-22 | @hkjarral | AMD EPYC 7443P, 66GB RAM | RTX 4090 24GB | faster_whisper | base | kokoro | af_heart | phi-3-mini-4k-instruct.Q4_K_M.gguf | 4096 | em | ~665ms | 4 | Phi-3 tool calls unreliable (malformed/truncated); use heuristic-based `hangup_call` fallback |
 | | | | | | | | | | | | | | |
 
 ---
+
+### Detailed Submissions
+
+```
+**Date**: 2026-02-22
+**Hardware**: AMD EPYC 7443P 24-Core Processor, 66GB RAM
+**GPU**: NVIDIA GeForce RTX 4090 24GB
+**OS**: Ubuntu 22.04.5 LTS
+**Docker**: 29.2.1
+**STT**: faster_whisper / Faster-Whisper (base)
+**TTS**: kokoro / Kokoro (af_heart, mode=hf)
+**LLM**: phi-3-mini-4k-instruct.Q4_K_M.gguf / n_ctx=4096
+**LLM GPU Layers**: -1
+**Transport**: ExternalMedia RTP
+**Pipeline**: local
+**Runtime Mode**: full
+**E2E Latency**: ~665ms
+**LLM Latency**: ~261ms avg (8 samples, last=265ms)
+**STT Transcripts (last session)**: 9
+**TTS Responses (last session)**: 9
+**Quality (1-5)**: 4
+**Notes**: Tool calls do not work reliably; use heuristic-based hangup for phi-3 (malformed/truncated tool-call markup observed).
+**Tool Calls**:
+  ⚠️ hangup_call: 2 attempted (not executed) [llm_markup]
+  ✅ demo_post_call_webhook: 1 executed [post_call]
+```
 
 ## Submission Template
 
