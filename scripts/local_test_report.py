@@ -173,26 +173,119 @@ def detect_transport(env: Dict[str, str]) -> str:
 async def query_local_ai_status(
     ws_url: str, auth_token: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """Connect to local_ai_server WS and request status."""
+    """Connect to local_ai_server WS and request status.
+
+    Tries three approaches in order:
+    1. Host-side websockets library (if installed)
+    2. docker exec into local_ai_server container (uses container's Python)
+    3. Returns None (caller falls back to .env)
+    """
+    # Approach 1: host-side websockets
     try:
         import websockets  # type: ignore
+        headers = {}
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+        try:
+            async with websockets.connect(ws_url, additional_headers=headers, open_timeout=5) as ws:
+                await ws.send(json.dumps({"type": "status"}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                data = json.loads(raw)
+                if data.get("type") == "status_response":
+                    return data
+        except Exception as exc:
+            print(f"[WARN] Host WS query failed ({exc}); trying docker exec...", file=sys.stderr)
     except ImportError:
-        print("[WARN] websockets package not installed; skipping WS status query", file=sys.stderr)
-        return None
+        pass  # Fall through to docker exec
 
-    headers = {}
+    # Approach 2: docker exec into the container
+    return _query_status_via_docker(ws_url, auth_token)
+
+
+def _query_status_via_docker(
+    ws_url: str, auth_token: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Query local_ai_server status via docker exec (container has websockets).
+
+    Uses a synchronous raw-socket WebSocket handshake + send/recv to avoid
+    asyncio.run() conflicts when the container already has an event loop.
+    """
+    # Minimal synchronous WS client — no external deps beyond stdlib.
+    # Works inside the container without interfering with the running server.
+    auth_header = ""
     if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
-
+        auth_header = f'        b"Authorization: Bearer {auth_token}\\r\\n" +'
+    inner_script = f"""\
+import socket, json, struct, hashlib, base64, os
+sock = socket.create_connection(("127.0.0.1", 8765), timeout=5)
+key = base64.b64encode(os.urandom(16)).decode()
+req = (
+    b"GET / HTTP/1.1\\r\\n"
+    b"Host: 127.0.0.1:8765\\r\\n"
+    b"Upgrade: websocket\\r\\n"
+    b"Connection: Upgrade\\r\\n"
+{auth_header}
+    b"Sec-WebSocket-Key: " + key.encode() + b"\\r\\n"
+    b"Sec-WebSocket-Version: 13\\r\\n"
+    b"\\r\\n"
+)
+sock.sendall(req)
+resp = b""
+while b"\\r\\n\\r\\n" not in resp:
+    resp += sock.recv(4096)
+# Send status request as a text frame
+payload = json.dumps({{"type": "status"}}).encode()
+frame = bytearray()
+frame.append(0x81)  # FIN + text
+mask_key = os.urandom(4)
+length = len(payload)
+if length < 126:
+    frame.append(0x80 | length)  # MASK bit + length
+else:
+    frame.append(0x80 | 126)
+    frame.extend(struct.pack("!H", length))
+frame.extend(mask_key)
+masked = bytearray(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+frame.extend(masked)
+sock.sendall(bytes(frame))
+# Read response frame
+data = b""
+while len(data) < 2:
+    data += sock.recv(4096)
+b1, b2 = data[0], data[1]
+plen = b2 & 0x7F
+offset = 2
+if plen == 126:
+    while len(data) < 4:
+        data += sock.recv(4096)
+    plen = struct.unpack("!H", data[2:4])[0]
+    offset = 4
+elif plen == 127:
+    while len(data) < 10:
+        data += sock.recv(4096)
+    plen = struct.unpack("!Q", data[2:10])[0]
+    offset = 10
+while len(data) < offset + plen:
+    data += sock.recv(4096)
+msg = data[offset:offset + plen].decode("utf-8", errors="replace")
+sock.close()
+print(msg)
+"""
     try:
-        async with websockets.connect(ws_url, additional_headers=headers, open_timeout=5) as ws:
-            await ws.send(json.dumps({"type": "status"}))
-            raw = await asyncio.wait_for(ws.recv(), timeout=5)
-            data = json.loads(raw)
+        proc = subprocess.run(
+            ["docker", "exec", "-i", "local_ai_server", "python3", "-"],
+            input=inner_script, text=True, timeout=15,
+            capture_output=True,
+        )
+        out = proc.stdout.strip()
+        if out:
+            data = json.loads(out)
             if data.get("type") == "status_response":
                 return data
+        if proc.returncode != 0 and proc.stderr.strip():
+            print(f"[WARN] docker exec stderr: {proc.stderr.strip()[:200]}", file=sys.stderr)
     except Exception as exc:
-        print(f"[WARN] Could not query local_ai_server at {ws_url}: {exc}", file=sys.stderr)
+        print(f"[WARN] Could not query local_ai_server status: {exc}", file=sys.stderr)
     return None
 
 
