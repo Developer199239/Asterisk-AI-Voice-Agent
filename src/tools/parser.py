@@ -47,6 +47,13 @@ BARE_TOOL_CALL_PREFIX_PATTERN = re.compile(
     r'(?P<tool>[a-zA-Z0-9_]{2,64})\s*\{',
 )
 
+# Some local models emit markdown-wrapped tool names followed by JSON fragments, e.g:
+#   *hangup_call* {"name":"hangup_call","arguments":{"farewell_message":"Bye"
+# Parse this best-effort to avoid speaking tool syntax back to callers.
+MARKDOWN_TOOL_CALL_PREFIX_PATTERN = re.compile(
+    r'(?P<decor>[\*\_`~]+)\s*(?P<tool>[a-zA-Z0-9_]{2,64})\s*(?P=decor)\s*(?=\{)',
+)
+
 # Alternative patterns for fallback parsing
 FUNCTOOLS_PATTERN = re.compile(
     r'functools\[(\[.*?\])\]',
@@ -123,6 +130,38 @@ def _strip_control_tokens(text: str) -> str:
     return text.strip()
 
 
+def _extract_partial_arguments(text: str) -> Dict[str, Any]:
+    """
+    Best-effort argument extraction from malformed/truncated JSON payloads.
+    """
+    if not text:
+        return {}
+
+    # Prefer content inside an `arguments` object if present.
+    m = re.search(r'["\']arguments["\']\s*:\s*\{(?P<body>.*)', text, flags=re.IGNORECASE | re.DOTALL)
+    body = m.group("body") if m else text
+
+    # Truncate at likely boundaries to avoid over-capturing prose/instructions.
+    for token in ("</tool_call>", "<|", "\n\n"):
+        idx = body.find(token)
+        if idx != -1:
+            body = body[:idx]
+    # If there is a closing brace, keep up to it; otherwise keep truncated tail.
+    if "}" in body:
+        body = body[: body.find("}")]
+
+    params: Dict[str, Any] = {}
+    for key, value in re.findall(
+        r'["\']([a-zA-Z_][a-zA-Z0-9_]*)["\']\s*:\s*["\']([^"\n\r]*)',
+        body,
+    ):
+        k = str(key or "").strip()
+        if not k or k.lower() in {"name", "arguments", "parameters", "function"}:
+            continue
+        params[k] = value
+    return params
+
+
 def parse_tool_calls(response: str) -> List[Dict[str, Any]]:
     """
     Extract tool calls from LLM response.
@@ -195,6 +234,45 @@ def parse_tool_calls(response: str) -> List[Dict[str, Any]]:
                 name,
                 tool_hint,
             )
+    except Exception:
+        pass
+
+    if tool_calls:
+        return tool_calls
+
+    # Try markdown-wrapped prefix format, including malformed/truncated JSON.
+    # Example: *hangup_call* {"name":"hangup_call","arguments":{"farewell_message":"Bye"
+    try:
+        text = response or ""
+        for m in MARKDOWN_TOOL_CALL_PREFIX_PATTERN.finditer(text):
+            tool_hint = (m.group("tool") or "").strip()
+            extracted = _extract_json_object(text, m.end())
+            if extracted:
+                json_str, _end = extracted
+                try:
+                    tool_data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    tool_data = {}
+
+                if isinstance(tool_data, dict):
+                    name = tool_data.get("name") or tool_hint
+                    if name:
+                        parameters = tool_data.get("arguments", tool_data.get("parameters", {}))
+                        if not isinstance(parameters, dict):
+                            parameters = {}
+                        tool_calls.append({"name": name, "parameters": parameters})
+                        logger.debug("Parsed tool call (markdown prefix): tool=%s hint=%s", name, tool_hint)
+                        continue
+
+            # Fallback for partial JSON: recover tool name from marker and extract any partial args.
+            params = _extract_partial_arguments(text[m.end():])
+            if tool_hint:
+                tool_calls.append({"name": tool_hint, "parameters": params})
+                logger.debug(
+                    "Parsed tool call (markdown prefix partial): tool=%s params=%s",
+                    tool_hint,
+                    params,
+                )
     except Exception:
         pass
 
@@ -342,6 +420,24 @@ def extract_text_without_tools(response: str) -> str:
             _json_str, json_end = extracted
             # Drop from the start of the tool token through the end of JSON.
             clean = clean[: m.start()] + clean[json_end:]
+    except Exception:
+        pass
+
+    # Remove markdown-wrapped "toolname {json...}" fragments (including partial JSON).
+    try:
+        while True:
+            m = MARKDOWN_TOOL_CALL_PREFIX_PATTERN.search(clean)
+            if not m:
+                break
+            extracted = _extract_json_object(clean, m.end())
+            if extracted:
+                _json_str, json_end = extracted
+                clean = clean[: m.start()] + clean[json_end:]
+                continue
+            # Partial JSON / malformed output: drop until newline (or end of text).
+            nl = clean.find("\n", m.start())
+            end = nl if nl != -1 else len(clean)
+            clean = clean[: m.start()] + clean[end:]
     except Exception:
         pass
     

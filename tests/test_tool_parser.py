@@ -83,3 +83,24 @@ def test_parse_tool_call_bare_prefix_json():
 
     assert clean_text == "Bye"
     assert tool_calls == [{"name": "hangup_call", "parameters": {"farewell_message": "Bye"}}]
+
+
+def test_parse_tool_call_markdown_prefix_partial_json():
+    response = (
+        'Thanks for calling. *hangup_call* '
+        '{"name":"hangup_call","arguments":{"farewell_message":"Goodbye and take care"'
+    )
+    clean_text, tool_calls = parse_response_with_tools(response)
+
+    assert clean_text == "Thanks for calling."
+    assert tool_calls == [
+        {"name": "hangup_call", "parameters": {"farewell_message": "Goodbye and take care"}}
+    ]
+
+
+def test_parse_tool_call_markdown_prefix_no_args_recovers_name():
+    response = '*hangup_call* {"name":"hangup_call","arguments":'
+    clean_text, tool_calls = parse_response_with_tools(response)
+
+    assert clean_text is None
+    assert tool_calls == [{"name": "hangup_call", "parameters": {}}]
