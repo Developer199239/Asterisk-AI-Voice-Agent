@@ -1042,8 +1042,12 @@ check_directories() {
     SHARED_GID="$(choose_shared_gid)"
     local CONTAINER_UID="${CONTAINER_UID_DEFAULT}"
     
+    # Skip asterisk_media checks for --local-server mode (standalone GPU server
+    # doesn't need Asterisk media directories; only data/ and models/ matter).
+    if [ "$LOCAL_SERVER_ONLY" = true ]; then
+        log_info "Skipping asterisk_media checks (--local-server mode)"
     # Check media directory
-    if [ -d "$MEDIA_DIR_HOST" ]; then
+    elif [ -d "$MEDIA_DIR_HOST" ]; then
         local media_uid media_gid media_mode parent_uid parent_gid parent_mode
         parent_uid="$(stat_uid "$MEDIA_PARENT")"
         parent_gid="$(stat_gid "$MEDIA_PARENT")"
@@ -2351,11 +2355,12 @@ check_ports() {
 
 check_ports_local_server() {
     # Local AI Server is WS-only. Default port is 8765 (LOCAL_WS_PORT).
-    local port="${LOCAL_WS_PORT:-8765}"
+    local port="8765"
     if [ -f "$SCRIPT_DIR/.env" ]; then
-        # shellcheck disable=SC1090
-        source "$SCRIPT_DIR/.env" >/dev/null 2>&1 || true
-        port="${LOCAL_WS_PORT:-$port}"
+        # Use grep instead of source to avoid executing arbitrary code from .env
+        local env_port
+        env_port="$(grep -E '^LOCAL_WS_PORT=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')"
+        [ -n "$env_port" ] && port="$env_port"
     fi
     if command -v ss &>/dev/null; then
         if ss -tln | grep -q ":$port "; then
