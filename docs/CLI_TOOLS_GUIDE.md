@@ -6,6 +6,8 @@ Operator-focused reference for the `agent` CLI (setup + diagnostics + post-call 
 
 - `agent setup`: interactive onboarding (providers, transport, dialplan hints).
 - `agent check`: shareable diagnostics report for support (recommended first step when debugging).
+- `agent check --local`: verify Local AI Server components (STT, LLM, TTS) on this host.
+- `agent check --remote <ip>`: verify Local AI Server on a remote GPU machine.
 - `agent check --fix`: one-shot recovery flow for config/update failures (restore from latest valid backup, restart core services, re-check).
 - `agent rca`: post-call RCA using Call History and logs.
 - `agent update`: safe pull + rebuild/restart + verify workflow for repo-based installs.
@@ -67,7 +69,49 @@ agent check --json
 agent check --verbose
 agent check --no-color
 agent check --fix
+agent check --local
+agent check --remote 10.0.0.50
 ```
+
+#### `agent check --local` / `agent check --remote`
+
+Verify that STT, LLM, and TTS are working on a `local_ai_server` instance. Runs status, LLM generation, TTS synthesis, and a full STT round-trip test.
+
+```bash
+# Local AI Server on same host
+agent check --local
+
+# Remote GPU server
+agent check --remote 10.0.0.50
+
+# JSON output for CI/scripting
+agent check --local --json
+```
+
+Example output:
+
+```text
+=== Local AI Server Check ===
+Host: ws://127.0.0.1:8765
+
+✅ connection: Connected to ws://127.0.0.1:8765
+✅ stt_loaded: faster_whisper | Faster-Whisper (base)
+✅ llm_loaded: Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf | gpu_layers=50
+✅ tts_loaded: kokoro | Kokoro (af_heart, mode=hf)
+✅ gpu: NVIDIA GeForce RTX 4090 (24GB) | usable=True
+✅ llm_test: "Hello! How can I help you today?" (0.53s)
+✅ tts_test: 27600 bytes mulaw@8000Hz (0.12s)
+✅ stt_test: "Hello, this is a test of the speech recognition system." (1.47s)
+
+All checks passed ✅
+```
+
+Notes:
+
+- Auth token is read from `.env` (`LOCAL_WS_AUTH_TOKEN`) automatically. Override with `--auth-token`.
+- If `websockets` is not installed on the host, `--local` auto-runs the check inside the `local_ai_server` container.
+- LLM responses taking >15s trigger a warning that the model is too slow for telephony.
+- For standalone scripts: `python3 scripts/check_local_server.py --local` (same functionality without the Go CLI).
 
 `agent check --fix` behavior:
 

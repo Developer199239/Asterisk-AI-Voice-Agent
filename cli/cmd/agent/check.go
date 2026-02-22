@@ -2,7 +2,10 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/check"
@@ -10,8 +13,10 @@ import (
 )
 
 var (
-	checkJSON bool
-	checkFix  bool
+	checkJSON   bool
+	checkFix    bool
+	checkLocal  bool
+	checkRemote string
 )
 
 var checkCmd = &cobra.Command{
@@ -35,6 +40,11 @@ Exit codes:
   1 - WARN (non-critical issues)
   2 - FAIL (critical issues)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// --local or --remote: check local_ai_server components
+		if checkLocal || checkRemote != "" {
+			return runCheckLocalServer(cmd)
+		}
+
 		if checkFix {
 			if checkJSON {
 				return errors.New("--fix cannot be combined with --json")
@@ -92,8 +102,49 @@ Exit codes:
 	},
 }
 
+// runCheckLocalServer shells out to scripts/check_local_server.py
+func runCheckLocalServer(cmd *cobra.Command) error {
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		return fmt.Errorf("could not find project root: %w", err)
+	}
+
+	scriptPath := filepath.Join(projectRoot, "scripts", "check_local_server.py")
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		return fmt.Errorf("script not found: %s\nMake sure you're running from the project directory", scriptPath)
+	}
+
+	pyArgs := []string{scriptPath, "--project-root", projectRoot}
+	if checkLocal {
+		pyArgs = append(pyArgs, "--local")
+	} else if checkRemote != "" {
+		pyArgs = append(pyArgs, "--remote", checkRemote)
+	}
+	if checkJSON {
+		pyArgs = append(pyArgs, "--json")
+	}
+	if noColor {
+		pyArgs = append(pyArgs, "--no-color")
+	}
+
+	pyCmd := exec.Command("python3", pyArgs...)
+	pyCmd.Stdout = os.Stdout
+	pyCmd.Stderr = os.Stderr
+	pyCmd.Dir = projectRoot
+
+	if err := pyCmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		return fmt.Errorf("local server check failed: %w", err)
+	}
+	return nil
+}
+
 func init() {
 	checkCmd.Flags().BoolVar(&checkJSON, "json", false, "output as JSON (JSON only)")
 	checkCmd.Flags().BoolVar(&checkFix, "fix", false, "attempt automatic recovery from recent backups and re-run diagnostics")
+	checkCmd.Flags().BoolVar(&checkLocal, "local", false, "check local_ai_server on this host (ws://127.0.0.1:8765)")
+	checkCmd.Flags().StringVar(&checkRemote, "remote", "", "check remote local_ai_server at IP address")
 	rootCmd.AddCommand(checkCmd)
 }

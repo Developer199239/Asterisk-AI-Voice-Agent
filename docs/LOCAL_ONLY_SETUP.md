@@ -265,7 +265,27 @@ sudo ufw allow from <pbx-machine-ip> to any port 8765
 
 ## Verify Each Component
 
-After starting `local_ai_server`, verify that STT, LLM, and TTS each work independently. The server uses **WebSocket** (not HTTP), so these commands use Python with the `websockets` library (pre-installed in the container).
+### Quick Check (recommended)
+
+One command to verify STT, LLM, and TTS are all working:
+
+```bash
+# GPU on same host
+agent check --local
+
+# Remote GPU server
+agent check --remote <gpu-ip>
+
+# Without the Go CLI binary (standalone script)
+python3 scripts/check_local_server.py --local
+python3 scripts/check_local_server.py --remote <gpu-ip>
+```
+
+See [CLI Tools Guide](CLI_TOOLS_GUIDE.md#agent-check---local--agent-check---remote) for full flag reference.
+
+### Manual Verification (advanced)
+
+The commands below test each component individually. The server uses **WebSocket** (not HTTP), so these commands use Python with the `websockets` library (pre-installed in the container).
 
 > **Remote testing:** Replace `ws://127.0.0.1:8765` with `ws://<gpu-ip>:8765` to test from another machine. If `LOCAL_WS_AUTH_TOKEN` is set, add auth (see [auth example](#with-authentication) below).
 
