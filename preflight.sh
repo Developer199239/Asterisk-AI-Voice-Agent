@@ -2319,6 +2319,13 @@ GPU_AVAILABLE=$gpu_value" "$SCRIPT_DIR/.env"
     
     if [ "$gpu_value" = "true" ]; then
         log_ok "Set GPU_AVAILABLE=true in .env"
+        # Check for GPU layers footgun: GPU detected but layers=0 means CPU-only LLM inference.
+        local current_layers
+        current_layers="$(grep -E '^LOCAL_LLM_GPU_LAYERS=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')"
+        if [ "$current_layers" = "0" ]; then
+            log_warn "LOCAL_LLM_GPU_LAYERS=0 in .env — LLM will run on CPU despite GPU being available"
+            log_info "  Suggestion: Set LOCAL_LLM_GPU_LAYERS=-1 in .env for automatic GPU offloading"
+        fi
     fi
 }
 
