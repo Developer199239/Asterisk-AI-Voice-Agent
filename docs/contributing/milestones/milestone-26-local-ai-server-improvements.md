@@ -73,6 +73,25 @@ At session start, push the AI engine’s system prompt to `local_ai_server` so l
 - **VM templates**: required for the full compose stack and long-running services.
 - **GPU Docker**: ensure NVIDIA Container Toolkit is configured so Compose can allocate `--gpus`.
 
+### Audit-Driven Hardening (added post-audit)
+
+These changes come from a deep audit of the Local AI Server experience, focused on reducing community setup failures.
+
+| File | Change | Why | How to Test |
+|------|--------|-----|-------------|
+| `admin_ui/backend/api/local_ai.py` | Capabilities fallback checks `GPU_AVAILABLE` and `LOCAL_AI_MODE` before claiming LLM is available | CPU minimal mode doesn't preload LLM; old fallback misled the UI | `curl localhost:3003/api/local-ai/capabilities` on CPU-only — `llm.available` should be `false` |
+| `admin_ui/backend/api/local_ai.py` | `_read_env_values()` strips surrounding quotes from values | `.env` values like `VAR="value"` were read with quotes included | Set `LOCAL_STT_BACKEND="vosk"` in `.env`, switch model via UI, verify no quote in logs |
+| `admin_ui/backend/api/local_ai.py` | Remove dead `_verify_model_loaded()` function | Superseded by `_wait_for_status()` in switch flow; also tried `ws://local_ai_server:8765` which doesn't resolve in host networking | `grep -n _verify_model_loaded admin_ui/backend/api/local_ai.py` returns empty |
+| `.env.example` | Comment out `LOCAL_LLM_GPU_LAYERS=0` default | Users copying `.env.example` got CPU-only LLM on GPU systems without realizing | `grep LOCAL_LLM_GPU_LAYERS .env.example` shows commented-out line with `-1` suggestion |
+| `preflight.sh` | Warn when `GPU_AVAILABLE=true` but `LOCAL_LLM_GPU_LAYERS=0` | Catches the footgun during onboarding | Set `GPU_AVAILABLE=true` + `LOCAL_LLM_GPU_LAYERS=0` in `.env`, run `./preflight.sh --local-server`, see warning |
+| `preflight.sh` | Skip `asterisk_media/` checks in `--local-server` mode | Standalone GPU server doesn't need Asterisk media directories | `./preflight.sh --local-server` shows "Skipping asterisk_media checks" |
+| `preflight.sh` | `check_ports_local_server()` uses grep instead of sourcing `.env` | Sourcing `.env` can execute arbitrary code | Inspect function — no `source` call |
+| `docker-compose.yml` | Reduce healthcheck `retries` from 180 to 30 | Old: 3-hour window. New: 30 min (still generous) | `docker compose config` shows `retries: 30` |
+| `local_ai_server/Dockerfile` | Add `EXPOSE 8765` | Documents WS port for tools/inspection | `docker inspect <image>` shows exposed port |
+| `local_ai_server/Dockerfile.gpu` | Add `EXPOSE 8765` | Same as above for GPU image | Same |
+| `docs/COMMUNITY_TEST_MATRIX.md` | New: publishable community test matrix with submission template | Crowdsource what model combinations work best for fully local | File exists with backend reference table and results section |
+| `.github/ISSUE_TEMPLATE/local-ai-test-result.md` | New: structured issue template for test result submissions | Makes contributing test results easy for community | New issue → "Local AI Test Result" template available |
+
 ## Verification Checklist
 
 - `local_ai_server` starts on GPU with `LOCAL_LLM_GPU_LAYERS=-1` and `LOCAL_LLM_CONTEXT` unset → `llm_context=2048`.
@@ -80,3 +99,6 @@ At session start, push the AI engine’s system prompt to `local_ai_server` so l
 - Switching to Whisper STT (Faster-Whisper or whisper.cpp) no longer causes continuous self-talk on ExternalMedia.
 - Switching between STT/TTS/LLM models via Admin UI succeeds for shipped backends; failures are capability-aware and actionable.
 - No `Requested tokens exceed context window` errors in `local_ai_server` logs when using the default `default` context prompt.
+- ✅ Capabilities endpoint returns `llm.available=false` on CPU-only systems (unless `LOCAL_AI_MODE=full`).
+- ✅ `preflight.sh --local-server` skips asterisk_media and warns about GPU layers footgun.
+- ✅ Community test matrix published at `docs/COMMUNITY_TEST_MATRIX.md`.
