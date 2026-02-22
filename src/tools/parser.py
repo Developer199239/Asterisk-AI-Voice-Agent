@@ -30,6 +30,14 @@ NAMED_TOOL_CALL_PATTERN = re.compile(
     re.DOTALL
 )
 
+# Sometimes models emit a malformed wrapper where they start with the closing
+# tag (e.g., `</tool_call> {...}`) or omit the closing tag entirely. We'll try
+# to recover a JSON object adjacent to either tag.
+TOOL_CALL_TAG_PATTERN = re.compile(
+    r'</?tool_call>',
+    re.IGNORECASE
+)
+
 # Alternative patterns for fallback parsing
 FUNCTOOLS_PATTERN = re.compile(
     r'functools\[(\[.*?\])\]',
@@ -40,6 +48,70 @@ JSON_FUNCTION_PATTERN = re.compile(
     r'\{\s*"function"\s*:\s*"([^"]+)"\s*,\s*"function_parameters"\s*:\s*(\{.*?\})\s*\}',
     re.DOTALL
 )
+
+_CONTROL_TOKEN_PREFIXES = ("<|system|>", "<|user|>", "<|assistant|>", "<|enduser|>", "<|end|>")
+
+
+def _extract_json_object(text: str, start_index: int) -> Optional[Tuple[str, int]]:
+    """
+    Extract the first JSON object starting at or after start_index.
+
+    Returns (json_string, end_index_exclusive) or None.
+    """
+    if not text:
+        return None
+    n = len(text)
+    i = start_index
+    while i < n and text[i] != "{":
+        i += 1
+    if i >= n:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    for j in range(i, n):
+        ch = text[j]
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[i : j + 1], j + 1
+
+    return None
+
+
+def _strip_control_tokens(text: str) -> str:
+    """
+    Remove common chat-template control tokens that occasionally leak into outputs.
+    """
+    if not text:
+        return text
+    # If a control token appears, truncate at its first occurrence to avoid speaking garbage.
+    lowest = None
+    for token in _CONTROL_TOKEN_PREFIXES:
+        idx = text.find(token)
+        if idx != -1:
+            lowest = idx if lowest is None else min(lowest, idx)
+    if lowest is not None:
+        text = text[:lowest]
+    return text.strip()
 
 
 def parse_tool_calls(response: str) -> List[Dict[str, Any]]:
@@ -111,6 +183,35 @@ def parse_tool_calls(response: str) -> List[Dict[str, Any]]:
 
     if tool_calls:
         return tool_calls
+
+    # Try malformed tool_call tags (e.g., `</tool_call> {...}` or `<tool_call> {...}` without close).
+    try:
+        for match in TOOL_CALL_TAG_PATTERN.finditer(response or ""):
+            extracted = _extract_json_object(response, match.end())
+            if not extracted:
+                continue
+            json_str, _end = extracted
+            try:
+                tool_data = json.loads(json_str)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(tool_data, dict) and "name" in tool_data:
+                tool_calls.append({
+                    "name": tool_data["name"],
+                    "parameters": tool_data.get("arguments", tool_data.get("parameters", {})),
+                })
+                logger.debug(
+                    "Parsed tool call (adjacent tag): tool=%s params=%s",
+                    tool_data.get("name"),
+                    tool_data.get("arguments", {}),
+                )
+    except Exception:
+        # Defensive: never let parsing crash the engine.
+        pass
+
+    if tool_calls:
+        return tool_calls
     
     # Try functools format: functools[{...}]
     functools_matches = FUNCTOOLS_PATTERN.findall(response)
@@ -160,6 +261,25 @@ def extract_text_without_tools(response: str) -> str:
 
     # Remove <tool_name>...</tool_name> blocks with embedded JSON
     clean = NAMED_TOOL_CALL_PATTERN.sub('', clean)
+
+    # Remove stray tool_call tags and any adjacent JSON object.
+    try:
+        while True:
+            m = TOOL_CALL_TAG_PATTERN.search(clean)
+            if not m:
+                break
+            # Remove tag itself.
+            start = m.start()
+            end = m.end()
+            # Also remove an immediate JSON object if present.
+            extracted = _extract_json_object(clean, end)
+            if extracted:
+                _json_str, json_end = extracted
+                clean = clean[:start] + clean[json_end:]
+            else:
+                clean = clean[:start] + clean[end:]
+    except Exception:
+        pass
     
     # Remove functools[...] blocks
     clean = FUNCTOOLS_PATTERN.sub('', clean)
@@ -170,6 +290,9 @@ def extract_text_without_tools(response: str) -> str:
     # Clean up extra whitespace
     clean = re.sub(r'\n\s*\n', '\n', clean)
     clean = clean.strip()
+
+    # Finally, strip leaked chat-template control tokens.
+    clean = _strip_control_tokens(clean)
     
     return clean
 
