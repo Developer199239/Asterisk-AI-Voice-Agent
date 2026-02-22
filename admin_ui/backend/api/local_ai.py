@@ -642,13 +642,26 @@ async def get_backend_capabilities():
                 # Fallback: assume basic capabilities based on what we can detect
                 capabilities["stt"]["vosk"] = {"available": True, "reason": "Default backend"}
                 capabilities["tts"]["piper"] = {"available": True, "reason": "Default backend"}
-                capabilities["llm"] = {"available": True, "reason": "Default backend"}
+                # Only claim LLM available if GPU is present or user forced full mode;
+                # CPU-only defaults to runtime_mode=minimal which skips LLM preload.
+                _gpu = os.getenv("GPU_AVAILABLE", "false").strip().lower() in ("1", "true", "yes")
+                _forced_full = (os.getenv("LOCAL_AI_MODE") or "").strip().lower() == "full"
+                if _gpu or _forced_full:
+                    capabilities["llm"] = {"available": True, "reason": "Default backend"}
+                else:
+                    capabilities["llm"] = {"available": False, "reason": "CPU minimal mode — LLM not preloaded. Set LOCAL_AI_MODE=full or add GPU."}
                 
     except Exception as e:
         # Server not reachable - return minimal capabilities
         capabilities["stt"]["vosk"] = {"available": True, "reason": "Default backend"}
         capabilities["tts"]["piper"] = {"available": True, "reason": "Default backend"}
-        capabilities["llm"] = {"available": True, "reason": "Default backend"}
+        # Same GPU/mode check as above — don't mislead the UI about LLM on CPU minimal.
+        _gpu = os.getenv("GPU_AVAILABLE", "false").strip().lower() in ("1", "true", "yes")
+        _forced_full = (os.getenv("LOCAL_AI_MODE") or "").strip().lower() == "full"
+        if _gpu or _forced_full:
+            capabilities["llm"] = {"available": True, "reason": "Default backend"}
+        else:
+            capabilities["llm"] = {"available": False, "reason": "CPU minimal mode — LLM not preloaded. Set LOCAL_AI_MODE=full or add GPU."}
         capabilities["error"] = str(e)
     
     return capabilities
@@ -1099,43 +1112,6 @@ async def delete_model(request: DeleteModelRequest):
         )
 
 
-async def _verify_model_loaded(model_type: str, get_setting) -> bool:
-    """Verify that the specified model type is loaded after restart."""
-    # Try both localhost and container name
-    urls_to_try = [
-        "ws://127.0.0.1:8765",
-        "ws://local_ai_server:8765",
-        get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
-    ]
-    
-    for ws_url in urls_to_try:
-        try:
-            async with websockets.connect(ws_url, open_timeout=5) as ws:
-                auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
-                if auth_token:
-                    await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
-                    raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                    auth_data = json.loads(raw)
-                    if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
-                        raise RuntimeError(f"Local AI auth failed: {auth_data}")
-
-                await ws.send(json.dumps({"type": "status"}))
-                response = await asyncio.wait_for(ws.recv(), timeout=10)
-                data = json.loads(response)
-                
-                models = data.get("models", {})
-                if model_type == "stt":
-                    return models.get("stt", {}).get("loaded", False)
-                elif model_type == "tts":
-                    return models.get("tts", {}).get("loaded", False)
-                elif model_type == "llm":
-                    return models.get("llm", {}).get("loaded", False)
-                return True
-        except Exception:
-            continue
-    
-    return False
-
 
 def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
     """Read specific environment variable values from .env file."""
@@ -1149,6 +1125,9 @@ def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
                 key = line.split('=')[0].strip()
                 if key in keys:
                     value = line.split('=', 1)[1].strip()
+                    # Strip surrounding quotes (single or double)
+                    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                        value = value[1:-1]
                     values[key] = value
     return values
 
