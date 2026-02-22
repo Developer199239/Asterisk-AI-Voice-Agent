@@ -3145,6 +3145,11 @@ class LocalAIServer:
         *,
         source_mode: str,
     ) -> None:
+        # Whisper echo-guard: when Local AI Server is emitting TTS audio, it can be
+        # re-captured via telephony mixing/echo and immediately re-transcribed by
+        # Whisper-family STT, causing talk-loops. We proactively suppress STT for
+        # (estimated playback duration + small grace) whenever we emit agent audio.
+        self._arm_whisper_stt_suppression(session, audio_bytes, source=source_mode)
         if request_id:
             # Milestone7: emit metadata event for selective TTS while keeping binary transport.
             metadata = {
@@ -3160,6 +3165,29 @@ class LocalAIServer:
                 return
         if audio_bytes:
             await self._send_bytes(websocket, audio_bytes)
+
+    def _arm_whisper_stt_suppression(self, session: SessionContext, audio_bytes: Optional[bytes], *, source: str) -> None:
+        if self.stt_backend not in {"faster_whisper", "whisper_cpp"}:
+            return
+        if not audio_bytes:
+            return
+
+        duration_s = float(len(audio_bytes)) / float(max(1, ULAW_SAMPLE_RATE))
+        grace_s = 0.25
+        until = monotonic() + duration_s + grace_s
+        if until <= session.stt_suppress_until:
+            return
+
+        session.stt_suppress_until = until
+        self._cancel_idle_timer(session)
+        self._reset_stt_session(session, "")
+        logging.info(
+            "🔇 WHISPER STT SUPPRESS - Holding STT while TTS plays call_id=%s backend=%s source=%s seconds=%.2f",
+            session.call_id,
+            self.stt_backend,
+            source,
+            duration_s + grace_s,
+        )
 
     async def _handle_final_transcript(
         self,
@@ -3447,6 +3475,17 @@ class LocalAIServer:
 
         stt_modes = {"stt", "llm", "full"}
         if mode in stt_modes:
+            if self.stt_backend in {"faster_whisper", "whisper_cpp"} and monotonic() < (session.stt_suppress_until or 0.0):
+                if DEBUG_AUDIO_FLOW:
+                    remaining = max(0.0, float(session.stt_suppress_until - monotonic()))
+                    logging.debug(
+                        "🔇 WHISPER STT SUPPRESSED call_id=%s mode=%s remaining=%.2fs",
+                        session.call_id,
+                        mode,
+                        remaining,
+                    )
+                return
+
             if not self._stt_is_available():
                 logging.error(
                     "STT unavailable - emitting empty final transcript call_id=%s mode=%s stt_backend=%s",
@@ -3543,6 +3582,7 @@ class LocalAIServer:
             session.call_id = call_id
 
         audio_response = await self.process_tts(text)
+        self._arm_whisper_stt_suppression(session, audio_response, source="tts_request")
         
         # Check if this is a direct TTS request (expects tts_response with base64)
         # vs streaming mode which uses binary frames

@@ -32,4 +32,5 @@ class SessionContext:
     sherpa_stream: Optional[Any] = None
     # Optional auth state (enabled if LOCAL_WS_AUTH_TOKEN set)
     authenticated: bool = False
-
+    # Whisper-only echo guard: suppress STT while Local AI Server is emitting TTS audio.
+    stt_suppress_until: float = 0.0
