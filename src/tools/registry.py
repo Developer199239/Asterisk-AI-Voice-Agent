@@ -395,6 +395,29 @@ class ToolRegistry:
             return ""
         
         tools_json = json.dumps(self.to_local_llm_schema(), indent=2)
+
+        # Keep rule text scoped to the tools we actually expose, to reduce
+        # hallucinated tool calls (especially on smaller local models).
+        available_tool_names = [tool.definition.name for tool in self._tools.values()]
+        important_rules: list[str] = [
+            "- Tool calls MUST use the exact <tool_call>...</tool_call> wrapper shown above. Do NOT invent other wrappers like <hangup_call>...</hangup_call>.",
+            "- Tool name MUST match exactly one of the Tool Definitions. Never invent tool names. If no tool applies, respond normally without any tool call.",
+        ]
+        if "hangup_call" in available_tool_names:
+            important_rules.append(
+                "- When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response."
+            )
+        if "request_transcript" in available_tool_names:
+            important_rules.append("- When the user asks to email the transcript, use request_transcript tool")
+        if "live_agent_transfer" in available_tool_names:
+            important_rules.append("- When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer")
+        if "blind_transfer" in available_tool_names:
+            important_rules.append("- When the user wants to transfer to a specific destination, use blind_transfer")
+        important_rules.extend([
+            "- Always provide a spoken response along with tool calls",
+            "- Only use tools when the user's intent clearly matches the tool's purpose",
+        ])
+        rules_text = "\n".join(important_rules)
         
         return f"""## Available Tools
 
@@ -410,14 +433,10 @@ After outputting a tool call, provide a brief spoken response.
 {tools_json}
 
 ### Important Rules:
-- Tool calls MUST use the exact <tool_call>...</tool_call> wrapper shown above. Do NOT invent other wrappers like <hangup_call>...</hangup_call>.
-- Tool name MUST match exactly one of the Tool Definitions. Never invent tool names. If no tool applies, respond normally without any tool call.
-- When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
-- When the user asks to email the transcript, use request_transcript tool
-- When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer
-- When the user wants to transfer to a specific destination, use blind_transfer
-- Always provide a spoken response along with tool calls
-- Only use tools when the user's intent clearly matches the tool's purpose
+Only the following tools are available in this context: {", ".join(sorted(set(available_tool_names)))}.
+If the system prompt mentions other tools, they are NOT available. Do not call them.
+
+{rules_text}
 """
 
     def to_local_llm_prompt_filtered(self, tool_names: Optional[List[str]]) -> str:
@@ -430,6 +449,27 @@ After outputting a tool call, provide a brief spoken response.
             return ""
 
         tools_json = json.dumps(tools, indent=2)
+        available_tool_names = [t.get("name", "") for t in tools if isinstance(t, dict)]
+
+        important_rules: list[str] = [
+            "- Tool calls MUST use the exact <tool_call>...</tool_call> wrapper shown above. Do NOT invent other wrappers like <hangup_call>...</hangup_call>.",
+            "- Tool name MUST match exactly one of the Tool Definitions. Never invent tool names. If no tool applies, respond normally without any tool call.",
+        ]
+        if "hangup_call" in available_tool_names:
+            important_rules.append(
+                "- When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response."
+            )
+        if "request_transcript" in available_tool_names:
+            important_rules.append("- When the user asks to email the transcript, use request_transcript tool")
+        if "live_agent_transfer" in available_tool_names:
+            important_rules.append("- When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer")
+        if "blind_transfer" in available_tool_names:
+            important_rules.append("- When the user wants to transfer to a specific destination, use blind_transfer")
+        important_rules.extend([
+            "- Always provide a spoken response along with tool calls",
+            "- Only use tools when the user's intent clearly matches the tool's purpose",
+        ])
+        rules_text = "\n".join(important_rules)
 
         return f"""## Available Tools
 
@@ -445,14 +485,10 @@ After outputting a tool call, provide a brief spoken response.
 {tools_json}
 
 ### Important Rules:
-- Tool calls MUST use the exact <tool_call>...</tool_call> wrapper shown above. Do NOT invent other wrappers like <hangup_call>...</hangup_call>.
-- Tool name MUST match exactly one of the Tool Definitions. Never invent tool names. If no tool applies, respond normally without any tool call.
-- When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
-- When the user asks to email the transcript, use request_transcript tool
-- When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer
-- When the user wants to transfer to a specific destination, use blind_transfer
-- Always provide a spoken response along with tool calls
-- Only use tools when the user's intent clearly matches the tool's purpose
+Only the following tools are available in this context: {", ".join(sorted(set(available_tool_names)))}.
+If the system prompt mentions other tools, they are NOT available. Do not call them.
+
+{rules_text}
 """
     
     def initialize_default_tools(self) -> None:
