@@ -3333,6 +3333,9 @@ class LocalAIServer:
 
         # Strip leaked chat/template tokens that should never be spoken.
         clean = re.sub(r"<\|\s*(?:system|assistant|user|enduser|end)\s*\|>", "", clean, flags=re.IGNORECASE)
+        # Strip partial/leaked control token fragments (e.g., "<|system|" without closing).
+        clean = re.sub(r"<\|[^>\n\r]*$", "", clean)
+        clean = re.sub(r"<\|[^>\n\r]*\|?>?", "", clean)
 
         # Also handle potential JSON tool calls without tags (best-effort).
         # e.g., {"name": "hangup_call", ...}
@@ -3342,6 +3345,12 @@ class LocalAIServer:
             "",
             clean,
             flags=re.DOTALL | re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\(?\s*tool\s*call(?:s)?(?:\s*executed)?\s*\)?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
         )
 
         # Strip markdown-style tool markers (e.g. *hangup_call* or *hangup*).
