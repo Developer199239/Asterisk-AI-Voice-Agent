@@ -141,7 +141,9 @@ services:
           PY
       interval: 60s
       timeout: 5s
-      retries: 180
+      # 30 retries × 60s interval = 30 min window after start_period.
+      # Large models may take 5-10 min to load; increase if needed.
+      retries: 30
       start_period: 120s
 
   admin_ui:

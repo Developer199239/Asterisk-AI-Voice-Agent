@@ -177,5 +177,8 @@ COPY --chown=appuser:appuser . .
 ENV PATH="/opt/venv/bin:$PATH"
 ENV NLTK_DATA="/opt/venv/nltk_data"
 
+# Document the WebSocket server port (informational; host networking ignores EXPOSE)
+EXPOSE 8765
+
 # Run the application
 CMD ["python", "main.py"]
