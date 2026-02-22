@@ -54,17 +54,6 @@ from session import SessionContext
 from config import LocalAIConfig
 from model_manager import ModelManager
 from ws_protocol import WebSocketProtocol
-try:
-    from src.tools.parser import parse_response_with_tools, has_tool_intent_markers
-except Exception:  # pragma: no cover - local_ai_server can still run without parser helpers
-    try:
-        _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if _repo_root not in sys.path:
-            sys.path.append(_repo_root)
-        from src.tools.parser import parse_response_with_tools, has_tool_intent_markers
-    except Exception:
-        parse_response_with_tools = None
-        has_tool_intent_markers = None
 
 
 # Local LLM tool-call guardrails (server-side) to prevent accidental hangups.
@@ -1662,14 +1651,6 @@ class LocalAIServer:
                 "notes": "llm_model_unavailable",
             }
 
-        if parse_response_with_tools is None:
-            return {
-                "level": "unknown",
-                "source": "probe_disabled",
-                "model": model_name,
-                "notes": "tool_parser_unavailable",
-            }
-
         probe_prompt = (
             "You are validating tool-calling format. "
             "Output ONLY a single tool call to hang up the call.\n"
@@ -1694,17 +1675,26 @@ class LocalAIServer:
                 if isinstance(output, dict)
                 else ""
             )
-            clean_text, tool_calls = parse_response_with_tools(raw)
-            parsed_hangup = any((tc.get("name") or "").strip() == "hangup_call" for tc in (tool_calls or []))
-            has_primary_wrapper = "<tool_call>" in (raw or "").lower() and "</tool_call>" in (raw or "").lower()
+            lowered = (raw or "").lower()
+            has_primary_wrapper = "<tool_call" in lowered and "</tool_call>" in lowered
+            has_named_wrapper = "<hangup_call" in lowered and "</hangup_call>" in lowered
+            has_hangup_name = (
+                "hangup_call" in lowered
+                and (
+                    "\"name\"" in lowered
+                    or "'name'" in lowered
+                    or has_named_wrapper
+                    or has_primary_wrapper
+                )
+            )
 
-            if parsed_hangup and has_primary_wrapper:
+            if has_hangup_name and has_primary_wrapper:
                 level = "strict"
                 notes = "tool_call_wrapper_detected"
-            elif parsed_hangup:
+            elif has_hangup_name:
                 level = "partial"
-                notes = "tool_call_parsed_without_primary_wrapper"
-            elif bool(has_tool_intent_markers and has_tool_intent_markers(raw, ["hangup_call"])):
+                notes = "hangup_tool_marker_detected"
+            elif "tool_call" in lowered:
                 level = "partial"
                 notes = "tool_markers_detected_unparsed"
             else:
