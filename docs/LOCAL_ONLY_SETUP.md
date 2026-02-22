@@ -263,6 +263,154 @@ sudo ufw allow from <pbx-machine-ip> to any port 8765
 
 ---
 
+## Verify Each Component
+
+After starting `local_ai_server`, verify that STT, LLM, and TTS each work independently. The server uses **WebSocket** (not HTTP), so these commands use Python with the `websockets` library (pre-installed in the container).
+
+> **Remote testing:** Replace `ws://127.0.0.1:8765` with `ws://<gpu-ip>:8765` to test from another machine. If `LOCAL_WS_AUTH_TOKEN` is set, add auth (see [auth example](#with-authentication) below).
+
+### 1. Status Check (are models loaded?)
+
+```bash
+docker exec local_ai_server python3 -c "
+import asyncio, json, websockets
+async def main():
+    ws = await websockets.connect('ws://127.0.0.1:8765', open_timeout=5, max_size=None)
+    await ws.send(json.dumps({'type': 'status'}))
+    r = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+    await ws.close()
+    m = r.get('models', {}); g = r.get('gpu', {})
+    for k in ('stt','llm','tts'):
+        info = m.get(k, {})
+        print(k.upper() + ':', info.get('backend','?'), '| loaded=' + str(info.get('loaded')), '|', info.get('display','?'))
+    print('GPU:', g.get('name','none'), '| usable=' + str(g.get('runtime_usable')))
+asyncio.run(main())
+"
+```
+
+Expected:
+
+```text
+STT: faster_whisper | loaded=True | Faster-Whisper (base)
+LLM: loaded=True | phi-3-mini-4k-instruct.Q4_K_M.gguf | gpu_layers=50
+TTS: kokoro | loaded=True | Kokoro (af_heart, mode=hf)
+GPU: NVIDIA GeForce RTX 4090 | usable=True
+```
+
+### 2. Test LLM (text generation)
+
+```bash
+docker exec local_ai_server python3 -c "
+import asyncio, json, websockets, time
+async def main():
+    ws = await websockets.connect('ws://127.0.0.1:8765', open_timeout=5, max_size=None)
+    t0 = time.time()
+    await ws.send(json.dumps({'type': 'llm_request', 'text': 'Say hello in one sentence.', 'mode': 'llm'}))
+    r = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
+    await ws.close()
+    print('LLM response:', r.get('text', '')[:200])
+    print('Latency: %.2fs' % (time.time() - t0))
+asyncio.run(main())
+"
+```
+
+Expected: a text response in <1s on GPU, 5-15s on CPU.
+
+### 3. Test TTS (speech synthesis)
+
+```bash
+docker exec local_ai_server python3 -c "
+import asyncio, json, websockets, time
+async def main():
+    ws = await websockets.connect('ws://127.0.0.1:8765', open_timeout=5, max_size=None)
+    t0 = time.time()
+    await ws.send(json.dumps({'type': 'tts_request', 'text': 'Hello, this is a test of text to speech.', 'response_format': 'json'}))
+    r = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
+    await ws.close()
+    print('TTS audio:', r.get('byte_length', 0), 'bytes |', r.get('encoding'), r.get('sample_rate_hz'), 'Hz')
+    print('Latency: %.2fs' % (time.time() - t0))
+asyncio.run(main())
+"
+```
+
+Expected: audio bytes > 0, encoding=mulaw, sample_rate=8000, latency <0.5s on GPU.
+
+### 4. Test STT (speech recognition — full round-trip)
+
+This generates speech via TTS, then feeds it back into STT to verify the full audio pipeline:
+
+```bash
+docker exec local_ai_server python3 -c "
+import asyncio, json, websockets, time, base64, audioop
+async def main():
+    # Generate test audio via TTS
+    ws1 = await websockets.connect('ws://127.0.0.1:8765', open_timeout=5, max_size=None)
+    await ws1.send(json.dumps({'type': 'tts_request', 'text': 'Hello, this is a test of the speech recognition system.', 'response_format': 'json'}))
+    tts = json.loads(await asyncio.wait_for(ws1.recv(), timeout=15))
+    audio_mulaw = base64.b64decode(tts.get('audio_data', ''))
+    await ws1.close()
+    print('TTS generated:', len(audio_mulaw), 'bytes')
+
+    # Convert mulaw 8kHz -> PCM16 16kHz for STT
+    pcm16k, _ = audioop.ratecv(audioop.ulaw2lin(audio_mulaw, 2), 2, 1, 8000, 16000, None)
+
+    # Send to STT on a fresh connection
+    ws2 = await websockets.connect('ws://127.0.0.1:8765', open_timeout=5, max_size=None)
+    await ws2.send(json.dumps({'type': 'set_mode', 'mode': 'stt'}))
+    await asyncio.wait_for(ws2.recv(), timeout=5)
+    t0 = time.time()
+    await ws2.send(json.dumps({'type': 'audio', 'data': base64.b64encode(pcm16k).decode(), 'mode': 'stt', 'rate': 16000}))
+
+    transcript = ''
+    try:
+        while True:
+            raw = await asyncio.wait_for(ws2.recv(), timeout=10)
+            if isinstance(raw, str):
+                msg = json.loads(raw)
+                if msg.get('type') == 'stt_result' and msg.get('is_final') and msg.get('text', '').strip():
+                    transcript = msg['text']
+                    break
+    except asyncio.TimeoutError:
+        pass
+    await ws2.close()
+    print('STT result:', repr(transcript) if transcript else '(no transcript)')
+    print('Latency: %.2fs' % (time.time() - t0))
+asyncio.run(main())
+"
+```
+
+Expected: transcript should closely match the TTS input text.
+
+### With Authentication
+
+If `LOCAL_WS_AUTH_TOKEN` is set (required for split-server), add auth before any request:
+
+```bash
+# Add this after connecting, before sending any other message:
+# await ws.send(json.dumps({'type': 'auth', 'auth_token': 'YOUR_TOKEN'}))
+# r = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+# assert r.get('status') == 'ok', f"Auth failed: {r}"
+
+# Example: remote status check with auth
+python3 -c "
+import asyncio, json, websockets
+async def main():
+    ws = await websockets.connect('ws://<gpu-ip>:8765', open_timeout=5, max_size=None)
+    await ws.send(json.dumps({'type': 'auth', 'auth_token': 'YOUR_TOKEN'}))
+    auth = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+    assert auth.get('status') == 'ok', 'Auth failed: ' + str(auth)
+    await ws.send(json.dumps({'type': 'status'}))
+    r = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+    await ws.close()
+    print(json.dumps(r, indent=2))
+asyncio.run(main())
+"
+```
+
+> **Note:** For remote testing without `websockets` installed, use `pip3 install websockets` or run via `docker exec` on the GPU machine.
+
+---
+
 ## AI Agent Configuration (config/ai-agent.yaml)
 
 This applies to **all topologies**. The key settings:
