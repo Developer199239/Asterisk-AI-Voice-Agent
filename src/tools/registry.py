@@ -379,6 +379,9 @@ class ToolRegistry:
             tool.definition.to_local_llm_schema()
             for tool in self._tools.values()
         ]
+
+    def to_local_llm_schema_filtered(self, tool_names: Optional[List[str]]) -> List[Dict]:
+        return [tool.definition.to_local_llm_schema() for tool in self._iter_tools_filtered(tool_names)]
     
     def to_local_llm_prompt(self) -> str:
         """
@@ -393,6 +396,39 @@ class ToolRegistry:
         
         tools_json = json.dumps(self.to_local_llm_schema(), indent=2)
         
+        return f"""## Available Tools
+
+You have access to the following tools. When you need to use a tool, output EXACTLY this format:
+
+<tool_call>
+{{"name": "tool_name", "arguments": {{"param": "value"}}}}
+</tool_call>
+
+After outputting a tool call, provide a brief spoken response.
+
+### Tool Definitions:
+{tools_json}
+
+### Important Rules:
+- When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
+- When the user asks to email the transcript, use request_transcript tool
+- When the user asks for a human/live agent and live_agent_transfer is available, use live_agent_transfer
+- When the user wants to transfer to a specific destination, use blind_transfer
+- Always provide a spoken response along with tool calls
+- Only use tools when the user's intent clearly matches the tool's purpose
+"""
+
+    def to_local_llm_prompt_filtered(self, tool_names: Optional[List[str]]) -> str:
+        """
+        Generate a tool prompt section for local LLMs restricted to a tool allowlist.
+        """
+        import json
+        tools = self.to_local_llm_schema_filtered(tool_names)
+        if not tools:
+            return ""
+
+        tools_json = json.dumps(tools, indent=2)
+
         return f"""## Available Tools
 
 You have access to the following tools. When you need to use a tool, output EXACTLY this format:

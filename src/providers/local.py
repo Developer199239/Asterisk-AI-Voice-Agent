@@ -432,9 +432,13 @@ class LocalProvider(AIProviderInterface):
 
         # Apply system prompt from context (if provided).
         prompt = ""
+        allowed_tools: list[str] = []
         try:
             if isinstance(context, dict):
                 prompt = str(context.get("prompt") or context.get("instructions") or "").strip()
+                tools_raw = context.get("tools")
+                if isinstance(tools_raw, (list, tuple, set)):
+                    allowed_tools = [str(x).strip() for x in tools_raw if str(x).strip()]
         except Exception:
             prompt = ""
         if not prompt:
@@ -443,6 +447,17 @@ class LocalProvider(AIProviderInterface):
             except Exception:
                 prompt = ""
         if prompt:
+            # Local LLMs need explicit tool syntax + schema injected into the system prompt.
+            # Without this, the model often says it "can't" do telephony actions even when enabled.
+            try:
+                if allowed_tools and "## Available Tools" not in prompt:
+                    from src.tools.registry import tool_registry
+
+                    tool_prompt = tool_registry.to_local_llm_prompt_filtered(allowed_tools)
+                    if tool_prompt:
+                        prompt = f"{prompt}\n\n{tool_prompt}".strip()
+            except Exception:
+                logger.debug("Failed injecting local tool prompt", call_id=call_id, exc_info=True)
             await self._apply_system_prompt(prompt, call_id=call_id)
 
     async def _apply_system_prompt(self, prompt: str, *, call_id: str) -> None:
