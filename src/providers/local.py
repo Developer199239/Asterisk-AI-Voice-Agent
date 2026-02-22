@@ -63,6 +63,8 @@ class LocalProvider(AIProviderInterface):
         self._last_system_prompt_digest: Optional[str] = None
         # Per-call tool allowlist (from context.tools). Used to drop hallucinated tool calls.
         self._allowed_tools: set[str] = set()
+        self._allowed_tool_schemas: List[Dict[str, Any]] = []
+        self._last_user_transcript_by_call: Dict[str, str] = {}
         # Request-id keyed futures for internal LLM repair turns.
         self._pending_llm_responses: Dict[str, asyncio.Future] = {}
         self._pending_llm_tool_responses: Dict[str, Dict[str, Any]] = {}
@@ -171,6 +173,33 @@ class LocalProvider(AIProviderInterface):
             return None
         finally:
             self._pending_llm_responses.pop(request_id, None)
+
+    @staticmethod
+    def _build_allowed_tool_schemas(tool_names: List[str]) -> List[Dict[str, Any]]:
+        names = [str(name or "").strip() for name in (tool_names or []) if str(name or "").strip()]
+        if not names:
+            return []
+        try:
+            from src.tools.registry import tool_registry
+            schemas = tool_registry.to_openai_realtime_schema_filtered(names)
+            result: List[Dict[str, Any]] = []
+            for schema in schemas:
+                if not isinstance(schema, dict):
+                    continue
+                name = str(schema.get("name") or "").strip()
+                if not name:
+                    continue
+                result.append(
+                    {
+                        "name": name,
+                        "description": str(schema.get("description") or "").strip(),
+                        "parameters": schema.get("parameters") if isinstance(schema.get("parameters"), dict) else {},
+                    }
+                )
+            return result
+        except Exception:
+            logger.debug("Failed building local tool schemas", exc_info=True)
+            return []
 
     async def _attempt_tool_call_repair(
         self,
@@ -360,7 +389,9 @@ class LocalProvider(AIProviderInterface):
             "request_id": request_id,
             "call_id": call_id or self._active_call_id,
             "text": llm_text,
+            "latest_user_text": self._last_user_transcript_by_call.get(call_id or self._active_call_id or "", ""),
             "allowed_tools": sorted(self._allowed_tools),
+            "tools": list(self._allowed_tool_schemas or []),
             "tool_policy": self._effective_tool_policy,
             "tool_choice": "auto",
         }
@@ -719,6 +750,7 @@ class LocalProvider(AIProviderInterface):
                 logger.debug("WebSocket already connected, reusing connection", call_id=call_id)
                 if self._active_call_id and self._active_call_id != call_id:
                     self._tts_audio_meta_by_call.pop(self._active_call_id, None)
+                    self._last_user_transcript_by_call.pop(self._active_call_id, None)
                 self._active_call_id = call_id
                 self._runtime_stt_backend = None
                 self._last_status = None
@@ -737,6 +769,7 @@ class LocalProvider(AIProviderInterface):
             await self.initialize()
             if self._active_call_id and self._active_call_id != call_id:
                 self._tts_audio_meta_by_call.pop(self._active_call_id, None)
+                self._last_user_transcript_by_call.pop(self._active_call_id, None)
             self._active_call_id = call_id
             self._runtime_stt_backend = None
             self._last_status = None
@@ -777,15 +810,17 @@ class LocalProvider(AIProviderInterface):
         try:
             if isinstance(context, dict):
                 prompt = str(context.get("prompt") or context.get("instructions") or "").strip()
-                tools_raw = context.get("tools")
+                tools_raw = context.get("context_tools", context.get("tools"))
                 if isinstance(tools_raw, (list, tuple, set)):
                     allowed_tools = [str(x).strip() for x in tools_raw if str(x).strip()]
         except Exception:
             prompt = ""
         try:
             self._allowed_tools = set(allowed_tools or [])
+            self._allowed_tool_schemas = self._build_allowed_tool_schemas(allowed_tools)
         except Exception:
             self._allowed_tools = set()
+            self._allowed_tool_schemas = []
         self._effective_tool_policy = self._resolve_tool_policy(context=context)
         if not prompt:
             try:
@@ -1115,6 +1150,7 @@ class LocalProvider(AIProviderInterface):
         old_call_id = self._active_call_id
         if old_call_id:
             self._tts_audio_meta_by_call.pop(old_call_id, None)
+            self._last_user_transcript_by_call.pop(old_call_id, None)
             done_task = self._agent_audio_done_tasks.pop(old_call_id, None)
             if done_task and not done_task.done():
                 done_task.cancel()
@@ -1230,6 +1266,8 @@ class LocalProvider(AIProviderInterface):
                             is_final = data.get("is_final", True)
                             
                             if text and is_final and self.on_event:
+                                if call_id:
+                                    self._last_user_transcript_by_call[call_id] = text
                                 await self.on_event({
                                     "type": "transcript",
                                     "call_id": call_id,

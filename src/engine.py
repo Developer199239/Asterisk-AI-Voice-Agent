@@ -11558,9 +11558,10 @@ class Engine:
                         # - Combine global tools with context-specific tools (Milestone 24),
                         #   respecting context opt-outs.
                         # - Also include per-context in-call HTTP tool wrappers.
-                        allowed = list(getattr(context_config, "tools", None) or [])
+                        explicit_context_tools = list(getattr(context_config, "tools", None) or [])
                         if allowed_in_call_http_tool_names:
-                            allowed.extend(allowed_in_call_http_tool_names)
+                            explicit_context_tools.extend(allowed_in_call_http_tool_names)
+                        allowed = list(explicit_context_tools)
                         try:
                             from src.tools.base import ToolPhase
                             from src.tools.registry import tool_registry
@@ -11574,6 +11575,9 @@ class Engine:
                             provider_context["tools"] = [t.definition.name for t in tools]
                         except Exception:
                             provider_context["tools"] = allowed
+                        # Local provider can choose strict context-only tools while other providers
+                        # keep effective (global+context) tools in provider_context["tools"].
+                        provider_context["context_tools"] = list(explicit_context_tools)
                         try:
                             # Persist tool allowlist on session so provider-agnostic tools (e.g., hangup_call)
                             # can decide whether follow-up tools like request_transcript are actually available.

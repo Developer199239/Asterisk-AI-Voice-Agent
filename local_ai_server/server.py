@@ -3344,6 +3344,21 @@ class LocalAIServer:
             flags=re.DOTALL | re.IGNORECASE,
         )
 
+        # Strip markdown-style tool markers (e.g. *hangup_call* or *hangup*).
+        for name in tool_names:
+            clean = re.sub(
+                rf"[\*\_`~]+\s*{re.escape(name)}\s*[\*\_`~]+",
+                "",
+                clean,
+                flags=re.IGNORECASE,
+            )
+        clean = re.sub(
+            r"[\*\_`~]+\s*(?:hangup|hangup_call|transfer|blind_transfer|attended_transfer|request_transfer)\s*[\*\_`~]+",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+
         # Remove stray standalone braces that can be left after partial stripping.
         clean = re.sub(r"(?:^|\s)[}\]]+(?=\s|$)", " ", clean)
 
@@ -3592,6 +3607,106 @@ class LocalAIServer:
         _, repaired_calls, parse_failures = self._extract_tool_calls_from_text(repaired_text, allowed_tools)
         return repaired_calls, parse_failures
 
+    @staticmethod
+    def _build_tool_decision_prompt(
+        *,
+        latest_user_text: str,
+        assistant_text: str,
+        allowed_tools: List[str],
+        tool_schemas: List[Dict[str, Any]],
+    ) -> str:
+        normalized_tools: List[Dict[str, Any]] = []
+        for schema in tool_schemas or []:
+            if not isinstance(schema, dict):
+                continue
+            name = str(schema.get("name") or "").strip()
+            if not name:
+                continue
+            if allowed_tools and name not in allowed_tools:
+                continue
+            normalized_tools.append(
+                {
+                    "name": name,
+                    "description": str(schema.get("description") or "").strip(),
+                    "parameters": schema.get("parameters") if isinstance(schema.get("parameters"), dict) else {},
+                }
+            )
+        if not normalized_tools:
+            normalized_tools = [{"name": name, "description": "", "parameters": {}} for name in allowed_tools]
+
+        tools_blob = json.dumps(normalized_tools, ensure_ascii=False)
+        return (
+            "You are a deterministic tool router for a phone-call AI assistant.\n"
+            "Decide whether a tool call must be emitted now.\n\n"
+            "OUTPUT FORMAT (strict):\n"
+            "- Return EXACTLY one of:\n"
+            "  1) <tool_call>{\"name\":\"tool_name\",\"arguments\":{...}}</tool_call>\n"
+            "  2) NONE\n"
+            "- No prose, no markdown, no extra text.\n\n"
+            "RULES:\n"
+            "- Only use tool names from the allowed list.\n"
+            "- If latest user utterance indicates call end (goodbye/that's all/thank you/end call), use hangup_call if available.\n"
+            "- If no tool is needed now, return NONE.\n\n"
+            f"Allowed tools JSON: {tools_blob}\n"
+            f"Latest user utterance: {latest_user_text}\n"
+            f"Assistant draft response: {assistant_text}\n"
+        )
+
+    async def _attempt_structured_tool_decision(
+        self,
+        *,
+        latest_user_text: str,
+        assistant_text: str,
+        allowed_tools: List[str],
+        tool_schemas: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        if not self.llm_model or not allowed_tools:
+            return [], 0
+        prompt = self._build_tool_decision_prompt(
+            latest_user_text=latest_user_text or "",
+            assistant_text=assistant_text or "",
+            allowed_tools=allowed_tools,
+            tool_schemas=tool_schemas,
+        )
+        async with self._llm_lock:
+            try:
+                output = await asyncio.to_thread(
+                    self.llm_model,
+                    prompt,
+                    max_tokens=min(128, max(48, int(getattr(self, "llm_max_tokens", 64) or 64))),
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                choices = output.get("choices", []) if isinstance(output, dict) else []
+                if not choices:
+                    return [], 0
+                decision_text = str(choices[0].get("text", "") or "").strip()
+            except Exception:
+                logging.debug("Structured tool decision inference failed", exc_info=True)
+                return [], 0
+        if decision_text.upper() == "NONE":
+            return [], 0
+        _, calls, parse_failures = self._extract_tool_calls_from_text(decision_text, allowed_tools)
+        return calls, parse_failures
+
+    @staticmethod
+    def _select_farewell_message(clean_text: str) -> str:
+        import re
+        text = str(clean_text or "").strip()
+        if not text:
+            return "Thank you for calling. Goodbye."
+        text = re.sub(r"<\|[^>]*\|>", "", text).strip()
+        if not text:
+            return "Thank you for calling. Goodbye."
+        sentence_match = re.match(r"(.+?[.!?])(?:\s|$)", text)
+        sentence = sentence_match.group(1).strip() if sentence_match else text[:140].strip()
+        if len(sentence) > 160:
+            sentence = sentence[:157].rstrip() + "..."
+        return sentence or "Thank you for calling. Goodbye."
+
     async def _handle_llm_tool_request(
         self,
         websocket,
@@ -3622,6 +3737,7 @@ class LocalAIServer:
             return
 
         allowed_tools = self._extract_allowed_tool_names(data)
+        tool_schemas = data.get("tools") if isinstance(data.get("tools"), list) else []
         policy = self._normalize_tool_policy(data.get("tool_policy"))
         if policy == "auto":
             capability_level = str((self._llm_tool_capability_meta or {}).get("level") or "").strip().lower()
@@ -3632,10 +3748,32 @@ class LocalAIServer:
             else:
                 policy = "compatible"
         tool_choice = str(data.get("tool_choice") or "auto").strip().lower()
+        latest_user_text = str(data.get("latest_user_text") or "").strip()
 
         clean_text, tool_calls, parse_failures = self._extract_tool_calls_from_text(text, allowed_tools)
         tool_path = "parser" if tool_calls else "none"
         repair_attempts = 0
+        structured_attempts = 0
+
+        should_try_structured = (
+            bool(getattr(self, "tool_gateway_enabled", True))
+            and policy in {"strict", "compatible"}
+            and tool_choice != "none"
+            and not tool_calls
+            and bool(allowed_tools)
+        )
+        if should_try_structured:
+            structured_attempts = 1
+            structured_calls, structured_failures = await self._attempt_structured_tool_decision(
+                latest_user_text=latest_user_text,
+                assistant_text=text,
+                allowed_tools=allowed_tools,
+                tool_schemas=tool_schemas if isinstance(tool_schemas, list) else [],
+            )
+            parse_failures += structured_failures
+            if structured_calls:
+                tool_calls = structured_calls
+                tool_path = "structured"
 
         should_try_repair = (
             bool(getattr(self, "tool_gateway_enabled", True))
@@ -3653,6 +3791,21 @@ class LocalAIServer:
                 tool_calls = repaired_calls
                 tool_path = "repair"
 
+        should_apply_hangup_heuristic = (
+            tool_choice != "none"
+            and not tool_calls
+            and "hangup_call" in {str(name).strip() for name in allowed_tools}
+            and self._text_has_end_call_intent(latest_user_text)
+        )
+        if should_apply_hangup_heuristic:
+            tool_calls = [
+                {
+                    "name": "hangup_call",
+                    "parameters": {"farewell_message": self._select_farewell_message(clean_text)},
+                }
+            ]
+            tool_path = "heuristic"
+
         if tool_choice == "none":
             tool_calls = []
             tool_path = "none"
@@ -3667,19 +3820,21 @@ class LocalAIServer:
             "tool_path": tool_path if finish_reason == "tool_calls" else "none",
             "tool_parse_failures": parse_failures,
             "repair_attempts": repair_attempts,
+            "structured_attempts": structured_attempts,
             "protocol_version": 2,
         }
         if request_id:
             payload["request_id"] = request_id
 
         logging.info(
-            "🧩 LLM TOOL GATEWAY - call_id=%s policy=%s tool_path=%s tools=%s parse_failures=%s repair_attempts=%s",
+            "🧩 LLM TOOL GATEWAY - call_id=%s policy=%s tool_path=%s tools=%s parse_failures=%s repair_attempts=%s structured_attempts=%s",
             session.call_id,
             policy,
             payload["tool_path"],
             [tc.get("name") for tc in tool_calls],
             parse_failures,
             repair_attempts,
+            structured_attempts,
         )
         await self._send_json(websocket, payload)
 

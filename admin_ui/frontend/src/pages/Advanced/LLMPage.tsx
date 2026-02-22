@@ -246,8 +246,14 @@ const LLMPage = () => {
                                     <option value="off">Off</option>
                                 </select>
                                 <p className="text-xs text-muted-foreground">
-                                    Auto resolves from model capability. Override only if you need deterministic behavior for a specific model.
+                                    Auto resolves from model capability. Override only when testing model-specific behavior.
                                 </p>
+                                <div className="rounded border border-border bg-muted/20 p-2 text-xs text-muted-foreground space-y-1">
+                                    <p><span className="font-medium text-foreground">Auto:</span> Uses capability probe result (`strict`, `partial`, `none`).</p>
+                                    <p><span className="font-medium text-foreground">Strict:</span> Requires structured tool decision path for full-local calls.</p>
+                                    <p><span className="font-medium text-foreground">Compatible:</span> Structured decision with parser/repair fallback for weaker models.</p>
+                                    <p><span className="font-medium text-foreground">Off:</span> Disables model tool execution for full-local provider.</p>
+                                </div>
                             </div>
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Structured Tool Gateway</label>
@@ -260,7 +266,10 @@ const LLMPage = () => {
                                     <span className="text-sm">Enable for full-local provider only</span>
                                 </label>
                                 <p className="text-xs text-muted-foreground">
-                                    Keeps modular local STT-only/TTS-only paths unchanged.
+                                    Enables a dedicated full-local tool decision pass (separate from spoken response parsing).
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    STT-only and TTS-only modular paths are not changed by this switch.
                                 </p>
                             </div>
                         </div>
