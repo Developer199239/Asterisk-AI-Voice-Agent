@@ -57,8 +57,14 @@ from ws_protocol import WebSocketProtocol
 try:
     from src.tools.parser import parse_response_with_tools, has_tool_intent_markers
 except Exception:  # pragma: no cover - local_ai_server can still run without parser helpers
-    parse_response_with_tools = None
-    has_tool_intent_markers = None
+    try:
+        _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _repo_root not in sys.path:
+            sys.path.append(_repo_root)
+        from src.tools.parser import parse_response_with_tools, has_tool_intent_markers
+    except Exception:
+        parse_response_with_tools = None
+        has_tool_intent_markers = None
 
 
 # Local LLM tool-call guardrails (server-side) to prevent accidental hangups.
