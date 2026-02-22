@@ -8,6 +8,7 @@ import axios from 'axios';
 interface ModelInfo {
     id: string;
     name: string;
+    description?: string;
     language?: string;
     region?: string;
     backend?: string;
@@ -22,6 +23,9 @@ interface ModelInfo {
     gender?: string;
     auto_download?: boolean;  // Models that auto-download from HuggingFace on first use
     note?: string;  // Info note about the model
+    recommended_ram_gb?: number;
+    tool_calling?: 'recommended' | 'experimental' | 'none' | string;
+    tool_calling_note?: string;
 }
 
 interface InstalledModel {
@@ -1286,10 +1290,40 @@ const ModelsPage = () => {
                                                                 Installed
                                                             </span>
                                                         )}
+                                                        {model.tool_calling === 'recommended' && (
+                                                            <span className="px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full">
+                                                                Tool calls
+                                                            </span>
+                                                        )}
+                                                        {model.tool_calling === 'experimental' && (
+                                                            <span className="px-2 py-0.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-full">
+                                                                Tool calls (exp)
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <p className="text-sm text-muted-foreground">
                                                         {model.size_display}
+                                                        {model.recommended_ram_gb ? ` • RAM ${model.recommended_ram_gb}GB+` : ''}
                                                     </p>
+                                                    {(model.description || model.tool_calling_note || model.note) && (
+                                                        <div className="mt-1 space-y-1">
+                                                            {model.description && (
+                                                                <p className="text-xs text-muted-foreground">
+                                                                    {model.description}
+                                                                </p>
+                                                            )}
+                                                            {model.tool_calling_note && (
+                                                                <p className="text-xs text-muted-foreground">
+                                                                    {model.tool_calling_note}
+                                                                </p>
+                                                            )}
+                                                            {model.note && (
+                                                                <p className="text-xs text-amber-600 dark:text-amber-500">
+                                                                    {model.note}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                             {!isModelInstalled(model.model_path || '') && model.download_url && (

@@ -637,6 +637,10 @@ class LocalProvider(AIProviderInterface):
                     await self.on_event({
                         "type": "AgentAudioDone",
                         "call_id": call_id,
+                        # Local provider emits one audio blob per response; treat each
+                        # done event as a completed response boundary so engine can
+                        # act on cleanup_after_tts (hangup_call) reliably.
+                        "streaming_done": True,
                     })
             except asyncio.CancelledError:
                 return
