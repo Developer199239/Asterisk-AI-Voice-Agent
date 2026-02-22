@@ -2204,6 +2204,24 @@ class LocalAIServer:
         segments.append("<|assistant|>")
         return "\n".join(segments) + "\n"
 
+    def _build_phi_chat_prompt(self, messages: List[Dict[str, str]], system_prompt: str) -> str:
+        system_prompt = (system_prompt or "").strip()
+        segments: List[str] = ["<|system|>", system_prompt]
+
+        for message in messages or []:
+            role = (message.get("role") or "").strip().lower()
+            content = (message.get("content") or "").strip()
+            if not content:
+                continue
+            if role not in {"user", "assistant"}:
+                continue
+            segments.append("<|user|>" if role == "user" else "<|assistant|>")
+            segments.append(content)
+
+        # Always end with an assistant tag to cue generation.
+        segments.append("<|assistant|>")
+        return "\n".join(segments) + "\n"
+
     @staticmethod
     def _strip_leading_bos(prompt: str) -> str:
         if not prompt:
@@ -2276,66 +2294,77 @@ class LocalAIServer:
     def _prepare_llm_prompt(
         self, session: SessionContext, new_turn: str
     ) -> Tuple[str, int, bool, int]:
-        """Append a user turn, trim history to fit context, and report token counts."""
-        candidate_turns = list(session.llm_user_turns) + [new_turn]
-        raw_user_text = "\n\n".join(candidate_turns).strip()
-        raw_prompt = self._build_phi_prompt(raw_user_text)
+        """
+        Append a user turn, trim dialog history to fit context, and report token counts.
+
+        Important: We keep a true chat transcript (user/assistant turns) rather than
+        concatenating all user turns into a single mega-message. Concatenation causes
+        small local models to repeatedly answer the *first* question, consuming
+        max_tokens before reaching the latest user turn.
+        """
+        new_turn = (new_turn or "").strip()
+        candidate_messages = list(session.llm_messages)
+        if new_turn:
+            candidate_messages.append({"role": "user", "content": new_turn})
+
+        raw_prompt = self._build_phi_chat_prompt(candidate_messages, self.llm_system_prompt or "")
+        raw_prompt = self._strip_leading_bos(raw_prompt)
         raw_tokens = self._count_prompt_tokens(raw_prompt)
 
         max_prompt_tokens = max(self.llm_context - self.llm_max_tokens - 64, 128)
-        trimmed_turns = list(candidate_turns)
+        trimmed_messages = list(candidate_messages)
         truncated = False
-        while trimmed_turns and self._count_prompt_tokens(
-            self._build_phi_prompt("\n\n".join(trimmed_turns).strip())
-        ) > max_prompt_tokens:
-            trimmed_turns.pop(0)
+
+        def _count_with_system(system_prompt: str, messages: List[Dict[str, str]]) -> int:
+            prompt = self._build_phi_chat_prompt(messages, system_prompt)
+            prompt = self._strip_leading_bos(prompt)
+            return self._count_prompt_tokens(prompt)
+
+        # Trim oldest turns until prompt fits.
+        while trimmed_messages and _count_with_system(self.llm_system_prompt or "", trimmed_messages) > max_prompt_tokens:
+            # Drop one message at a time from the front; prefer dropping in pairs if aligned.
+            trimmed_messages.pop(0)
             truncated = True
 
-        trimmed_user_text = "\n\n".join(trimmed_turns).strip()
-        # Ensure the final prompt fits the model context window (n_ctx). If the
-        # system prompt alone is too large, truncate it as a last resort.
         safety_margin = 8
         max_allowed_prompt_tokens = max(self.llm_context - safety_margin, 32)
-
         system_prompt = (self.llm_system_prompt or "").strip()
-        prompt_text = self._build_phi_prompt_with_system(trimmed_user_text, system_prompt)
+
+        prompt_text = self._build_phi_chat_prompt(trimmed_messages, system_prompt)
         prompt_text = self._strip_leading_bos(prompt_text)
         prompt_tokens = self._count_prompt_tokens(prompt_text)
 
+        # Last-resort: truncate system prompt if it alone causes overflow.
         system_truncated = False
-        user_truncated = False
-        if prompt_tokens > max_allowed_prompt_tokens:
-            system_prompt, system_truncated = self._truncate_system_prompt_to_fit(
-                trimmed_user_text, max_allowed_prompt_tokens
-            )
-            prompt_text = self._build_phi_prompt_with_system(trimmed_user_text, system_prompt)
+        if prompt_tokens > max_allowed_prompt_tokens and system_prompt:
+            low, high = 0, len(system_prompt)
+            best = ""
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = system_prompt[:mid].rstrip()
+                tokens = _count_with_system(candidate, trimmed_messages)
+                if tokens <= max_allowed_prompt_tokens:
+                    best = candidate
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            system_prompt = best
+            system_truncated = True
+            prompt_text = self._build_phi_chat_prompt(trimmed_messages, system_prompt)
             prompt_text = self._strip_leading_bos(prompt_text)
             prompt_tokens = self._count_prompt_tokens(prompt_text)
 
-        if prompt_tokens > max_allowed_prompt_tokens:
-            trimmed_user_text, user_truncated = self._truncate_user_text_to_fit(
-                system_prompt, trimmed_user_text, max_allowed_prompt_tokens
-            )
-            prompt_text = self._build_phi_prompt_with_system(trimmed_user_text, system_prompt)
-            prompt_text = self._strip_leading_bos(prompt_text)
-            prompt_tokens = self._count_prompt_tokens(prompt_text)
-
-        if system_truncated or user_truncated:
+        if system_truncated:
             truncated = True
-            if system_truncated:
-                logging.warning(
-                    "🧠 LLM PROMPT - System prompt truncated to fit context n_ctx=%s max_prompt_tokens=%s",
-                    self.llm_context,
-                    max_allowed_prompt_tokens,
-                )
-            if user_truncated:
-                logging.warning(
-                    "🧠 LLM PROMPT - User text truncated to fit context n_ctx=%s max_prompt_tokens=%s",
-                    self.llm_context,
-                    max_allowed_prompt_tokens,
-                )
+            logging.warning(
+                "🧠 LLM PROMPT - System prompt truncated to fit context n_ctx=%s max_prompt_tokens=%s",
+                self.llm_context,
+                max_allowed_prompt_tokens,
+            )
 
-        session.llm_user_turns = trimmed_turns
+        # Update session state. Keep llm_user_turns in sync for existing logs/metrics.
+        session.llm_messages = trimmed_messages
+        session.llm_user_turns = [m.get("content", "") for m in trimmed_messages if (m.get("role") or "").lower() == "user"]
         return prompt_text, prompt_tokens, truncated, raw_tokens
 
     async def process_tts(self, text: str) -> bytes:
@@ -3285,8 +3314,13 @@ class LocalAIServer:
             return
 
         # LLM path for llm/full modes: instrument, guard with timeout, and fallback on failure
-        if normalized_text and session.llm_user_turns:
-            last_turn_norm = _normalize_text(session.llm_user_turns[-1])
+        if normalized_text:
+            last_user_text = ""
+            for message in reversed(session.llm_messages or []):
+                if (message.get("role") or "").strip().lower() == "user":
+                    last_user_text = (message.get("content") or "").strip()
+                    break
+            last_turn_norm = _normalize_text(last_user_text) if last_user_text else ""
             if normalized_text == last_turn_norm:
                 logging.info(
                     "🧠 LLM SKIPPED - Duplicate final transcript call_id=%s mode=%s text=%s",
@@ -3338,6 +3372,16 @@ class LocalAIServer:
                 exc_info=True,
             )
             llm_response = "I'm here to help you. Could you please repeat that?"
+
+        # Record assistant turn for subsequent prompts (avoid tool-call markup in history).
+        assistant_text = self._strip_tool_calls_for_tts(llm_response or "").strip()
+        if assistant_text:
+            session.llm_messages.append({"role": "assistant", "content": assistant_text})
+            session.llm_user_turns = [
+                m.get("content", "")
+                for m in session.llm_messages
+                if (m.get("role") or "").strip().lower() == "user"
+            ]
 
         if not await self._emit_llm_response(
             websocket,

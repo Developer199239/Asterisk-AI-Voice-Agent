@@ -24,6 +24,7 @@ class SessionContext:
     last_final_norm: str = ""
     last_final_at: float = 0.0
     llm_user_turns: List[str] = field(default_factory=list)
+    llm_messages: List[Dict[str, str]] = field(default_factory=list)
     audio_buffer: bytes = b""
     # Kroko-specific session state
     kroko_ws: Optional[Any] = None
