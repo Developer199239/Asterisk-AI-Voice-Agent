@@ -99,6 +99,12 @@ class LocalProviderConfig(BaseModel):
     # Ensures farewell message fully plays through RTP pipeline before disconnecting
     # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
     farewell_hangup_delay_sec: float = Field(default=5.0)
+    # Local tool-call handling policy:
+    # - auto: derive from local_ai_server LLM capability probe
+    # - strict: enforce full structured tool instructions
+    # - compatible: compact instructions + parser recovery
+    # - off: disable prompt injection for tools
+    tool_call_policy: str = Field(default="auto")
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
     temperature: float = Field(default=0.4)

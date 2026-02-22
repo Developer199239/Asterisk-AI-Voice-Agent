@@ -12,7 +12,7 @@ This is model-agnostic and works with any LLM that can output structured text.
 import re
 import json
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,40 @@ JSON_FUNCTION_PATTERN = re.compile(
 )
 
 _CONTROL_TOKEN_PREFIXES = ("<|system|>", "<|user|>", "<|assistant|>", "<|enduser|>", "<|end|>")
+
+
+def has_tool_intent_markers(response: str, tool_names: Optional[Iterable[str]] = None) -> bool:
+    """
+    Best-effort detector for malformed tool-call attempts.
+
+    Used to decide whether to trigger a hidden repair pass when primary parsing
+    fails (Tier-2 recovery).
+    """
+    text = str(response or "")
+    if not text:
+        return False
+
+    lowered = text.lower()
+    if (
+        "<tool_call" in lowered
+        or "</tool_call" in lowered
+        or "\"arguments\"" in lowered
+        or "\"name\"" in lowered
+        or "functools[" in lowered
+    ):
+        return True
+
+    if re.search(r"[\*\_`~]+\s*[a-z0-9_]{2,64}\s*[\*\_`~]+\s*\{", lowered):
+        return True
+
+    if tool_names:
+        for name in tool_names:
+            tool_name = str(name or "").strip().lower()
+            if not tool_name:
+                continue
+            if tool_name in lowered:
+                return True
+    return False
 
 
 def _extract_json_object(text: str, start_index: int) -> Optional[Tuple[str, int]]:

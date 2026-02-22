@@ -490,6 +490,34 @@ If the system prompt mentions other tools, they are NOT available. Do not call t
 
 {rules_text}
 """
+
+    def to_local_llm_prompt_filtered_compact(self, tool_names: Optional[List[str]]) -> str:
+        """
+        Generate a compact tool prompt for weaker/local models.
+
+        This variant reduces verbose prose to lower the chance the model repeats
+        instructions aloud while still preserving tool schemas.
+        """
+        import json
+        tools = self.to_local_llm_schema_filtered(tool_names)
+        if not tools:
+            return ""
+
+        tools_json = json.dumps(tools, indent=2)
+        available_tool_names = [t.get("name", "") for t in tools if isinstance(t, dict)]
+        allowlist = ", ".join(sorted(set([n for n in available_tool_names if n])))
+
+        return f"""## Available Tools
+
+Return tool calls ONLY in this exact format:
+<tool_call>{{"name":"tool_name","arguments":{{}}}}</tool_call>
+
+Never speak or explain tool syntax. Never invent tool names.
+Allowed tools in this context: {allowlist}
+
+Tool Definitions:
+{tools_json}
+"""
     
     def initialize_default_tools(self) -> None:
         """

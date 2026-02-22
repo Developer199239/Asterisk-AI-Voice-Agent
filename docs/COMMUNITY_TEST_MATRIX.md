@@ -68,7 +68,7 @@ This auto-detects your hardware, queries the Local AI Server for model info, par
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2025-07-14 | @maintainer | Vast.ai A100 40GB | A100 | vosk | en-us-0.22 | piper | lessac-medium | phi-3-mini Q4_K_M | 2048 | em | ~2s | 3 | Baseline GPU test |
 | 2025-07-14 | @maintainer | Vast.ai A100 40GB | A100 | faster_whisper | base | kokoro | af_heart | phi-3-mini Q4_K_M | 2048 | em | ~1.5s | 4 | Whisper + Kokoro combo |
-| 2026-02-22 | @hkjarral | AMD EPYC 7443P, 66GB RAM | RTX 4090 24GB | faster_whisper | base | kokoro | af_heart | phi-3-mini-4k-instruct.Q4_K_M.gguf | 4096 | em | ~665ms | 4 | Phi-3 tool calls unreliable (malformed/truncated); use heuristic-based `hangup_call` fallback |
+| 2026-02-22 | @hkjarral | AMD EPYC 7443P, 66GB RAM | RTX 4090 24GB | faster_whisper | base | kokoro | af_heart | phi-3-mini-4k-instruct.Q4_K_M.gguf | 4096 | em | ~665ms | 4 | Phi-3 tool calls can be malformed/truncated; use `LOCAL_TOOL_CALL_POLICY=auto` (compatible + repair turn) and keep hangup guardrail enabled |
 | | | | | | | | | | | | | | |
 
 ---

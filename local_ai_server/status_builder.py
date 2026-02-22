@@ -142,6 +142,7 @@ def build_status_response(server) -> Dict[str, Any]:
                     "safe_max_tokens": safe_max_tokens,
                 },
                 "auto_context": dict(getattr(server, "_llm_auto_ctx_meta", {}) or {}),
+                "tool_capability": dict(getattr(server, "_llm_tool_capability_meta", {}) or {}),
             },
             "tts": {
                 "backend": server.tts_backend,

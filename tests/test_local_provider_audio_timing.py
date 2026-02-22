@@ -184,3 +184,25 @@ def test_stt_backend_falls_back_to_config_when_runtime_unknown():
     provider = LocalProvider(LocalProviderConfig(stt_backend="sherpa"), on_event=on_event)
     assert provider.get_active_stt_backend() == "sherpa"
     assert provider.is_whisper_stt_active() is False
+
+
+def test_local_tool_policy_auto_uses_capability_probe():
+    async def on_event(_event):
+        return None
+
+    provider = LocalProvider(LocalProviderConfig(), on_event=on_event)
+    provider._tool_capability = {"level": "strict"}
+    assert provider._resolve_tool_policy() == "strict"
+    provider._tool_capability = {"level": "partial"}
+    assert provider._resolve_tool_policy() == "compatible"
+    provider._tool_capability = {"level": "none"}
+    assert provider._resolve_tool_policy() == "off"
+
+
+def test_local_tool_policy_can_be_overridden_in_config():
+    async def on_event(_event):
+        return None
+
+    provider = LocalProvider(LocalProviderConfig(tool_call_policy="strict"), on_event=on_event)
+    provider._tool_capability = {"level": "none"}
+    assert provider._resolve_tool_policy() == "strict"

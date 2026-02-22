@@ -29,6 +29,10 @@ from api.models_catalog import (
     LANGUAGE_NAMES, REGION_NAMES, VOSK_STT_MODELS, SHERPA_STT_MODELS,
     KROKO_STT_MODELS, PIPER_TTS_MODELS, KOKORO_TTS_MODELS, LLM_MODELS
 )
+from api.rebuild_jobs import (
+    start_rebuild_job, get_rebuild_job, get_enabled_backends,
+    is_rebuild_in_progress, BACKEND_BUILD_ARGS, BUILD_TIME_ESTIMATES
+)
 
 router = APIRouter()
 
@@ -3100,3 +3104,67 @@ async def skip_setup():
         return {"status": "success", "message": "Setup skipped successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Backend Rebuild Endpoints ==============
+
+@router.get("/local/backends")
+async def get_backend_status():
+    """Get status of all backends - which are enabled and available."""
+    enabled = get_enabled_backends()
+    rebuild_active = is_rebuild_in_progress()
+    
+    backends = []
+    for backend, arg_name in BACKEND_BUILD_ARGS.items():
+        backends.append({
+            "id": backend,
+            "name": backend.replace("_", " ").title(),
+            "build_arg": arg_name,
+            "enabled": enabled.get(backend, False),
+            "estimated_build_seconds": BUILD_TIME_ESTIMATES.get(backend, BUILD_TIME_ESTIMATES["default"]),
+        })
+    
+    return {
+        "backends": backends,
+        "rebuild_in_progress": rebuild_active,
+    }
+
+
+class EnableBackendRequest(BaseModel):
+    backend: str
+
+
+@router.post("/local/backends/enable")
+async def enable_backend(request: EnableBackendRequest):
+    """Start a rebuild job to enable a backend."""
+    result = start_rebuild_job(request.backend)
+    
+    if "error" in result:
+        if result.get("already_enabled"):
+            raise HTTPException(status_code=400, detail=result["error"])
+        raise HTTPException(status_code=409, detail=result["error"])
+    
+    return result
+
+
+@router.get("/local/backends/rebuild-status")
+async def get_rebuild_status(job_id: Optional[str] = None):
+    """Get status of a rebuild job."""
+    job = get_rebuild_job(job_id)
+    
+    if not job:
+        return {"job": None, "active": is_rebuild_in_progress()}
+    
+    return {
+        "job": {
+            "id": job.id,
+            "backend": job.backend,
+            "running": job.running,
+            "completed": job.completed,
+            "error": job.error,
+            "rolled_back": job.rolled_back,
+            "output": job.output[-50:],  # Last 50 lines
+            "progress": job.progress,
+        },
+        "active": is_rebuild_in_progress(),
+    }

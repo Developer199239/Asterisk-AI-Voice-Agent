@@ -92,6 +92,18 @@ These changes come from a deep audit of the Local AI Server experience, focused 
 | `docs/COMMUNITY_TEST_MATRIX.md` | New: publishable community test matrix with submission template | Crowdsource what model combinations work best for fully local | File exists with backend reference table and results section |
 | `.github/ISSUE_TEMPLATE/local-ai-test-result.md` | New: structured issue template for test result submissions | Makes contributing test results easy for community | New issue → "Local AI Test Result" template available |
 
+### Tool-Call Reliability Hardening (LLM-agnostic local provider)
+
+| File | Change | Why | How to Test |
+|------|--------|-----|-------------|
+| `local_ai_server/server.py` | Add startup LLM tool-capability probe (`strict`/`partial`/`none`) and expose metadata | Different local GGUF models vary widely in tool-call compliance | `docker logs local_ai_server` includes `LLM TOOL-CALL PROBE`; `GET /api/system/health` shows `models.llm.tool_capability` |
+| `src/providers/local.py` | Add policy resolver (`auto|strict|compatible|off`) and compact tool prompt mode | Reduce spoken leakage of tool instructions and keep behavior model-agnostic | Set `LOCAL_TOOL_CALL_POLICY=auto` and compare `strict` vs `partial` model behavior |
+| `src/providers/local.py` | Add Tier-2 hidden repair turn for malformed tool output | Recover tool calls like malformed `*hangup_call*`/broken wrappers without speaking markup | Trigger malformed tool text in logs; verify `Recovered malformed local LLM tool call via repair turn` |
+| `src/tools/telephony/hangup_policy.py` | Add fuzzy end-call intent normalization (`hand up`/`and the call`) | STT artifacts were blocking valid hangup intents | Say “hand up the call”; verify hangup guardrail allows tool execution |
+| `src/engine.py` | Use fuzzy end-call matcher for local and pipeline hangup guardrails | Keep guardrail conservative but tolerant to STT noise | Validate no premature hangups on normal queries; valid goodbye phrases still pass |
+| `admin_ui/frontend/src/pages/System/ModelsPage.tsx` | Show active LLM tool capability + effective tool policy | Make local provider behavior explicit for operators | Models page displays `Tool capability` and `Tool policy` fields |
+| `config/ai-agent.yaml`, `.env.example`, `config/ai-agent.example.yaml` | Add `LOCAL_TOOL_CALL_POLICY` wiring | Allow operator override when auto policy is not preferred | Set `LOCAL_TOOL_CALL_POLICY=strict|compatible|off` and restart |
+
 ## Verification Checklist
 
 - `local_ai_server` starts on GPU with `LOCAL_LLM_GPU_LAYERS=-1` and `LOCAL_LLM_CONTEXT` unset → `llm_context=2048`.

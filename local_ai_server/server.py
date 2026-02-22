@@ -54,6 +54,11 @@ from session import SessionContext
 from config import LocalAIConfig
 from model_manager import ModelManager
 from ws_protocol import WebSocketProtocol
+try:
+    from src.tools.parser import parse_response_with_tools, has_tool_intent_markers
+except Exception:  # pragma: no cover - local_ai_server can still run without parser helpers
+    parse_response_with_tools = None
+    has_tool_intent_markers = None
 
 
 # Local LLM tool-call guardrails (server-side) to prevent accidental hangups.
@@ -786,6 +791,11 @@ class LocalAIServer:
         self._startup_tuning_applied = False
         # Best-effort metadata for UI/status.
         self._llm_auto_ctx_meta: Dict[str, Any] = {}
+        self._llm_tool_capability_meta: Dict[str, Any] = {
+            "level": "unknown",
+            "source": "init",
+            "notes": "llm_not_probed",
+        }
 
     def _llm_auto_ctx_cache_path(self) -> str:
         """
@@ -1083,6 +1093,11 @@ class LocalAIServer:
                 "🤖 Local AI runtime_mode=minimal: skipping LLM preload (set LOCAL_AI_MODE=full to enable)"
             )
             self.llm_model = None
+            self._llm_tool_capability_meta = {
+                "level": "none",
+                "source": "runtime_mode",
+                "notes": "runtime_mode=minimal",
+            }
         else:
             await self._load_llm_model(allow_auto_ctx=bool(startup))
             await self.run_startup_latency_check()
@@ -1603,12 +1618,115 @@ class LocalAIServer:
                     "source": selected_ctx_source,
                     "selected_context": int(self.llm_context),
                 }
+            self._llm_tool_capability_meta = self._probe_llm_tool_capability()
         except Exception as exc:
             logging.error("❌ Failed to load LLM model: %s", exc)
             self.llm_model = None
+            self._llm_tool_capability_meta = {
+                "level": "none",
+                "source": "load_failed",
+                "notes": str(exc),
+            }
             self.startup_errors["llm"] = str(exc)
             if self.fail_fast:
                 raise
+
+    def _probe_llm_tool_capability(self) -> Dict[str, Any]:
+        """
+        Lightweight one-shot capability probe for local tool calling.
+
+        Levels:
+        - strict: emits parseable `<tool_call>` wrapper
+        - partial: references tools but not in strict format
+        - none: no observable tool-call behavior
+        """
+        model_name = os.path.basename(self.llm_model_path or "") or self.llm_model_path or "unknown"
+        if self.runtime_mode == "minimal":
+            return {
+                "level": "none",
+                "source": "runtime_mode",
+                "model": model_name,
+                "notes": "runtime_mode=minimal",
+            }
+        if not self.llm_model:
+            return {
+                "level": "none",
+                "source": "unloaded",
+                "model": model_name,
+                "notes": "llm_model_unavailable",
+            }
+
+        if parse_response_with_tools is None:
+            return {
+                "level": "unknown",
+                "source": "probe_disabled",
+                "model": model_name,
+                "notes": "tool_parser_unavailable",
+            }
+
+        probe_prompt = (
+            "You are validating tool-calling format. "
+            "Output ONLY a single tool call to hang up the call.\n"
+            "Use EXACTLY this format:\n"
+            "<tool_call>\n"
+            "{\"name\":\"hangup_call\",\"arguments\":{\"farewell_message\":\"Goodbye\"}}\n"
+            "</tool_call>\n"
+            "Do not add any other text."
+        )
+        try:
+            output = self.llm_model(
+                probe_prompt,
+                max_tokens=64,
+                stop=self.llm_stop_tokens,
+                echo=False,
+                temperature=0.0,
+                top_p=1.0,
+                repeat_penalty=self.llm_repeat_penalty,
+            )
+            raw = (
+                output.get("choices", [{}])[0].get("text", "").strip()
+                if isinstance(output, dict)
+                else ""
+            )
+            clean_text, tool_calls = parse_response_with_tools(raw)
+            parsed_hangup = any((tc.get("name") or "").strip() == "hangup_call" for tc in (tool_calls or []))
+            has_primary_wrapper = "<tool_call>" in (raw or "").lower() and "</tool_call>" in (raw or "").lower()
+
+            if parsed_hangup and has_primary_wrapper:
+                level = "strict"
+                notes = "tool_call_wrapper_detected"
+            elif parsed_hangup:
+                level = "partial"
+                notes = "tool_call_parsed_without_primary_wrapper"
+            elif bool(has_tool_intent_markers and has_tool_intent_markers(raw, ["hangup_call"])):
+                level = "partial"
+                notes = "tool_markers_detected_unparsed"
+            else:
+                level = "none"
+                notes = "no_tool_markers_detected"
+
+            result = {
+                "level": level,
+                "source": "startup_probe",
+                "model": model_name,
+                "notes": notes,
+            }
+            logging.info(
+                "🧪 LLM TOOL-CALL PROBE - level=%s model=%s notes=%s preview=%s",
+                level,
+                model_name,
+                notes,
+                (raw or "")[:100],
+            )
+            return result
+        except Exception as exc:
+            logging.debug("LLM tool-call capability probe failed: %s", exc, exc_info=True)
+            return {
+                "level": "unknown",
+                "source": "probe_failed",
+                "model": model_name,
+                "notes": str(exc),
+            }
 
     async def run_startup_latency_check(self) -> None:
         """Run a lightweight LLM inference at startup to log baseline latency."""

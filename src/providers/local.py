@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import hashlib
+from uuid import uuid4
 from typing import Callable, Optional, List, Dict, Any
 import websockets
 import websockets.exceptions
@@ -13,7 +14,7 @@ import audioop
 from ..config import LocalProviderConfig
 from ..audio.resampler import resample_audio
 from .base import AIProviderInterface
-from ..tools.parser import parse_response_with_tools, validate_tool_call
+from ..tools.parser import parse_response_with_tools, validate_tool_call, has_tool_intent_markers
 
 logger = get_logger(__name__)
 
@@ -62,6 +63,12 @@ class LocalProvider(AIProviderInterface):
         self._last_system_prompt_digest: Optional[str] = None
         # Per-call tool allowlist (from context.tools). Used to drop hallucinated tool calls.
         self._allowed_tools: set[str] = set()
+        # Request-id keyed futures for internal LLM repair turns.
+        self._pending_llm_responses: Dict[str, asyncio.Future] = {}
+        # LLM tool-calling capability metadata from local_ai_server status.
+        self._tool_capability: Dict[str, Any] = {"level": "unknown", "source": "init"}
+        # Effective per-call policy: strict | compatible | off
+        self._effective_tool_policy: str = "compatible"
 
     def _parse_ws_url(self, ws_url: str) -> tuple:
         """Parse host and port from WebSocket URL."""
@@ -101,6 +108,123 @@ class LocalProvider(AIProviderInterface):
         except Exception:
             value = ""
         self._initial_greeting = value or None
+
+    def _resolve_tool_policy(self, context: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Resolve local tool-call policy.
+
+        auto (default) is derived from runtime capability probe:
+        - strict  -> strict
+        - partial -> compatible
+        - none    -> off
+        """
+        policy = "auto"
+        try:
+            cfg_policy = str(getattr(self.config, "tool_call_policy", "auto") or "auto").strip().lower()
+            if cfg_policy:
+                policy = cfg_policy
+        except Exception:
+            policy = "auto"
+
+        try:
+            if isinstance(context, dict):
+                override = context.get("local_tool_call_policy")
+                if override:
+                    policy = str(override).strip().lower()
+        except Exception:
+            pass
+
+        if policy in {"strict", "compatible", "off"}:
+            return policy
+
+        level = str((self._tool_capability or {}).get("level") or "").strip().lower()
+        if level == "strict":
+            return "strict"
+        if level == "none":
+            return "off"
+        return "compatible"
+
+    async def _request_llm_text(self, *, text: str, call_id: Optional[str], timeout_sec: float = 2.0) -> Optional[str]:
+        if not self.websocket or self.websocket.state.name != "OPEN":
+            return None
+        request_id = f"tool-repair-{uuid4().hex}"
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending_llm_responses[request_id] = fut
+        payload = {
+            "type": "llm_request",
+            "mode": "llm",
+            "request_id": request_id,
+            "call_id": call_id or self._active_call_id,
+            "text": text,
+        }
+        try:
+            await self.websocket.send(json.dumps(payload))
+            result = await asyncio.wait_for(fut, timeout=max(0.5, float(timeout_sec)))
+            return str(result or "")
+        except Exception:
+            logger.debug("LLM repair request failed", call_id=call_id, exc_info=True)
+            return None
+        finally:
+            self._pending_llm_responses.pop(request_id, None)
+
+    async def _attempt_tool_call_repair(
+        self,
+        *,
+        llm_text: str,
+        call_id: Optional[str],
+        allowed_tools: List[str],
+    ) -> Optional[List[Dict[str, Any]]]:
+        if not llm_text or not allowed_tools:
+            return None
+
+        tools_csv = ", ".join(sorted(set(allowed_tools)))
+        repair_prompt = (
+            "You are a strict parser. Convert the candidate assistant text into ONE tool call.\n"
+            f"Allowed tool names: {tools_csv}\n"
+            "Return EXACTLY one of:\n"
+            "1) <tool_call>{\"name\":\"tool_name\",\"arguments\":{}}</tool_call>\n"
+            "2) NONE\n"
+            "No prose. No markdown. No extra text.\n"
+            f"Candidate text:\n{llm_text}"
+        )
+        repaired_text = await self._request_llm_text(
+            text=repair_prompt,
+            call_id=call_id,
+            timeout_sec=min(2.5, self.response_timeout),
+        )
+        if not repaired_text:
+            return None
+
+        _, repaired_calls = parse_response_with_tools(repaired_text)
+        if not repaired_calls:
+            # Some models may return raw JSON object without wrapper; best-effort parse.
+            candidate = repaired_text.strip()
+            if candidate.startswith("{") and candidate.endswith("}"):
+                try:
+                    data = json.loads(candidate)
+                    repaired_calls = [{
+                        "name": data.get("name"),
+                        "parameters": data.get("arguments", data.get("parameters", {})),
+                    }]
+                except Exception:
+                    repaired_calls = None
+        if not repaired_calls:
+            return None
+
+        filtered: List[Dict[str, Any]] = []
+        for tc in repaired_calls:
+            if validate_tool_call(tc, allowed_tools):
+                filtered.append(tc)
+        if not filtered:
+            return None
+
+        logger.info(
+            "Recovered malformed local LLM tool call via repair turn",
+            call_id=call_id,
+            tools=[tc.get("name") for tc in filtered],
+        )
+        return filtered
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -429,6 +553,13 @@ class LocalProvider(AIProviderInterface):
                 if backend:
                     self._runtime_stt_backend = backend
                     logger.info("Local AI Server runtime STT backend detected", call_id=call_id, stt_backend=backend)
+                try:
+                    llm_status = ((status.get("models") or {}).get("llm") or {})
+                    capability = llm_status.get("tool_capability")
+                    if isinstance(capability, dict) and capability:
+                        self._tool_capability = dict(capability)
+                except Exception:
+                    pass
         except Exception:
             logger.debug("Local AI Server status probe failed", call_id=call_id, exc_info=True)
 
@@ -447,23 +578,42 @@ class LocalProvider(AIProviderInterface):
             self._allowed_tools = set(allowed_tools or [])
         except Exception:
             self._allowed_tools = set()
+        self._effective_tool_policy = self._resolve_tool_policy(context=context)
         if not prompt:
             try:
                 prompt = str(getattr(self.config, "instructions", None) or "").strip()
             except Exception:
                 prompt = ""
         if prompt:
-            # Local LLMs need explicit tool syntax + schema injected into the system prompt.
-            # Without this, the model often says it "can't" do telephony actions even when enabled.
+            # Local tool-call guidance is policy-driven:
+            # - strict: full schema/rules
+            # - compatible: compact instructions (lower leakage risk on weaker models)
+            # - off: no injection; rely on text-only interaction / heuristics
             try:
-                if allowed_tools and "## Available Tools" not in prompt:
+                if allowed_tools and "## Available Tools" not in prompt and self._effective_tool_policy != "off":
                     from src.tools.registry import tool_registry
 
-                    tool_prompt = tool_registry.to_local_llm_prompt_filtered(allowed_tools)
+                    if self._effective_tool_policy == "strict":
+                        tool_prompt = tool_registry.to_local_llm_prompt_filtered(allowed_tools)
+                    else:
+                        tool_prompt = tool_registry.to_local_llm_prompt_filtered_compact(allowed_tools)
                     if tool_prompt:
                         prompt = f"{prompt}\n\n{tool_prompt}".strip()
+                elif allowed_tools and self._effective_tool_policy == "off":
+                    logger.info(
+                        "Local tool-call prompt injection skipped (policy=off)",
+                        call_id=call_id,
+                        capability_level=(self._tool_capability or {}).get("level"),
+                    )
             except Exception:
                 logger.debug("Failed injecting local tool prompt", call_id=call_id, exc_info=True)
+            logger.info(
+                "Local tool-call policy resolved",
+                call_id=call_id,
+                policy=self._effective_tool_policy,
+                allowed_tools=sorted(self._allowed_tools),
+                capability=(self._tool_capability or {}).get("level"),
+            )
             await self._apply_system_prompt(prompt, call_id=call_id)
 
     async def _apply_system_prompt(self, prompt: str, *, call_id: str) -> None:
@@ -858,14 +1008,31 @@ class LocalProvider(AIProviderInterface):
                                 })
                                 logger.debug("Emitted user transcript for history", call_id=call_id, text=text[:50])
                         elif data.get("type") == "llm_response":
+                            request_id = str(data.get("request_id") or "").strip()
+                            if request_id:
+                                pending = self._pending_llm_responses.get(request_id)
+                                if pending and not pending.done():
+                                    pending.set_result(data.get("text", ""))
+                                    continue
+                                if request_id.startswith("tool-repair-"):
+                                    logger.debug("Dropping stale tool-repair response", call_id=self._active_call_id, request_id=request_id)
+                                    continue
                             # Handle LLM response - parse for tool calls
                             llm_text = data.get("text", "")
                             call_id = data.get("call_id") or self._active_call_id
                             
                             # Parse the response for tool calls
                             clean_text, tool_calls = parse_response_with_tools(llm_text)
+                            allowed = sorted(self._allowed_tools)
+                            if self._effective_tool_policy == "off":
+                                tool_calls = None
+                            elif not tool_calls and allowed and has_tool_intent_markers(llm_text, allowed):
+                                tool_calls = await self._attempt_tool_call_repair(
+                                    llm_text=llm_text,
+                                    call_id=call_id,
+                                    allowed_tools=allowed,
+                                )
                             if tool_calls and self._allowed_tools:
-                                allowed = sorted(self._allowed_tools)
                                 filtered: List[Dict[str, Any]] = []
                                 for tc in tool_calls:
                                     if validate_tool_call(tc, allowed):

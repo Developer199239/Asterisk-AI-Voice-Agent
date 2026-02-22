@@ -1,4 +1,4 @@
-from src.tools.parser import parse_response_with_tools
+from src.tools.parser import parse_response_with_tools, has_tool_intent_markers
 
 
 def test_parse_tool_call_primary_wrapper():
@@ -104,3 +104,13 @@ def test_parse_tool_call_markdown_prefix_no_args_recovers_name():
 
     assert clean_text is None
     assert tool_calls == [{"name": "hangup_call", "parameters": {}}]
+
+
+def test_has_tool_intent_markers_detects_malformed_tool_output():
+    response = 'Thanks. *hangup_call* {"name":"hangup_call","arguments":{"farewell_message":"Bye"'
+    assert has_tool_intent_markers(response, ["hangup_call"]) is True
+
+
+def test_has_tool_intent_markers_ignores_plain_text():
+    response = "Thanks for calling. Have a great day."
+    assert has_tool_intent_markers(response, ["hangup_call"]) is False

@@ -68,9 +68,28 @@ DEFAULT_HANGUP_POLICY: Dict[str, Any] = {
     "markers": DEFAULT_HANGUP_MARKERS,
 }
 
+_END_CALL_FUZZY_PATTERNS: List[tuple[str, str]] = [
+    (r"\bhand[\s-]*up\b", "hang up"),
+    (r"\bhangup\b", "hang up"),
+    (r"\bhand[\s-]*off\b", "hang up"),
+    (r"\b(and|end)\s+the\s+call\b", "end call"),
+    (r"\b(and|end)\s+call\b", "end call"),
+    (r"\bhang\s+up\s+the\s+(?:cob|cab|cop|cause)\b", "hang up the call"),
+    (r"\bhand\s+up\s+the\s+(?:call|cob|cab|cop|cause)\b", "hang up the call"),
+]
+
 
 def _normalize_text(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+def _normalize_end_call_text(value: str) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return text
+    for pattern, replacement in _END_CALL_FUZZY_PATTERNS:
+        text = re.sub(pattern, replacement, text)
+    return _normalize_text(text)
 
 
 def _coerce_marker_list(value: Any) -> List[str]:
@@ -172,4 +191,22 @@ def text_contains_marker_word(text: str, markers: Iterable[str]) -> bool:
     for m in markers:
         if re.search(rf"(?:^|\b){re.escape(m)}(?:\b|$)", t):
             return True
+    return False
+
+
+def text_contains_end_call_intent(text: str, markers: Iterable[str]) -> bool:
+    """
+    End-of-call intent matcher with light fuzzy normalization for STT artifacts.
+
+    Examples:
+    - "hand up the call" -> "hang up the call"
+    - "and the call" -> "end call"
+    """
+    normalized = _normalize_end_call_text(text)
+    if not normalized:
+        return False
+    if text_contains_marker(normalized, markers):
+        return True
+    if normalized != _normalize_text(text):
+        return text_contains_marker(_normalize_text(text), markers)
     return False

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle, Cpu, Terminal, Settings, Play } from 'lucide-react';
+import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Mic, Volume2, Brain, AlertTriangle, Cpu, Terminal, Settings, Play, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
+import { RebuildBackendDialog } from '../../components/models/RebuildBackendDialog';
 import axios from 'axios';
 
 interface ModelInfo {
@@ -75,6 +76,12 @@ interface ActiveModels {
             selected_context?: number;
             candidates?: number[];
         };
+        tool_capability?: {
+            level?: string;
+            source?: string;
+            model?: string;
+            notes?: string;
+        };
     };
 }
 
@@ -139,6 +146,35 @@ const ModelsPage = () => {
     const [envConfig, setEnvConfig] = useState<Record<string, string>>({});
     const [forceIncompatibleApply, setForceIncompatibleApply] = useState(false);
     const [runtimeGpu, setRuntimeGpu] = useState<RuntimeGpuStatus | null>(null);
+    
+    // Rebuild dialog state
+    const [rebuildDialog, setRebuildDialog] = useState<{
+        isOpen: boolean;
+        backend: string;
+        backendDisplayName: string;
+        estimatedSeconds: number;
+    }>({ isOpen: false, backend: '', backendDisplayName: '', estimatedSeconds: 180 });
+
+    const openRebuildDialog = (backend: string, displayName: string, estimatedSeconds: number = 180) => {
+        setRebuildDialog({
+            isOpen: true,
+            backend,
+            backendDisplayName: displayName,
+            estimatedSeconds,
+        });
+    };
+
+    const closeRebuildDialog = () => {
+        setRebuildDialog(prev => ({ ...prev, isOpen: false }));
+    };
+
+    const handleRebuildComplete = (success: boolean) => {
+        if (success) {
+            showToast('Backend enabled successfully! Refresh models to see changes.', 'success');
+            fetchModels();
+            fetchActiveModels();
+        }
+    };
 
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         const id = Date.now();
@@ -256,7 +292,8 @@ const ModelsPage = () => {
                         display: localAI.details?.models?.llm?.display || '',
                         config: localAI.details?.models?.llm?.config || {},
                         prompt_fit: localAI.details?.models?.llm?.prompt_fit || {},
-                        auto_context: localAI.details?.models?.llm?.auto_context || {}
+                        auto_context: localAI.details?.models?.llm?.auto_context || {},
+                        tool_capability: localAI.details?.models?.llm?.tool_capability || {}
                     }
                 });
             } else {
@@ -299,6 +336,15 @@ const ModelsPage = () => {
         if (!path) return 'None';
         const parts = path.split('/');
         return parts[parts.length - 1] || path;
+    };
+
+    const resolveToolPolicy = () => {
+        const configured = String(envConfig['LOCAL_TOOL_CALL_POLICY'] || 'auto').trim().toLowerCase();
+        if (configured && configured !== 'auto') return configured;
+        const level = String(activeModels?.llm?.tool_capability?.level || '').trim().toLowerCase();
+        if (level === 'strict') return 'strict';
+        if (level === 'none') return 'off';
+        return 'compatible';
     };
 
     const handleDownload = async (model: ModelInfo, type: 'stt' | 'tts' | 'llm') => {
@@ -598,6 +644,7 @@ const ModelsPage = () => {
     };
 
     return (
+        <>
         <div className="p-6 space-y-6">
             {/* Toast notifications */}
             <div className="fixed top-4 right-4 z-50 space-y-2">
@@ -849,6 +896,14 @@ const ModelsPage = () => {
                                             <span className="font-mono">{activeModels.llm.auto_context?.source || 'auto'}</span>
                                         </div>
                                     )}
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-muted-foreground">Tool capability</span>
+                                        <span className="font-mono">{activeModels.llm.tool_capability?.level || 'unknown'}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-muted-foreground">Tool policy</span>
+                                        <span className="font-mono">{resolveToolPolicy()}</span>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -1197,12 +1252,22 @@ const ModelsPage = () => {
                                             )}
                                             {!isModelInstalled(model.model_path || '') && model.auto_download && !model.download_url && (
                                                 <div className="flex flex-col items-end gap-1">
-                                                    <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2">
-                                                        <RefreshCw className="w-4 h-4" />
-                                                        Auto-download
-                                                    </span>
+                                                    <button
+                                                        onClick={() => openRebuildDialog(
+                                                            model.backend || 'faster_whisper',
+                                                            model.backend === 'faster_whisper' ? 'Faster Whisper' :
+                                                            model.backend === 'whisper_cpp' ? 'Whisper.cpp' :
+                                                            model.backend || 'Backend',
+                                                            model.backend === 'faster_whisper' ? 180 :
+                                                            model.backend === 'whisper_cpp' ? 240 : 180
+                                                        )}
+                                                        className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-sm flex items-center gap-2 transition-colors cursor-pointer"
+                                                    >
+                                                        <Wrench className="w-4 h-4" />
+                                                        Enable Backend
+                                                    </button>
                                                     <span className="text-[10px] text-amber-600 dark:text-amber-500 max-w-[200px] text-right">
-                                                        {model.note || 'Downloads automatically when backend is enabled'}
+                                                        {model.note || 'Requires container rebuild (~3 min)'}
                                                     </span>
                                                 </div>
                                             )}
@@ -1257,12 +1322,21 @@ const ModelsPage = () => {
                                             )}
                                             {!isModelInstalled(model.model_path || '') && model.auto_download && !model.download_url && (
                                                 <div className="flex flex-col items-end gap-1">
-                                                    <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2">
-                                                        <RefreshCw className="w-4 h-4" />
-                                                        Auto-download
-                                                    </span>
+                                                    <button
+                                                        onClick={() => openRebuildDialog(
+                                                            model.backend || 'melotts',
+                                                            model.backend === 'melotts' ? 'MeloTTS' :
+                                                            model.backend === 'kokoro' ? 'Kokoro' :
+                                                            model.backend || 'Backend',
+                                                            model.backend === 'melotts' ? 300 : 180
+                                                        )}
+                                                        className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-sm flex items-center gap-2 transition-colors cursor-pointer"
+                                                    >
+                                                        <Wrench className="w-4 h-4" />
+                                                        Enable Backend
+                                                    </button>
                                                     <span className="text-[10px] text-amber-600 dark:text-amber-500 max-w-[200px] text-right">
-                                                        {model.note || 'Downloads automatically when backend is enabled'}
+                                                        {model.note || 'Requires container rebuild (~5 min)'}
                                                     </span>
                                                 </div>
                                             )}
@@ -1350,6 +1424,17 @@ const ModelsPage = () => {
                 </div>
             </div>
         </div>
+
+        {/* Rebuild Backend Dialog */}
+        <RebuildBackendDialog
+            isOpen={rebuildDialog.isOpen}
+            backend={rebuildDialog.backend}
+            backendDisplayName={rebuildDialog.backendDisplayName}
+            estimatedSeconds={rebuildDialog.estimatedSeconds}
+            onClose={closeRebuildDialog}
+            onComplete={handleRebuildComplete}
+        />
+        </>
     );
 };
 

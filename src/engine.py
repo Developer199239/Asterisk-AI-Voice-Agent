@@ -65,8 +65,7 @@ from .utils.audio_capture import AudioCaptureManager
 from src.pipelines.base import LLMResponse
 from src.tools.telephony.hangup_policy import (
     resolve_hangup_policy,
-    text_contains_marker,
-    text_contains_marker_word,
+    text_contains_end_call_intent,
     normalize_marker_list,
 )
 
@@ -8481,7 +8480,7 @@ class Engine:
                     if policy_mode != "relaxed":
                         end_markers = (hangup_policy.get("markers") or {}).get("end_call", [])
                         user_text = (getattr(session, "last_transcript", None) or "").strip()
-                        has_end_intent = text_contains_marker(user_text, end_markers)
+                        has_end_intent = text_contains_end_call_intent(user_text, end_markers)
                         if not has_end_intent:
                             before_count = len(tool_calls)
                             tool_calls = [tc for tc in tool_calls if (tc.get("name") or "").strip() != "hangup_call"]
@@ -9377,7 +9376,7 @@ class Engine:
                                 error=str(e),
                                 exc_info=True,
                             )
-                        has_end_intent = text_contains_marker_word(normalized_user_text, end_markers)
+                        has_end_intent = text_contains_end_call_intent(normalized_user_text, end_markers)
                         before_count = len(tool_calls)
                         if not has_end_intent:
                             tool_calls = [tc for tc in tool_calls if tc.get("name") != "hangup_call"]
