@@ -158,11 +158,18 @@ export const SystemTopology = () => {
             ...p,
             ready: prev.providerHealth[p.name]?.ready ?? false,
           }));
+          const contextDefaultProvider =
+            typeof parsed?.contexts?.default?.provider === 'string'
+              ? parsed.contexts.default.provider
+              : null;
+          const legacyDefaultProvider =
+            typeof parsed?.default_provider === 'string' ? parsed.default_provider : null;
           return {
             ...prev,
             configuredProviders: mergedProviders,
             configuredPipelines: pipelines,
-            defaultProvider: parsed?.default_provider || null,
+            // Prefer contexts.default.provider (actual routing), fall back to legacy root default_provider.
+            defaultProvider: contextDefaultProvider || legacyDefaultProvider,
             activePipeline: parsed?.active_pipeline || null,
           };
         });
@@ -231,7 +238,7 @@ export const SystemTopology = () => {
   const hasAsteriskChannels = state.asteriskChannels > 0;  // Pre-stasis + in-stasis
 
   // Determine which local models are being used by active pipelines
-  const activeLocalModels = useMemo(() => {
+  const localUsageFromPipelines = useMemo(() => {
     const active = { stt: false, llm: false, tts: false };
     for (const [pipelineName] of activePipelines) {
       const pipeline = state.configuredPipelines.find(p => p.name === pipelineName);
@@ -244,6 +251,24 @@ export const SystemTopology = () => {
     }
     return active;
   }, [activePipelines, state.configuredPipelines]);
+
+  const localProviderActiveCount = activeProviders.get('local') || 0;
+  const isLocalProviderActive = localProviderActiveCount > 0;
+  const isLocalAIUsedByPipelines = localUsageFromPipelines.stt || localUsageFromPipelines.llm || localUsageFromPipelines.tts;
+
+  // Local AI can be used either by a full local provider call (provider=local) or by local_* components in pipelines.
+  const activeLocalModels = useMemo(() => {
+    const active = { ...localUsageFromPipelines };
+    if (isLocalProviderActive) {
+      // Full-local provider always uses STT+TTS; LLM may be disabled depending on host capabilities.
+      active.stt = true;
+      active.tts = true;
+      if (state.localAIModels?.llm?.loaded) active.llm = true;
+    }
+    return active;
+  }, [localUsageFromPipelines, isLocalProviderActive, state.localAIModels]);
+
+  const isLocalAIActive = isLocalProviderActive || isLocalAIUsedByPipelines;
 
   // Get model display name
   const getModelDisplayName = (model: any, type: string): string => {
@@ -490,13 +515,13 @@ export const SystemTopology = () => {
               {/* Center vertical line down to Local AI (col 3 center = 258) */}
               <line 
                 x1="288" y1="12" x2="288" y2="48" 
-                stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'} 
+                stroke={isLocalAIActive ? '#22c55e' : '#e5e7eb'} 
                 strokeWidth="2"
               />
               {/* Center arrowhead */}
               <polygon 
                 points="288,56 282,46 294,46" 
-                fill={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'}
+                fill={isLocalAIActive ? '#22c55e' : '#e5e7eb'}
               />
             </svg>
           </div>
@@ -519,14 +544,9 @@ export const SystemTopology = () => {
                 {state.configuredPipelines.map(pipeline => {
                   const activeCount = activePipelines.get(pipeline.name) || 0;
                   const isActive = activeCount > 0;
-                  // Check both activePipeline and defaultProvider since default_provider can be a pipeline name.
-                  // AAVA-185: Also match pipeline variants (e.g. pipeline card "local_hybrid_groq"
-                  // matches defaultProvider "local_hybrid"). Only forward direction — avoid marking
-                  // the base pipeline card as default when a variant is the actual default.
-                  const isDefault = pipeline.name === state.activePipeline
-                    || pipeline.name === state.defaultProvider
-                    || (state.activePipeline && pipeline.name.startsWith(state.activePipeline + '_'))
-                    || (state.defaultProvider && pipeline.name.startsWith(state.defaultProvider + '_'));
+                  // Mark default only on exact match to avoid multiple "default" pipelines being shown.
+                  const isDefault =
+                    pipeline.name === state.activePipeline || pipeline.name === state.defaultProvider;
                   
                   return (
                     <div key={pipeline.name} onClick={() => navigate('/pipelines')} title={`Configure ${pipeline.name.replace(/_/g, ' ')} →`} className="flex flex-col cursor-pointer hover:opacity-80">
@@ -580,9 +600,9 @@ export const SystemTopology = () => {
           {/* Arrow: Pipelines ← Local AI */}
           <div className="flex items-center justify-center self-center">
             <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-r-[8px] ${
-              activePipelines.size > 0 ? 'border-r-green-500' : 'border-r-border'
+              isLocalAIUsedByPipelines ? 'border-r-green-500' : 'border-r-border'
             } border-t-transparent border-b-transparent`} />
-            <div className={`w-6 h-0.5 ${activePipelines.size > 0 ? 'bg-green-500' : 'bg-border'}`} />
+            <div className={`w-6 h-0.5 ${isLocalAIUsedByPipelines ? 'bg-green-500' : 'bg-border'}`} />
           </div>
 
           {/* Local AI Server (aligned with AI Engine above) */}
@@ -594,15 +614,20 @@ export const SystemTopology = () => {
               className={`relative p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer hover:opacity-80 ${
               state.localAIStatus === 'error'
                 ? 'border-red-500 bg-red-500/10'
-                : 'border-border bg-card hover:border-primary/40'
+                : isLocalAIActive
+                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
+                  : 'border-border bg-card hover:border-primary/40'
             }`}>
+              {isLocalAIActive && state.localAIStatus === 'connected' && (
+                <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
+              )}
               <div className="flex flex-col items-center gap-2">
                 <Server className={`w-8 h-8 ${
-                  state.localAIStatus === 'error' ? 'text-red-500' : 'text-muted-foreground'
+                  state.localAIStatus === 'error' ? 'text-red-500' : isLocalAIActive ? 'text-green-500' : 'text-muted-foreground'
                 }`} />
                 <div className="text-center">
                   <div className={`font-semibold ${
-                    state.localAIStatus === 'error' ? 'text-red-500' : 'text-foreground'
+                    state.localAIStatus === 'error' ? 'text-red-500' : isLocalAIActive ? 'text-green-500' : 'text-foreground'
                   }`}>Local AI</div>
                   <div className="text-xs text-muted-foreground">Server</div>
                 </div>
@@ -625,8 +650,10 @@ export const SystemTopology = () => {
 
           {/* Arrow: Local AI → Models */}
           <div className="flex items-center justify-center self-center">
-            <div className="w-6 h-0.5 bg-border" />
-            <div className="w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] border-l-border border-t-transparent border-b-transparent" />
+            <div className={`w-6 h-0.5 ${isLocalAIActive ? 'bg-green-500' : 'bg-border'}`} />
+            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
+              isLocalAIActive ? 'border-l-green-500' : 'border-l-border'
+            } border-t-transparent border-b-transparent`} />
           </div>
 
           {/* STT / LLM / TTS Models */}

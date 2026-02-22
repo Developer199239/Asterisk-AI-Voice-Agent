@@ -408,29 +408,129 @@ async def _check_active_calls() -> dict:
     Returns:
         Dict with active_calls count and warning message if any.
     """
-    import httpx
-    
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for url in [
-                "http://127.0.0.1:15000/sessions/stats",
-                "http://ai_engine:15000/sessions/stats",
-                "http://ai-engine:15000/sessions/stats",
-            ]:
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code != 200:
-                        continue
-
-                    data = resp.json()
-                    active_calls = data.get("active_calls", data.get("active_sessions", 0))
-                    return {"active_calls": active_calls, "reachable": True}
-                except httpx.ConnectError:
-                    continue
+        data = await _fetch_ai_engine_sessions_stats()
+        if not data:
+            return {"active_calls": 0, "reachable": False}
+        active_calls = data.get("active_calls", data.get("active_sessions", 0))
+        return {"active_calls": active_calls, "reachable": True}
     except Exception:
         logger.debug("Could not check active calls", exc_info=True)
-    
-    return {"active_calls": 0, "reachable": False}
+        return {"active_calls": 0, "reachable": False}
+
+
+def _get_health_api_token() -> str:
+    # Prefer container env, but fall back to project .env (useful when admin_ui isn't recreated yet).
+    return (os.getenv("HEALTH_API_TOKEN") or _dotenv_value("HEALTH_API_TOKEN") or "").strip()
+
+
+def _ai_engine_sessions_stats_urls() -> List[str]:
+    urls: List[str] = []
+    env_url = (os.getenv("AI_ENGINE_HEALTH_URL") or _dotenv_value("AI_ENGINE_HEALTH_URL") or "").strip()
+    if env_url:
+        urls.append(env_url.rstrip("/") + "/sessions/stats")
+    # Candidates (some deployments run outside Docker, others inside Compose network).
+    urls.extend(
+        [
+            "http://127.0.0.1:15000/sessions/stats",
+            "http://ai_engine:15000/sessions/stats",
+            "http://ai-engine:15000/sessions/stats",
+        ]
+    )
+    # Deduplicate while preserving order.
+    seen = set()
+    out: List[str] = []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _find_compose_service_container(client, service: str):
+    """
+    Find a container by compose service name in a robust way.
+    Prefers a direct name match (ai_engine), then falls back to compose labels.
+    """
+    try:
+        return client.containers.get(service)
+    except Exception:
+        pass
+
+    try:
+        containers = client.containers.list(all=True) or []
+        # Compose v2 label keys.
+        for c in containers:
+            labels = (getattr(c, "labels", None) or {}) if hasattr(c, "labels") else (c.attrs.get("Config", {}).get("Labels", {}) if getattr(c, "attrs", None) else {})
+            if labels.get("com.docker.compose.service") == service:
+                return c
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_ai_engine_sessions_stats() -> Optional[dict]:
+    """
+    Fetch AI Engine /sessions/stats.
+
+    This endpoint is security-gated in ai_engine: it requires localhost OR a valid HEALTH_API_TOKEN.
+    In Docker deployments, admin_ui calling ai_engine over the compose network isn't localhost, so
+    we either attach Authorization or fall back to docker exec (localhost inside the ai_engine container).
+    """
+    import httpx
+    import json
+
+    headers = {}
+    token = _get_health_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    urls = _ai_engine_sessions_stats_urls()
+    last_status: Optional[int] = None
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for url in urls:
+                try:
+                    resp = await client.get(url, headers=headers)
+                    last_status = resp.status_code
+                    if resp.status_code == 200:
+                        return resp.json()
+                except httpx.ConnectError:
+                    continue
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    # If we got a 403 (or no token), try docker exec inside ai_engine so the request is localhost.
+    # This avoids forcing users to set HEALTH_API_TOKEN for basic UI telemetry.
+    def _exec_fetch_sync() -> Optional[dict]:
+        try:
+            client = docker.from_env()
+            container = _find_compose_service_container(client, "ai_engine")
+            if not container:
+                return None
+            # Use python3 + urllib to avoid requiring curl/wget.
+            cmd = (
+                "python3 -c 'import json,urllib.request; "
+                "print(json.dumps(json.load(urllib.request.urlopen(\"http://127.0.0.1:15000/sessions/stats\"))))'"
+            )
+            code, out = container.exec_run(["sh", "-lc", cmd])
+            if code != 0:
+                return None
+            raw = (out or b"").decode("utf-8", errors="replace").strip()
+            if not raw:
+                return None
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    if last_status == 403 or not token:
+        import asyncio
+
+        return await asyncio.to_thread(_exec_fetch_sync)
+
+    return None
 
 
 @router.post("/containers/{container_id}/restart")
@@ -1392,27 +1492,14 @@ async def get_active_sessions():
     Get active call sessions from AI Engine for topology visualization.
     Returns list of active calls with provider and pipeline info.
     """
-    import httpx
-    
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for url in [
-                "http://127.0.0.1:15000/sessions/stats",
-                "http://ai_engine:15000/sessions/stats",
-                "http://ai-engine:15000/sessions/stats",
-            ]:
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code != 200:
-                        continue
-                    data = resp.json()
-                    return {
-                        "active_calls": data.get("active_calls", 0),
-                        "sessions": data.get("sessions", []),
-                        "reachable": True,
-                    }
-                except httpx.ConnectError:
-                    continue
+        data = await _fetch_ai_engine_sessions_stats()
+        if data:
+            return {
+                "active_calls": data.get("active_calls", 0),
+                "sessions": data.get("sessions", []),
+                "reachable": True,
+            }
     except Exception as e:
         logger.debug("Could not fetch active sessions: %s", e)
     
