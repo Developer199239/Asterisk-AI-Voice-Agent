@@ -3505,6 +3505,36 @@ class Engine:
         finally:
             self._attended_transfer_dtmf_waiters.pop(agent_channel_id, None)
 
+    @staticmethod
+    def _resolve_local_farewell_settings(local_config: Any) -> Tuple[str, float]:
+        mode = "asterisk"
+        timeout_sec = 30.0
+
+        if local_config is None:
+            return mode, timeout_sec
+
+        if isinstance(local_config, dict):
+            raw_mode = local_config.get("farewell_mode")
+            raw_timeout = local_config.get("farewell_timeout_sec")
+        else:
+            raw_mode = getattr(local_config, "farewell_mode", None)
+            raw_timeout = getattr(local_config, "farewell_timeout_sec", None)
+
+        if raw_mode is not None:
+            parsed_mode = str(raw_mode).strip().lower()
+            if parsed_mode in ("asterisk", "tts"):
+                mode = parsed_mode
+
+        if raw_timeout is not None:
+            try:
+                parsed_timeout = float(raw_timeout)
+                if parsed_timeout > 0:
+                    timeout_sec = parsed_timeout
+            except (TypeError, ValueError):
+                pass
+
+        return mode, timeout_sec
+
     async def _local_ai_server_tts(self, *, call_id: str, text: str, timeout_sec: float) -> Optional[bytes]:
         """Synthesize μ-law 8k audio via local-ai-server (hard requirement for attended transfer)."""
         try:
@@ -8500,15 +8530,9 @@ class Engine:
                             )
                             
                             # Get farewell mode from config
-                            farewell_mode = "asterisk"  # default
-                            farewell_timeout = 30.0
-                            try:
-                                local_config = self.config.providers.get("local")
-                                if local_config:
-                                    farewell_mode = getattr(local_config, 'farewell_mode', 'asterisk') or 'asterisk'
-                                    farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 30.0) or 30.0)
-                            except Exception:
-                                pass
+                            providers_cfg = getattr(self.config, "providers", {}) or {}
+                            local_config = providers_cfg.get("local") if isinstance(providers_cfg, dict) else None
+                            farewell_mode, farewell_timeout = self._resolve_local_farewell_settings(local_config)
                             
                             logger.info(
                                 "🎤 Farewell mode",
