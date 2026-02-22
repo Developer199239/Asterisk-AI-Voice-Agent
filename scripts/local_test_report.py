@@ -332,6 +332,126 @@ def parse_local_ai_logs(lines: int = 2000) -> Dict[str, Any]:
     return latency
 
 
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return _ANSI_RE.sub('', text)
+
+
+def _extract_kv(line: str, key: str) -> str:
+    """Extract a key=value or key='value' from a log line."""
+    # Strip ANSI color codes first (structlog colored console output)
+    clean = _strip_ansi(line)
+    m = re.search(rf'{key}=\'([^\']*)\'|{key}="([^"]*)"|{key}=(\S+)', clean)
+    if m:
+        return m.group(1) or m.group(2) or m.group(3) or ""
+    return ""
+
+
+def parse_tool_calls(lines: int = 15000) -> List[Dict[str, Any]]:
+    """Parse recent ai_engine docker logs for tool call events."""
+    tool_calls: List[Dict[str, Any]] = []
+
+    try:
+        out = subprocess.check_output(
+            ["docker", "logs", "--tail", str(lines), "ai_engine"],
+            text=True, timeout=15, stderr=subprocess.STDOUT,
+        )
+    except Exception as exc:
+        print(f"[WARN] Could not read ai_engine logs: {exc}", file=sys.stderr)
+        return tool_calls
+
+    for line in out.splitlines():
+        # Local tool patterns MUST be checked first because
+        # "Local tool execution complete" contains "Tool execution complete"
+
+        # Local tool execution complete
+        if "Local tool execution complete" in line:
+            raw_status = (_extract_kv(line, "status") or "success").lower()
+            result = "failed" if raw_status in ("error", "failed", "failure") else "success"
+            tool_calls.append({
+                "name": _extract_kv(line, "tool_name") or _extract_kv(line, "function_name") or "unknown",
+                "status": raw_status,
+                "result": result,
+                "source": "local_llm",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        # Local tool execution failed
+        if "Local tool execution failed" in line:
+            tool_calls.append({
+                "name": _extract_kv(line, "tool_name") or _extract_kv(line, "function_name") or "unknown",
+                "status": "failed",
+                "result": "failed",
+                "error": _extract_kv(line, "error") or "",
+                "source": "local_llm",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        # Guardrail blocked tool call
+        if "Dropping hangup_call" in line or "Dropping disallowed tool" in line:
+            tool_calls.append({
+                "name": "hangup_call",
+                "status": "blocked",
+                "result": "blocked_by_guardrail",
+                "source": "guardrail",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        # Tool execution complete (monolithic providers / pipeline)
+        if "Tool execution complete" in line:
+            raw_status = (_extract_kv(line, "status") or "success").lower()
+            result = "failed" if raw_status in ("error", "failed", "failure") else "success"
+            tool_calls.append({
+                "name": _extract_kv(line, "function_name") or _extract_kv(line, "tool") or "unknown",
+                "status": raw_status,
+                "result": result,
+                "source": "provider",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+        # Tool execution failed (monolithic providers / pipeline)
+        if "Tool execution failed" in line:
+            tool_calls.append({
+                "name": _extract_kv(line, "function_name") or _extract_kv(line, "tool") or "unknown",
+                "status": "failed",
+                "result": "failed",
+                "error": _extract_kv(line, "error") or "",
+                "source": "provider",
+                "call_id": _extract_kv(line, "call_id") or "",
+            })
+            continue
+
+    return tool_calls
+
+
+def summarize_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Summarize tool calls."""
+    summary: Dict[str, Any] = {}
+
+    for call in tool_calls:
+        name = call["name"]
+        if name not in summary:
+            summary[name] = {
+                "success": 0,
+                "failed": 0,
+                "errors": [],
+            }
+        if call["result"] == "success":
+            summary[name]["success"] += 1
+        else:
+            summary[name]["failed"] += 1
+            summary[name]["errors"].append(call.get("error", ""))
+
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # Extract model info from WS status
 # ---------------------------------------------------------------------------
@@ -403,6 +523,7 @@ def format_template(
     latency: Dict[str, Any],
     pipeline: str,
     transport: str,
+    tool_calls: Dict[str, Any],
 ) -> str:
     """Build the copy-paste community test matrix template."""
     llm_latency_str = "N/A"
@@ -455,9 +576,27 @@ def format_template(
         f"**TTS Responses (last session)**: {latency.get('tts_responses_count', 0)}",
         f"**Quality (1-5)**: <your rating>",
         f"**Notes**: <any observations>",
+    ]
+
+    # Tool call section
+    if tool_calls:
+        lines.append("**Tool Calls**:")
+        for tool, stats in tool_calls.items():
+            ok = stats['success']
+            fail = stats['failed']
+            icon = "\u2705" if fail == 0 else "\u274c"
+            lines.append(f"  {icon} {tool}: {ok} success, {fail} failed")
+            if fail > 0 and stats.get("errors"):
+                errs = [e for e in stats["errors"] if e]
+                if errs:
+                    lines.append(f"    Errors: {', '.join(errs[:3])}")
+    else:
+        lines.append("**Tool Calls**: None detected")
+
+    lines.extend([
         "```",
         "",
-    ]
+    ])
 
     # Also output the table row for direct PR addition
     lines.extend([
@@ -494,6 +633,7 @@ def format_json(
     latency: Dict[str, Any],
     pipeline: str,
     transport: str,
+    tool_calls: Dict[str, Any],
 ) -> str:
     """Build JSON output."""
     return json.dumps({
@@ -503,6 +643,7 @@ def format_json(
         "latency": latency,
         "pipeline": pipeline,
         "transport": transport,
+        "tool_calls": tool_calls,
     }, indent=2)
 
 
@@ -534,14 +675,18 @@ async def async_main(args: argparse.Namespace) -> None:
     # Latency from docker logs
     latency = parse_local_ai_logs(lines=args.log_lines)
 
+    # Tool calls from ai_engine logs (use full history for sparse tool events)
+    raw_tool_calls = parse_tool_calls()
+    tool_calls = summarize_tool_calls(raw_tool_calls)
+
     # Pipeline + transport
     pipeline = detect_pipeline(project_root, env)
     transport = detect_transport(env)
 
     if args.json:
-        print(format_json(hw, model, latency, pipeline, transport))
+        print(format_json(hw, model, latency, pipeline, transport, tool_calls))
     else:
-        print(format_template(hw, model, latency, pipeline, transport))
+        print(format_template(hw, model, latency, pipeline, transport, tool_calls))
 
 
 def main() -> None:
