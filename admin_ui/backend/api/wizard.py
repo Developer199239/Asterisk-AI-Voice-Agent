@@ -2082,74 +2082,49 @@ async def start_local_ai_server():
     """Start the local-ai-server container.
     
     Also sets up media paths for audio playback to work correctly.
-    Uses --no-build when possible (fast), falls back to background build if needed.
+    Uses the updater-runner pattern (like system.py) so that compose bind mounts
+    resolve correctly on the host filesystem — fixes AAVA-193/AAVA-200.
     """
-    import subprocess
-    from settings import PROJECT_ROOT
+    from api.system import (
+        _compose_files_flags_for_service,
+        _project_host_root_from_admin_ui_container,
+        _run_updater_ephemeral,
+    )
     
     # Setup media paths first (same as start_engine)
     print("DEBUG: Setting up media paths for local AI server...")
     media_setup = setup_media_paths()
     print(f"DEBUG: Media setup result: {media_setup}")
-    
-    try:
-        # Use preflight-derived flag to decide compose override.
-        # Do not infer from runtime nvidia-smi here because passthrough may be unavailable.
-        gpu_available = _gpu_override_enabled_from_preflight()
 
-        # Build docker compose command - use GPU override file if GPU detected
-        cmd_base = ["docker", "compose", "-p", "asterisk-ai-voice-agent"]
-        if gpu_available:
-            print("DEBUG: GPU override enabled (GPU_AVAILABLE=true), using docker-compose.gpu.yml")
-            cmd_base += ["-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml"]
-
-        # Fast path: start from existing image (avoid triggering a rebuild on every click)
-        cmd_no_build = cmd_base + ["up", "-d", "--no-build", "local_ai_server"]
-        result = subprocess.run(
-            cmd_no_build,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=60,
+    def _compose_up_cmd(svc: str, *, build: bool) -> str:
+        flag = "--build" if build else "--no-build"
+        compose_files = _compose_files_flags_for_service(svc)
+        compose_prefix = f"{compose_files} " if compose_files else ""
+        return (
+            "set -euo pipefail; "
+            "cd \"$PROJECT_ROOT\"; "
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d {flag} {svc}"
         )
-        if result.returncode == 0:
+
+    try:
+        host_root = _project_host_root_from_admin_ui_container()
+        print(f"DEBUG: Using host project root: {host_root}")
+
+        # Fast path: start without build if the image already exists.
+        code, out = _run_updater_ephemeral(
+            host_root,
+            env={"PROJECT_ROOT": host_root},
+            command=_compose_up_cmd("local_ai_server", build=False),
+            timeout_sec=120,
+        )
+        if code == 0:
             return {
                 "success": True,
                 "message": "Local AI Server started.",
                 "media_setup": media_setup,
             }
 
-        stderr = (result.stderr or result.stdout or "").strip()
-
-        # If a stale container name is blocking startup, remove and retry once.
-        if "Conflict" in stderr and "local_ai_server" in stderr:
-            try:
-                client = docker.from_env()
-                try:
-                    old_container = client.containers.get("local_ai_server")
-                    print(f"DEBUG: Removing conflicting local_ai_server container ({old_container.status})")
-                    old_container.remove(force=True)
-                except docker.errors.NotFound:
-                    pass
-            except Exception as e:
-                print(f"DEBUG: Error removing conflicting container: {e}")
-
-            retry = subprocess.run(
-                cmd_no_build,
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if retry.returncode == 0:
-                return {
-                    "success": True,
-                    "message": "Local AI Server started.",
-                    "media_setup": media_setup,
-                }
-            stderr = (retry.stderr or retry.stdout or "").strip()
-
-        # Slow path: image missing or needs build; kick off build+up in background.
+        err = (out or "").strip()
         needs_build_markers = [
             "No such image",
             "pull access denied",
@@ -2157,38 +2132,34 @@ async def start_local_ai_server():
             "unable to find image",
             "requires build",
         ]
-        if any(m.lower() in stderr.lower() for m in needs_build_markers):
-            log_path = os.path.join(PROJECT_ROOT, "logs", "local_ai_server_start.log")
-            os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            logf = open(log_path, "a")
-            logf.write("\n\n=== local_ai_server start (wizard) ===\n")
-            logf.flush()
-
-            cmd_build = cmd_base + ["up", "-d", "--build", "local_ai_server"]
-            subprocess.Popen(
-                cmd_build,
-                cwd=PROJECT_ROOT,
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+        if any(m.lower() in err.lower() for m in needs_build_markers):
+            # Slow path: build required
+            print("DEBUG: Image needs build, starting build+up (this may take several minutes)...")
+            code2, out2 = _run_updater_ephemeral(
+                host_root,
+                env={"PROJECT_ROOT": host_root},
+                command=_compose_up_cmd("local_ai_server", build=True),
+                timeout_sec=1800,  # 30 min for GPU builds
             )
-            logf.close()
-
+            if code2 == 0:
+                return {
+                    "success": True,
+                    "message": "Local AI Server built and started.",
+                    "media_setup": media_setup,
+                }
             return {
-                "success": True,
-                "building": True,
-                "message": f"Local AI Server image is being built in the background (this can take 10-60 minutes for GPU builds). See {log_path} or container logs once created.",
+                "success": False,
+                "message": f"Failed to build/start local_ai_server: {(out2 or '').strip()[:800]}",
                 "media_setup": media_setup,
             }
 
         return {
             "success": False,
-            "message": f"Failed to start local_ai_server: {stderr or 'Unknown error'}",
+            "message": f"Failed to start local_ai_server: {err[:800] or 'Unknown error'}",
             "media_setup": media_setup,
         }
-    except FileNotFoundError as e:
-        return {"success": False, "message": f"Failed to start: {e}", "media_setup": media_setup}
     except Exception as e:
+        print(f"DEBUG: Error starting local_ai_server: {e}")
         return {"success": False, "message": str(e), "media_setup": media_setup}
 
 

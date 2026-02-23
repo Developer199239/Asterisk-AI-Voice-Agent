@@ -653,14 +653,20 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFo
                             </div>
 
                             <div className="grid grid-cols-1 gap-2">
-	                                {Object.entries(config.transfer?.destinations || {}).map(([key, dest]: [string, any]) => (
+	                                {Object.entries(config.transfer?.destinations || {}).map(([key, dest]: [string, any]) => {
+	                                    // AAVA-199: Guard against null/undefined destinations
+	                                    if (!dest || typeof dest !== 'object') return null;
+	                                    const destType = dest.type || 'extension';
+	                                    const destTarget = dest.target || '';
+	                                    const destDescription = dest.description || '';
+	                                    return (
 	                                    <div key={key} className="flex items-center justify-between p-3 bg-accent/30 rounded border border-border/50">
 	                                        <div>
 	                                            <div className="font-medium text-sm">{key}</div>
 	                                            <div className="text-xs text-muted-foreground">
-	                                                {dest.type} • {dest.target} • {dest.description}
-	                                                {dest.type === 'extension' && dest.attended_allowed ? ' • attended' : ''}
-	                                                {dest.type === 'extension' && showLiveAgentRoutingAdvanced && dest.live_agent ? ' • live-agent' : ''}
+	                                                {destType} • {destTarget} • {destDescription}
+	                                                {destType === 'extension' && dest.attended_allowed ? ' • attended' : ''}
+	                                                {destType === 'extension' && showLiveAgentRoutingAdvanced && dest.live_agent ? ' • live-agent' : ''}
 	                                            </div>
 	                                        </div>
 	                                        <div className="flex items-center gap-1">
@@ -672,7 +678,8 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFo
                                             </button>
                                         </div>
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                     )}

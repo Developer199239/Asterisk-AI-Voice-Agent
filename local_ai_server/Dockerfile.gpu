@@ -72,6 +72,7 @@ RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
     fi
 
 RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
+        pip install --no-cache-dir --upgrade pip setuptools wheel && \
         pip install --no-cache-dir "git+https://github.com/myshell-ai/MeloTTS.git@${MELOTTS_GIT_REF}" && \
         python -m unidic download && \
         python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" && \
