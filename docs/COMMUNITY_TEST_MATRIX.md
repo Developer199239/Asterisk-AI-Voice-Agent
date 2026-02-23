@@ -69,7 +69,7 @@ This auto-detects your hardware, queries the Local AI Server for model info, par
 | 2025-07-14 | @maintainer | Vast.ai A100 40GB | A100 | vosk | en-us-0.22 | piper | lessac-medium | phi-3-mini Q4_K_M | 2048 | em | ~2s | 3 | Baseline GPU test |
 | 2025-07-14 | @maintainer | Vast.ai A100 40GB | A100 | faster_whisper | base | kokoro | af_heart | phi-3-mini Q4_K_M | 2048 | em | ~1.5s | 4 | Whisper + Kokoro combo |
 | 2026-02-22 | @hkjarral | AMD EPYC 7443P, 66GB RAM | RTX 4090 24GB | faster_whisper | base | kokoro | af_heart | phi-3-mini-4k-instruct.Q4_K_M.gguf | 4096 | em | ~665ms | 4 | Phi-3 tool calls can be malformed/truncated; use `LOCAL_TOOL_CALL_POLICY=auto` and keep `LOCAL_TOOL_GATEWAY_ENABLED=true` for structured full-local tool normalization |
-| | | | | | | | | | | | | | |
+| 2026-02-23 | @hkjarral | AMD EPYC 7443P, 66GB RAM | RTX 4090 24GB | faster_whisper | base | kokoro | af_heart | Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf | 4096 | em | ~1.0s | 5 | Call `1771817082.317`: structured gateway + repair cleanly executed `hangup_call` on polite close (`Thank you.`), no tool-chatter leaked to spoken output, and post-call webhook executed successfully |
 
 ---
 
@@ -96,6 +96,30 @@ This auto-detects your hardware, queries the Local AI Server for model info, par
 **Notes**: Tool calls do not work reliably; use heuristic-based hangup for phi-3 (malformed/truncated tool-call markup observed).
 **Tool Calls**:
   ⚠️ hangup_call: 2 attempted (not executed) [llm_markup]
+  ✅ demo_post_call_webhook: 1 executed [post_call]
+```
+
+```
+**Date**: 2026-02-23
+**Hardware**: AMD EPYC 7443P 24-Core Processor, 66GB RAM
+**GPU**: NVIDIA GeForce RTX 4090 24GB
+**OS**: Ubuntu 22.04.5 LTS
+**Docker**: 29.2.1
+**STT**: faster_whisper / Faster-Whisper (base)
+**TTS**: kokoro / Kokoro (af_heart, mode=hf)
+**LLM**: Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf / n_ctx=4096
+**LLM GPU Layers**: -1
+**Transport**: ExternalMedia RTP
+**Pipeline**: local
+**Runtime Mode**: full
+**E2E Latency**: ~1.0s
+**LLM Latency**: ~534ms avg (8 samples, last=612ms)
+**STT Transcripts (last session)**: 8
+**TTS Responses (last session)**: 10
+**Quality (1-5)**: 5
+**Notes**: Call `1771817082.317` was clean end-to-end. Local logs show strict structured tool gateway with a repair-path handoff (`tool_path=repair`) produced a valid `hangup_call` on user close intent (`Thank you.`), the engine executed a single hangup path, and no tool execution chatter leaked into final spoken text.
+**Tool Calls**:
+  ✅ hangup_call: 1 executed [local_llm]
   ✅ demo_post_call_webhook: 1 executed [post_call]
 ```
 
