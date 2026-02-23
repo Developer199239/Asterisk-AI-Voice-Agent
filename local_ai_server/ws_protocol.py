@@ -21,9 +21,19 @@ class WebSocketProtocol:
             logging.warning("❓ Invalid JSON message: %s", message)
             return
 
-        msg_type = data.get("type")
-        if not msg_type:
+        msg_type_raw = data.get("type")
+        if msg_type_raw is None:
             logging.warning("JSON payload missing 'type': %s", data)
+            return
+        msg_type = (
+            str(msg_type_raw)
+            .replace("\x00", "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
+        if not msg_type:
+            logging.warning("JSON payload has invalid 'type': raw=%r payload=%s", msg_type_raw, data)
             return
 
         if msg_type == "auth":
@@ -81,6 +91,22 @@ class WebSocketProtocol:
 
         if msg_type == "audio":
             await self._server._handle_audio_payload(websocket, session, data)
+            return
+
+        if msg_type == "barge_in":
+            call_id = data.get("call_id")
+            if call_id:
+                session.call_id = call_id
+            self._server._clear_whisper_stt_suppression(session, reason="engine_barge_in")
+            await self._server._send_json(
+                websocket,
+                {
+                    "type": "barge_in_ack",
+                    "status": "ok",
+                    "call_id": session.call_id,
+                    "request_id": data.get("request_id"),
+                },
+            )
             return
 
         if msg_type == "tts_request":
@@ -207,7 +233,7 @@ class WebSocketProtocol:
             )
             return
 
-        logging.warning("❓ Unknown message type: %s", msg_type)
+        logging.warning("❓ Unknown message type: raw=%r normalized=%s", msg_type_raw, msg_type)
 
     async def handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
         if self._server.ws_auth_token and not session.authenticated:
