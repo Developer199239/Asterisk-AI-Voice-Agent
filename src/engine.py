@@ -5464,7 +5464,7 @@ class Engine:
                         except Exception:
                             logger.error("Error triggering AudioSocket pipeline barge-in", call_id=caller_channel_id, exc_info=True)
                     else:
-                        if energy > 0 and self.conversation_coordinator:
+                        if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                             try:
                                 self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                             except Exception:
@@ -6047,7 +6047,7 @@ class Engine:
                     # After barge-in, fall through to forward this frame to provider
                 else:
                     # Not yet triggered; drop inbound frame while TTS is active
-                    if energy > 0 and self.conversation_coordinator:
+                    if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                         try:
                             self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                         except Exception:
@@ -6950,7 +6950,7 @@ class Engine:
                         except Exception:
                             logger.error("Error triggering RTP pipeline barge-in", call_id=caller_channel_id, exc_info=True)
                     else:
-                        if energy > 0 and self.conversation_coordinator:
+                        if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                             try:
                                 self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                             except Exception:
@@ -7169,7 +7169,7 @@ class Engine:
                         logger.error("Error triggering RTP barge-in", call_id=caller_channel_id, exc_info=True)
                 else:
                     # Not yet triggered; drop inbound frame while TTS is active
-                    if energy > 0 and self.conversation_coordinator:
+                    if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                         try:
                             self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                         except Exception:

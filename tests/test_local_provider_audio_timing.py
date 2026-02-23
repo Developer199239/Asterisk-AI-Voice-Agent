@@ -57,6 +57,27 @@ class _GatewayFakeWebSocket(_FakeWebSocket):
         )
 
 
+class _BargeAckFakeWebSocket(_FakeWebSocket):
+    async def send(self, message):
+        await super().send(message)
+        try:
+            payload = json.loads(message)
+        except Exception:
+            return
+        if payload.get("type") != "barge_in":
+            return
+        self._messages.append(
+            json.dumps(
+                {
+                    "type": "barge_in_ack",
+                    "status": "ok",
+                    "call_id": payload.get("call_id"),
+                    "request_id": payload.get("request_id"),
+                }
+            )
+        )
+
+
 @pytest.mark.asyncio
 async def test_binary_audio_emits_metadata_and_delayed_done():
     events = []
@@ -310,3 +331,39 @@ async def test_modular_mode_skips_structured_tool_gateway():
     assert not any(payload.get("type") == "llm_tool_request" for payload in sent_payloads)
     tool_events = [e for e in events if e.get("type") == "ToolCall"]
     assert len(tool_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_notify_barge_in_ack_roundtrip():
+    async def on_event(_event):
+        return None
+
+    provider = LocalProvider(LocalProviderConfig(response_timeout_sec=0.2), on_event=on_event)
+    provider._active_call_id = "call-barge-ack"
+    provider.websocket = _BargeAckFakeWebSocket([])
+
+    await provider.notify_barge_in("call-barge-ack")
+    await provider._receive_loop()
+    await asyncio.sleep(0.05)
+
+    sent_payloads = [json.loads(msg) for msg in provider.websocket.sent]
+    barge_payloads = [payload for payload in sent_payloads if payload.get("type") == "barge_in"]
+    assert len(barge_payloads) == 1
+    assert barge_payloads[0].get("request_id")
+    assert provider._pending_barge_in_acks == {}
+
+
+@pytest.mark.asyncio
+async def test_notify_barge_in_ack_timeout_clears_pending():
+    async def on_event(_event):
+        return None
+
+    provider = LocalProvider(LocalProviderConfig(response_timeout_sec=0.2), on_event=on_event)
+    provider._active_call_id = "call-barge-timeout"
+    provider.websocket = _FakeWebSocket([])
+
+    await provider.notify_barge_in("call-barge-timeout")
+    assert len(provider._pending_barge_in_acks) == 1
+
+    await asyncio.sleep(0.45)
+    assert provider._pending_barge_in_acks == {}

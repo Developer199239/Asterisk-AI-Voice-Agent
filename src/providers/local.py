@@ -70,6 +70,8 @@ class LocalProvider(AIProviderInterface):
         self._pending_llm_responses: Dict[str, asyncio.Future] = {}
         self._pending_llm_tool_responses: Dict[str, Dict[str, Any]] = {}
         self._llm_tool_timeout_tasks: Dict[str, asyncio.Task] = {}
+        self._pending_barge_in_acks: Dict[str, Dict[str, Any]] = {}
+        self._barge_in_ack_tasks: Dict[str, asyncio.Task] = {}
         # LLM tool-calling capability metadata from local_ai_server status.
         self._tool_capability: Dict[str, Any] = {"level": "unknown", "source": "init"}
         # Effective per-call policy: strict | compatible | off
@@ -128,18 +130,79 @@ class LocalProvider(AIProviderInterface):
         target_call_id = str(call_id or self._active_call_id or "").strip()
         if not target_call_id:
             return
+        request_id = f"barge-{uuid4().hex}"
+        loop = asyncio.get_running_loop()
+        ack_future: asyncio.Future = loop.create_future()
+        self._pending_barge_in_acks[request_id] = {
+            "future": ack_future,
+            "call_id": target_call_id,
+        }
         try:
             await self.websocket.send(
                 json.dumps(
                     {
                         "type": "barge_in",
                         "call_id": target_call_id,
+                        "request_id": request_id,
                     }
                 )
             )
-            logger.debug("Sent barge_in notification to Local AI Server", call_id=target_call_id)
+            timeout_sec = min(max(float(self.response_timeout or 0.0), 0.3), 1.5)
+            self._barge_in_ack_tasks[request_id] = asyncio.create_task(
+                self._await_barge_in_ack(
+                    request_id=request_id,
+                    call_id=target_call_id,
+                    timeout_sec=timeout_sec,
+                )
+            )
+            logger.debug(
+                "Sent barge_in notification to Local AI Server",
+                call_id=target_call_id,
+                request_id=request_id,
+            )
         except Exception:
+            self._pending_barge_in_acks.pop(request_id, None)
+            task = self._barge_in_ack_tasks.pop(request_id, None)
+            if task and not task.done():
+                task.cancel()
             logger.debug("Failed to send barge_in notification to Local AI Server", call_id=target_call_id, exc_info=True)
+
+    async def _await_barge_in_ack(self, *, request_id: str, call_id: str, timeout_sec: float) -> None:
+        pending = self._pending_barge_in_acks.get(request_id)
+        if not pending:
+            self._barge_in_ack_tasks.pop(request_id, None)
+            return
+        future = pending.get("future")
+        try:
+            await asyncio.wait_for(asyncio.shield(future), timeout=timeout_sec)
+            logger.debug(
+                "Received barge_in_ack from Local AI Server",
+                call_id=call_id,
+                request_id=request_id,
+            )
+        except asyncio.TimeoutError:
+            pending = self._pending_barge_in_acks.pop(request_id, None)
+            if pending:
+                fut = pending.get("future")
+                if fut and not fut.done():
+                    fut.cancel()
+            logger.warning(
+                "Timed out waiting for barge_in_ack from Local AI Server",
+                call_id=call_id,
+                request_id=request_id,
+                timeout_sec=timeout_sec,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug(
+                "Failed while waiting for barge_in_ack from Local AI Server",
+                call_id=call_id,
+                request_id=request_id,
+                exc_info=True,
+            )
+        finally:
+            self._barge_in_ack_tasks.pop(request_id, None)
 
     def _resolve_tool_policy(self, context: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -1240,6 +1303,15 @@ class LocalProvider(AIProviderInterface):
             for request_id in list(self._pending_llm_tool_responses.keys()):
                 self._pending_llm_tool_responses.pop(request_id, None)
                 self._cancel_gateway_timeout(request_id)
+        if self._pending_barge_in_acks:
+            for request_id in list(self._pending_barge_in_acks.keys()):
+                pending = self._pending_barge_in_acks.pop(request_id, None)
+                future = (pending or {}).get("future") if isinstance(pending, dict) else None
+                if future and not future.done():
+                    future.cancel()
+                task = self._barge_in_ack_tasks.pop(request_id, None)
+                if task and not task.done():
+                    task.cancel()
         
         # DON'T clear the active call ID immediately - keep it for AgentAudio processing
         # The call_id will be cleared when the TTS playback is complete
@@ -1263,6 +1335,19 @@ class LocalProvider(AIProviderInterface):
             for rid in stale_ids:
                 self._pending_llm_tool_responses.pop(rid, None)
                 self._cancel_gateway_timeout(rid)
+            stale_barge_ack_ids = [
+                rid
+                for rid, pending in self._pending_barge_in_acks.items()
+                if str((pending or {}).get("call_id") or "") == str(old_call_id)
+            ]
+            for rid in stale_barge_ack_ids:
+                pending = self._pending_barge_in_acks.pop(rid, None)
+                future = (pending or {}).get("future") if isinstance(pending, dict) else None
+                if future and not future.done():
+                    future.cancel()
+                task = self._barge_in_ack_tasks.pop(rid, None)
+                if task and not task.done():
+                    task.cancel()
         self._active_call_id = None
         logger.info("Active call ID cleared after TTS completion.")
 
@@ -1379,6 +1464,33 @@ class LocalProvider(AIProviderInterface):
                             handled = await self._handle_llm_tool_response(data)
                             if not handled:
                                 logger.debug("Received unmatched llm_tool_response", request_id=data.get("request_id"))
+                        elif data.get("type") == "barge_in_ack":
+                            request_id = str(data.get("request_id") or "").strip()
+                            call_id = str(data.get("call_id") or "").strip()
+                            matched_id = request_id
+                            if matched_id and matched_id not in self._pending_barge_in_acks:
+                                matched_id = ""
+                            if not matched_id and call_id:
+                                for rid, pending in self._pending_barge_in_acks.items():
+                                    if str((pending or {}).get("call_id") or "") == call_id:
+                                        matched_id = rid
+                                        break
+                            if matched_id:
+                                pending = self._pending_barge_in_acks.pop(matched_id, None)
+                                future = (pending or {}).get("future") if isinstance(pending, dict) else None
+                                if future and not future.done():
+                                    future.set_result(data)
+                                logger.debug(
+                                    "Received barge_in_ack from Local AI Server",
+                                    call_id=call_id,
+                                    request_id=matched_id,
+                                )
+                            else:
+                                logger.debug(
+                                    "Received unmatched barge_in_ack from Local AI Server",
+                                    call_id=call_id,
+                                    request_id=request_id,
+                                )
                         elif data.get("type") == "llm_response":
                             request_id = str(data.get("request_id") or "").strip()
                             if request_id:

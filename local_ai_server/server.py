@@ -4517,9 +4517,19 @@ class LocalAIServer:
             logging.warning("❓ Invalid JSON message: %s", message)
             return
 
-        msg_type = data.get("type")
-        if not msg_type:
+        msg_type_raw = data.get("type")
+        if msg_type_raw is None:
             logging.warning("JSON payload missing 'type': %s", data)
+            return
+        msg_type = (
+            str(msg_type_raw)
+            .replace("\x00", "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
+        if not msg_type:
+            logging.warning("JSON payload has invalid 'type': raw=%r payload=%s", msg_type_raw, data)
             return
 
         # Optional auth gate.
@@ -4596,6 +4606,7 @@ class LocalAIServer:
                     "type": "barge_in_ack",
                     "status": "ok",
                     "call_id": session.call_id,
+                    "request_id": data.get("request_id"),
                 },
             )
             return
@@ -4672,7 +4683,7 @@ class LocalAIServer:
             await self._send_json(websocket, response)
             return
 
-        logging.warning("❓ Unknown message type: %s", msg_type)
+        logging.warning("❓ Unknown message type: raw=%r normalized=%s", msg_type_raw, msg_type)
 
     async def _handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
         if self.ws_auth_token and not session.authenticated:
