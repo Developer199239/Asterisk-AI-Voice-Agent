@@ -23,6 +23,13 @@ def test_extract_hangup_farewell_from_tool_call():
     )
 
 
+def test_extract_hangup_farewell_strips_tool_chatter():
+    tool_calls = [
+        {"name": "hangup_call", "parameters": {"farewell_message": "Goodbye! (hangup_call tool executed)"}}
+    ]
+    assert LocalProvider._extract_hangup_farewell(tool_calls) == "Goodbye!"
+
+
 @pytest.mark.asyncio
 async def test_emit_local_llm_result_uses_hangup_farewell_and_drops_transfer():
     events = []
@@ -56,3 +63,26 @@ async def test_emit_local_llm_result_uses_hangup_farewell_and_drops_transfer():
 
     tool_event = next(event for event in events if event.get("type") == "ToolCall")
     assert [call["name"] for call in tool_event["tool_calls"]] == ["hangup_call"]
+
+
+@pytest.mark.asyncio
+async def test_emit_local_llm_result_uses_clean_goodbye_when_hangup_has_no_farewell():
+    events = []
+
+    async def on_event(event):
+        events.append(event)
+
+    provider = LocalProvider(LocalProviderConfig(), on_event)
+    provider._allowed_tools = {"hangup_call"}
+    provider._last_user_transcript_by_call["call-2"] = "Thank you. Goodbye."
+
+    await provider._emit_local_llm_result(
+        call_id="call-2",
+        llm_text="Goodbye! (hangup_call tool executed)",
+        clean_text="Goodbye! (hangup_call tool executed)",
+        tool_calls=[{"name": "hangup_call", "parameters": {}}],
+        tool_path="repair",
+    )
+
+    transcript_event = next(event for event in events if event.get("type") == "agent_transcript")
+    assert transcript_event["text"] == "Goodbye!"

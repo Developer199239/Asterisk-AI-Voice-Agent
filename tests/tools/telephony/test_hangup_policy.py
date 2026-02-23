@@ -2,6 +2,7 @@ from src.tools.telephony.hangup_policy import (
     resolve_hangup_policy,
     text_contains_marker,
     text_contains_end_call_intent,
+    text_is_short_polite_closing,
 )
 
 
@@ -34,3 +35,12 @@ def test_end_call_detection_handles_common_stt_misrecognitions():
 
     assert text_contains_end_call_intent("Okay, hand up the call.", markers)
     assert text_contains_end_call_intent("Please and the call now.", markers)
+
+
+def test_short_polite_closing_detection_accepts_terminal_thanks():
+    assert text_is_short_polite_closing("Okay, thank you")
+    assert text_is_short_polite_closing("thanks goodbye")
+
+
+def test_short_polite_closing_detection_rejects_long_mid_call_phrases():
+    assert not text_is_short_polite_closing("Thanks, can you also explain pricing and setup again")

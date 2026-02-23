@@ -392,7 +392,41 @@ class LocalProvider(AIProviderInterface):
         )
 
     @staticmethod
-    def _extract_hangup_farewell(tool_calls: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    def _sanitize_local_tool_chatter(text: str) -> str:
+        clean = str(text or "")
+        if not clean:
+            return ""
+        clean = re.sub(r"<\|\s*(?:system|assistant|user|enduser|end)\s*\|>", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"<\|[^>\n\r]*\|?>?", "", clean)
+        clean = re.sub(
+            r"\(?\s*hangup_call\s+tool\s+executed\s*\)?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\(?\s*tool\s*call(?:s)?\s*(?:executed|successful|succeeded|completed?)\s*\)?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\bhangup\s+call\s+(?:successful|succeeded|executed|complete(?:d)?|requested)\b[.!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\bcall\s+duration\s*[:\-]?\s*[^.?!]{0,96}[.?!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(r"\s+", " ", clean).strip()
+        return clean
+
+    @classmethod
+    def _extract_hangup_farewell(cls, tool_calls: Optional[List[Dict[str, Any]]]) -> Optional[str]:
         for tool_call in tool_calls or []:
             name = str(tool_call.get("name") or "").strip()
             if name != "hangup_call":
@@ -401,6 +435,7 @@ class LocalProvider(AIProviderInterface):
             if not isinstance(params, dict):
                 continue
             farewell = str(params.get("farewell_message") or "").strip()
+            farewell = cls._sanitize_local_tool_chatter(farewell)
             if farewell:
                 return farewell
         return None
@@ -416,7 +451,9 @@ class LocalProvider(AIProviderInterface):
         parse_failures: int = 0,
         repair_attempts: int = 0,
     ) -> None:
-        response_text = ((clean_text if clean_text is not None else llm_text) or "").strip()
+        response_text = self._sanitize_local_tool_chatter(
+            ((clean_text if clean_text is not None else llm_text) or "").strip()
+        )
         allowed = sorted(self._allowed_tools)
         normalized_tool_calls: Optional[List[Dict[str, Any]]] = tool_calls
         if normalized_tool_calls and self._allowed_tools:
@@ -464,6 +501,11 @@ class LocalProvider(AIProviderInterface):
         hangup_farewell = self._extract_hangup_farewell(normalized_tool_calls)
         if hangup_farewell:
             response_text = hangup_farewell
+        elif normalized_tool_calls and any(
+            str(tool_call.get("name") or "").strip() == "hangup_call"
+            for tool_call in normalized_tool_calls
+        ):
+            response_text = response_text or "Goodbye!"
 
         if response_text and self.on_event:
             await self.on_event(

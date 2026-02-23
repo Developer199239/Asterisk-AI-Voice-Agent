@@ -210,3 +210,27 @@ def text_contains_end_call_intent(text: str, markers: Iterable[str]) -> bool:
     if normalized != _normalize_text(text):
         return text_contains_marker(_normalize_text(text), markers)
     return False
+
+
+def text_is_short_polite_closing(text: str) -> bool:
+    """
+    Detect short gratitude closings even when custom marker lists are too narrow.
+
+    This is intentionally conservative to avoid mid-call false positives:
+    - utterance must be short (<= 6 words after normalization)
+    - must look like a closing gratitude phrase (e.g. "okay thank you")
+    """
+    normalized = _normalize_end_call_text(text)
+    if not normalized:
+        return False
+    compact = _normalize_text(re.sub(r"[^a-z0-9\s]", " ", normalized))
+    if not compact:
+        return False
+    if len(compact.split()) > 6:
+        return False
+    return bool(
+        re.fullmatch(
+            r"(?:ok(?:ay)?\s+)?(?:thank\s+you|thanks)(?:\s+(?:so\s+much|very\s+much))?(?:\s+(?:bye|goodbye))?",
+            compact,
+        )
+    )

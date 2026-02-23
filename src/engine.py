@@ -66,6 +66,7 @@ from src.pipelines.base import LLMResponse
 from src.tools.telephony.hangup_policy import (
     resolve_hangup_policy,
     text_contains_end_call_intent,
+    text_is_short_polite_closing,
     normalize_marker_list,
 )
 
@@ -8538,7 +8539,10 @@ class Engine:
                     if policy_mode != "relaxed":
                         end_markers = (hangup_policy.get("markers") or {}).get("end_call", [])
                         user_text = (getattr(session, "last_transcript", None) or "").strip()
-                        has_end_intent = text_contains_end_call_intent(user_text, end_markers)
+                        has_end_intent = (
+                            text_contains_end_call_intent(user_text, end_markers)
+                            or text_is_short_polite_closing(user_text)
+                        )
                         if not has_end_intent:
                             before_count = len(tool_calls)
                             tool_calls = [tc for tc in tool_calls if (tc.get("name") or "").strip() != "hangup_call"]
@@ -9434,7 +9438,10 @@ class Engine:
                                 error=str(e),
                                 exc_info=True,
                             )
-                        has_end_intent = text_contains_end_call_intent(normalized_user_text, end_markers)
+                        has_end_intent = (
+                            text_contains_end_call_intent(normalized_user_text, end_markers)
+                            or text_is_short_polite_closing(normalized_user_text)
+                        )
                         before_count = len(tool_calls)
                         if not has_end_intent:
                             tool_calls = [tc for tc in tool_calls if tc.get("name") != "hangup_call"]
