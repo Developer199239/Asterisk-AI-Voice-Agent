@@ -15,6 +15,7 @@ ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false
 ARG INCLUDE_LLAMA=true
+ARG MELOTTS_GIT_REF=b633f243412169b999526e19eb6fcac0974b5d30
 
 WORKDIR /usr/src/app
 
@@ -75,7 +76,13 @@ RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
 
 RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         echo "📦 Installing MeloTTS..." && \
-        pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git && \
+        git clone https://github.com/myshell-ai/MeloTTS.git /tmp/MeloTTS && \
+        cd /tmp/MeloTTS && \
+        git checkout "${MELOTTS_GIT_REF}" && \
+        python -c "from pathlib import Path; p=Path('/tmp/MeloTTS/setup.py'); s=p.read_text(); s=s.replace(\"from pip.req import parse_requirements\\n\", \"\"); s=s.replace(\"install_reqs = parse_requirements('requirements.txt')\\nreqs = [str(ir.req) for ir in install_reqs]\\n\", \"with open(os.path.join(cwd, 'requirements.txt'), encoding='utf-8') as _f:\\n    reqs = [ln.strip() for ln in _f if ln.strip() and not ln.startswith('#')]\\n\"); p.write_text(s)" && \
+        pip install --no-cache-dir -r requirements.txt && \
+        pip install --no-cache-dir --no-build-isolation . && \
+        cd / && rm -rf /tmp/MeloTTS && \
         python -m unidic download && \
         python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" && \
         echo "📦 Pre-downloading MeloTTS BERT model..." && \
