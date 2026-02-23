@@ -23,6 +23,7 @@ router = APIRouter()
 
 DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 DISK_BUILD_BLOCK_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB (hard stop for image builds)
+DISK_BUILD_BLOCK_BYTES_MELOTTS = 12 * 1024 * 1024 * 1024  # 12 GB (MeloTTS rebuilds pull larger deps)
 
 
 def _auto_detect_kroko_model() -> Optional[str]:
@@ -65,23 +66,30 @@ def _format_bytes(num_bytes: int) -> str:
     return f"{size:.1f} {units[unit]}"
 
 
-def _disk_build_preflight(path: str) -> tuple[bool, Optional[str]]:
+def _disk_build_preflight(
+    path: str,
+    *,
+    min_free_bytes: int = DISK_BUILD_BLOCK_BYTES,
+    warn_free_bytes: int = DISK_WARNING_BYTES,
+) -> tuple[bool, Optional[str]]:
     """
     Returns (ok, warning_or_error_message).
-    - Warns when free space < DISK_WARNING_BYTES.
-    - Blocks when free space < DISK_BUILD_BLOCK_BYTES.
+    - Warns when free space < warn_free_bytes.
+    - Blocks when free space < min_free_bytes.
     """
     try:
-        total, used, free = shutil.disk_usage(path)
+        _, _, free = shutil.disk_usage(path)
     except Exception:
         return True, None
 
-    if free < DISK_BUILD_BLOCK_BYTES:
+    if free < min_free_bytes:
         return (
             False,
-            f"Insufficient disk space for rebuild: free={_format_bytes(free)} required={_format_bytes(DISK_BUILD_BLOCK_BYTES)} (path={path}).",
+            "Insufficient disk space for rebuild: "
+            f"free={_format_bytes(free)} required={_format_bytes(min_free_bytes)} (path={path}). "
+            "Free disk space (for example: docker system prune -af) and retry.",
         )
-    if free < DISK_WARNING_BYTES:
+    if free < warn_free_bytes:
         return True, f"Low disk space: only {_format_bytes(free)} free (path={path})."
     return True, None
 
@@ -1262,7 +1270,13 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         _update_env_file(env_file, env_updates)
     
     try:
-        ok, warn_or_err = _disk_build_preflight(PROJECT_ROOT)
+        min_free_bytes = DISK_BUILD_BLOCK_BYTES_MELOTTS if request.include_melotts else DISK_BUILD_BLOCK_BYTES
+        warn_free_bytes = max(DISK_WARNING_BYTES, min_free_bytes)
+        ok, warn_or_err = _disk_build_preflight(
+            PROJECT_ROOT,
+            min_free_bytes=min_free_bytes,
+            warn_free_bytes=warn_free_bytes,
+        )
         if not ok:
             return RebuildResponse(
                 success=False,
@@ -1293,9 +1307,21 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         )
 
         if code != 0:
+            output_tail = (out or "")[-1200:] if out else "Unknown error"
+            if "no space left on device" in (out or "").lower():
+                _, _, free = shutil.disk_usage(PROJECT_ROOT)
+                return RebuildResponse(
+                    success=False,
+                    message=(
+                        "Docker build failed: no space left on device. "
+                        f"Current free space={_format_bytes(free)} at {PROJECT_ROOT}. "
+                        "Free disk space (for example: docker system prune -af) and retry."
+                    ),
+                    phase="error",
+                )
             return RebuildResponse(
                 success=False,
-                message=f"Docker build failed: {(out or '')[-800:] if out else 'Unknown error'}",
+                message=f"Docker build failed: {output_tail}",
                 phase="error"
             )
         

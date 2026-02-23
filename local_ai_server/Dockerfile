@@ -79,9 +79,42 @@ RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         git clone https://github.com/myshell-ai/MeloTTS.git /tmp/MeloTTS && \
         cd /tmp/MeloTTS && \
         git checkout "${MELOTTS_GIT_REF}" && \
-        python -c "from pathlib import Path; p=Path('/tmp/MeloTTS/setup.py'); s=p.read_text(); s=s.replace(\"from pip.req import parse_requirements\\n\", \"\"); s=s.replace(\"install_reqs = parse_requirements('requirements.txt')\\nreqs = [str(ir.req) for ir in install_reqs]\\n\", \"with open(os.path.join(cwd, 'requirements.txt'), encoding='utf-8') as _f:\\n    reqs = [ln.strip() for ln in _f if ln.strip() and not ln.startswith('#')]\\n\"); p.write_text(s)" && \
-        pip install --no-cache-dir -r requirements.txt && \
-        pip install --no-cache-dir --no-build-isolation . && \
+        python - <<'PY' && \
+from pathlib import Path
+
+setup_path = Path("/tmp/MeloTTS/setup.py")
+setup_text = setup_path.read_text()
+setup_text = setup_text.replace("from pip.req import parse_requirements\n", "")
+setup_text = setup_text.replace(
+    "install_reqs = parse_requirements('requirements.txt')\nreqs = [str(ir.req) for ir in install_reqs]\n",
+    "with open(os.path.join(cwd, 'requirements.txt'), encoding='utf-8') as _f:\n    reqs = [ln.strip() for ln in _f if ln.strip() and not ln.startswith('#')]\n",
+)
+setup_path.write_text(setup_text)
+
+excluded_prefixes = ("torch", "torchaudio", "gradio")
+filtered_requirements = []
+for raw_line in Path("/tmp/MeloTTS/requirements.txt").read_text().splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    if line.lower().startswith(excluded_prefixes):
+        continue
+    filtered_requirements.append(line)
+Path("/tmp/MeloTTS/requirements.filtered.txt").write_text("\n".join(filtered_requirements) + "\n")
+print(f"MeloTTS filtered requirements prepared: {len(filtered_requirements)} packages")
+PY
+        pip install --no-cache-dir -r requirements.filtered.txt && \
+        python - <<'PY' && \
+import importlib.util
+import subprocess
+import sys
+
+missing = [pkg for pkg in ("torch", "torchaudio") if importlib.util.find_spec(pkg) is None]
+if missing:
+    print(f"Installing missing runtime dependencies: {missing}")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", *missing])
+PY
+        pip install --no-cache-dir --no-build-isolation --no-deps . && \
         cd / && rm -rf /tmp/MeloTTS && \
         python -m unidic download && \
         python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" && \
