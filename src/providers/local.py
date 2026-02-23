@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import hashlib
+import re
 from uuid import uuid4
 from typing import Callable, Optional, List, Dict, Any
 import websockets
@@ -272,6 +273,50 @@ class LocalProvider(AIProviderInterface):
         if task and not task.done():
             task.cancel()
 
+    @staticmethod
+    def _looks_like_transfer_intent(text: str) -> bool:
+        normalized = str(text or "").strip().lower()
+        if not normalized:
+            return False
+        direct_phrases = (
+            "transfer me",
+            "connect me",
+            "route me",
+            "put me through",
+            "send me to",
+            "move me to",
+            "live agent",
+            "human agent",
+            "talk to agent",
+            "speak to agent",
+            "representative",
+            "operator",
+            "attended transfer",
+            "blind transfer",
+        )
+        if any(phrase in normalized for phrase in direct_phrases):
+            return True
+        return bool(
+            re.search(
+                r"\b(?:transfer|connect|route|send|move|speak|talk)\b.{0,24}\b(?:agent|human|operator|representative|support|sales|billing|ext|extension|\d{3,6})\b",
+                normalized,
+            )
+        )
+
+    @staticmethod
+    def _extract_hangup_farewell(tool_calls: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+        for tool_call in tool_calls or []:
+            name = str(tool_call.get("name") or "").strip()
+            if name != "hangup_call":
+                continue
+            params = tool_call.get("parameters") or tool_call.get("arguments") or {}
+            if not isinstance(params, dict):
+                continue
+            farewell = str(params.get("farewell_message") or "").strip()
+            if farewell:
+                return farewell
+        return None
+
     async def _emit_local_llm_result(
         self,
         *,
@@ -283,17 +328,7 @@ class LocalProvider(AIProviderInterface):
         parse_failures: int = 0,
         repair_attempts: int = 0,
     ) -> None:
-        # Emit agent transcript for conversation history (use clean text).
-        response_text = (clean_text if clean_text is not None else llm_text) or ""
-        response_text = response_text.strip()
-        if response_text and self.on_event:
-            await self.on_event({
-                "type": "agent_transcript",
-                "call_id": call_id,
-                "text": response_text,
-            })
-            logger.debug("Emitted agent transcript for history", call_id=call_id, text=response_text[:50])
-
+        response_text = ((clean_text if clean_text is not None else llm_text) or "").strip()
         allowed = sorted(self._allowed_tools)
         normalized_tool_calls: Optional[List[Dict[str, Any]]] = tool_calls
         if normalized_tool_calls and self._allowed_tools:
@@ -310,6 +345,47 @@ class LocalProvider(AIProviderInterface):
                     tools=[tc.get("name") for tc in normalized_tool_calls],
                 )
                 normalized_tool_calls = None
+
+        if normalized_tool_calls and call_id:
+            user_text = self._last_user_transcript_by_call.get(call_id, "")
+            transfer_tools = {
+                "live_agent_transfer",
+                "blind_transfer",
+                "attended_transfer",
+                "request_transfer",
+                "transfer",
+            }
+            if not self._looks_like_transfer_intent(user_text):
+                kept_tool_calls = []
+                dropped_transfer_tools = []
+                for tool_call in normalized_tool_calls:
+                    tool_name = str(tool_call.get("name") or "").strip()
+                    if tool_name in transfer_tools:
+                        dropped_transfer_tools.append(tool_name)
+                    else:
+                        kept_tool_calls.append(tool_call)
+                if dropped_transfer_tools:
+                    logger.info(
+                        "Dropping transfer-like tool call from local LLM (no transfer intent detected)",
+                        call_id=call_id,
+                        tools=dropped_transfer_tools,
+                        user_preview=(user_text or "")[:80],
+                    )
+                normalized_tool_calls = kept_tool_calls or None
+
+        hangup_farewell = self._extract_hangup_farewell(normalized_tool_calls)
+        if hangup_farewell:
+            response_text = hangup_farewell
+
+        if response_text and self.on_event:
+            await self.on_event(
+                {
+                    "type": "agent_transcript",
+                    "call_id": call_id,
+                    "text": response_text,
+                }
+            )
+            logger.debug("Emitted agent transcript for history", call_id=call_id, text=response_text[:50])
 
         logger.info(
             "Local tool gateway result",
