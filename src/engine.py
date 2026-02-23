@@ -5438,7 +5438,13 @@ class Engine:
                     cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
                     last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
                     in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
-                    min_ms = int(getattr(cfg, "pipeline_min_ms", 0) or getattr(cfg, "min_ms", 250))
+                    provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                    min_ms = self._resolve_barge_in_min_ms(
+                        session,
+                        cfg,
+                        pipeline_mode=True,
+                        provider_name=provider_name,
+                    )
                     if not in_cooldown and int(getattr(session, "barge_in_candidate_ms", 0)) >= min_ms:
                         try:
                             try:
@@ -5969,7 +5975,13 @@ class Engine:
                 last_barge_in_ts = float(getattr(session, 'last_barge_in_ts', 0.0) or 0.0)
                 in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
 
-                min_ms = int(getattr(cfg, 'min_ms', 250))
+                provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                min_ms = self._resolve_barge_in_min_ms(
+                    session,
+                    cfg,
+                    pipeline_mode=False,
+                    provider_name=provider_name,
+                )
                 should_trigger = not in_cooldown and session.barge_in_candidate_ms >= min_ms
                 
                 # CRITICAL FIX #2: Skip engine-level barge-in for OpenAI Realtime
@@ -6599,6 +6611,30 @@ class Engine:
             return bytes([0xFF]) * length  # μ-law silence
         return b"\x00" * length  # PCM16 silence (zeroed samples)
 
+    @staticmethod
+    def _resolve_barge_in_min_ms(
+        session: CallSession,
+        cfg,
+        *,
+        pipeline_mode: bool,
+        provider_name: Optional[str] = None,
+    ) -> int:
+        """Resolve effective barge-in min duration with local/pipeline-only first-turn fast path."""
+        base_min = int(getattr(cfg, "pipeline_min_ms", 0) or getattr(cfg, "min_ms", 250)) if pipeline_mode else int(getattr(cfg, "min_ms", 250))
+
+        scope_applies = pipeline_mode or (provider_name == "local")
+        if not scope_applies:
+            return base_min
+
+        if getattr(session, "conversation_state", None) != "greeting":
+            return base_min
+
+        if int(getattr(session, "barge_in_count", 0) or 0) > 0:
+            return base_min
+
+        first_barge_min = int(getattr(cfg, "local_first_barge_min_ms", 80) or 80)
+        return max(40, min(base_min, first_barge_min))
+
     async def _apply_barge_in_action(self, call_id: str, *, source: str, reason: str) -> None:
         """Apply platform-owned barge-in actions (flush local output only).
 
@@ -6878,7 +6914,13 @@ class Engine:
                     cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
                     last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
                     in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
-                    min_ms = int(getattr(cfg, "pipeline_min_ms", 0) or getattr(cfg, "min_ms", 250))
+                    provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                    min_ms = self._resolve_barge_in_min_ms(
+                        session,
+                        cfg,
+                        pipeline_mode=True,
+                        provider_name=provider_name,
+                    )
                     if not in_cooldown and int(getattr(session, "barge_in_candidate_ms", 0)) >= min_ms:
                         try:
                             try:
@@ -7091,7 +7133,13 @@ class Engine:
                 last_barge_in_ts = float(getattr(session, 'last_barge_in_ts', 0.0) or 0.0)
                 in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
 
-                min_ms = int(getattr(cfg, 'min_ms', 250))
+                provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                min_ms = self._resolve_barge_in_min_ms(
+                    session,
+                    cfg,
+                    pipeline_mode=False,
+                    provider_name=provider_name,
+                )
                 if not in_cooldown and session.barge_in_candidate_ms >= min_ms:
                     try:
                         try:
