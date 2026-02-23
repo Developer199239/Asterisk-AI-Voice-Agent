@@ -120,6 +120,15 @@ interface RuntimeGpuStatus {
     checked_at_epoch_ms?: number | null;
 }
 
+interface ApplyProgressState {
+    phase: 'preparing' | 'rebuilding' | 'switching' | 'restarting' | 'verifying' | 'done' | 'error';
+    percent: number;
+    message: string;
+    startedAt: number;
+    elapsedSeconds: number;
+    details: string[];
+}
+
 const ModelsPage = () => {
     const { confirm } = useConfirmDialog();
     const [catalog, setCatalog] = useState<{ stt: ModelInfo[]; tts: ModelInfo[]; llm: ModelInfo[] }>({ stt: [], tts: [], llm: [] });
@@ -146,6 +155,7 @@ const ModelsPage = () => {
     const [envConfig, setEnvConfig] = useState<Record<string, string>>({});
     const [forceIncompatibleApply, setForceIncompatibleApply] = useState(false);
     const [runtimeGpu, setRuntimeGpu] = useState<RuntimeGpuStatus | null>(null);
+    const [applyProgress, setApplyProgress] = useState<ApplyProgressState | null>(null);
     
     // Rebuild dialog state
     const [rebuildDialog, setRebuildDialog] = useState<{
@@ -576,10 +586,41 @@ const ModelsPage = () => {
         }
 
         setRestarting(true);
+        const startTime = Date.now();
+        const progressTimer = window.setInterval(() => {
+            setApplyProgress(prev => {
+                if (!prev) return prev;
+                return { ...prev, elapsedSeconds: Math.max(0, Math.floor((Date.now() - prev.startedAt) / 1000)) };
+            });
+        }, 1000);
+
+        const updateApplyProgress = (
+            phase: ApplyProgressState['phase'],
+            percent: number,
+            message: string,
+            detail?: string
+        ) => {
+            setApplyProgress(prev => {
+                const details = detail
+                    ? [...(prev?.details || []), detail].slice(-6)
+                    : (prev?.details || []);
+                return {
+                    phase,
+                    percent,
+                    message,
+                    startedAt: prev?.startedAt || startTime,
+                    elapsedSeconds: Math.max(0, Math.floor((Date.now() - startTime) / 1000)),
+                    details,
+                };
+            });
+        };
+
+        updateApplyProgress('preparing', 5, 'Validating local model changes...', 'Starting apply flow');
         try {
             const remainingChanges = { ...pendingChanges };
 
             if (requiresAnyRebuild && forceIncompatibleApply) {
+                updateApplyProgress('rebuilding', 20, 'Rebuilding local_ai_server image (this can take several minutes)...', 'Triggered forced rebuild for missing backends');
                 const sttSel = parseSelection(remainingChanges.stt);
                 const ttsSel = parseSelection(remainingChanges.tts);
 
@@ -605,6 +646,7 @@ const ModelsPage = () => {
                 if (!rebuildRes.data?.success) {
                     throw new Error(rebuildRes.data?.message || 'Local AI rebuild failed.');
                 }
+                updateApplyProgress('restarting', 72, 'Rebuild complete. Restarting Local AI service...', rebuildRes.data?.message || 'Rebuild completed');
                 showToast(rebuildRes.data?.message || 'Local AI rebuild completed.', 'success');
 
                 if (requiresRebuild.fasterWhisper) delete remainingChanges.stt;
@@ -613,6 +655,7 @@ const ModelsPage = () => {
 
             // Apply LLM changes (model and/or tuning) in one request to avoid multiple reloads.
             if (remainingChanges.llm || hasLlmTuningChanges) {
+                updateApplyProgress('switching', 82, 'Applying LLM changes...', 'Sending LLM switch request');
                 await axios.post('/api/local-ai/switch', {
                     model_type: 'llm',
                     model_path: remainingChanges.llm || undefined,
@@ -625,6 +668,7 @@ const ModelsPage = () => {
 
             for (const [type, value] of Object.entries(remainingChanges)) {
                 if (!value) continue;
+                updateApplyProgress('switching', 88, `Applying ${type.toUpperCase()} change...`, `Switching ${type} backend/model`);
                 const [backend, ...pathParts] = value.split(':');
                 await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'), forceIncompatibleApply);
             }
@@ -633,13 +677,20 @@ const ModelsPage = () => {
             setPendingChanges({});
             setPendingLlmConfig({});
             setForceIncompatibleApply(false);
+            updateApplyProgress('verifying', 95, 'Waiting for Local AI to come back online...', 'Refreshing active model status');
             setTimeout(() => {
                 fetchActiveModels();
+                updateApplyProgress('done', 100, 'Apply completed successfully.', 'Local model configuration is now active');
+                window.setTimeout(() => setApplyProgress(null), 2000);
                 setRestarting(false);
+                window.clearInterval(progressTimer);
             }, 15000);
         } catch (err: any) {
+            const errorMsg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Failed to apply changes';
+            updateApplyProgress('error', 100, 'Apply failed.', errorMsg);
             showToast(`Failed to apply changes: ${err.response?.data?.detail || err.response?.data?.message || err.message}`, 'error');
             setRestarting(false);
+            window.clearInterval(progressTimer);
         }
     };
 
@@ -986,7 +1037,38 @@ const ModelsPage = () => {
                 {/* Apply Changes Button */}
                 {Object.keys(pendingChanges).length > 0 && (
                     <div className="mt-4 space-y-3">
-                        {compatibilityIssues.length > 0 && (
+                        {restarting && applyProgress && (
+                            <div className="p-3 rounded-md border border-blue-500/30 bg-blue-500/10 text-sm space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="font-medium text-blue-700 dark:text-blue-300">
+                                        {applyProgress.message}
+                                    </div>
+                                    <div className="text-xs text-blue-700 dark:text-blue-300">
+                                        {applyProgress.percent}%
+                                    </div>
+                                </div>
+                                <div className="h-2 rounded-full bg-blue-200/70 dark:bg-blue-900/50 overflow-hidden">
+                                    <div
+                                        className={`h-full transition-all duration-300 ${
+                                            applyProgress.phase === 'error' ? 'bg-red-500' : 'bg-blue-500'
+                                        }`}
+                                        style={{ width: `${applyProgress.percent}%` }}
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between text-xs text-blue-800 dark:text-blue-200">
+                                    <span>Phase: {applyProgress.phase}</span>
+                                    <span>Elapsed: {applyProgress.elapsedSeconds}s</span>
+                                </div>
+                                {applyProgress.details.length > 0 && (
+                                    <div className="text-xs text-blue-900 dark:text-blue-100 space-y-0.5 max-h-20 overflow-auto">
+                                        {applyProgress.details.map((detail, idx) => (
+                                            <div key={`${detail}-${idx}`} className="truncate">• {detail}</div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {!restarting && compatibilityIssues.length > 0 && (
                             <div className="p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-sm">
                                 <div className="font-medium text-amber-700 dark:text-amber-300 mb-1">
                                     Compatibility checks found warnings
