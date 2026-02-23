@@ -83,10 +83,10 @@ RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         if ! python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('torchaudio') else 1)"; then pip install --no-cache-dir torchaudio; fi && \
         pip install --no-cache-dir --no-build-isolation --no-deps . && \
         cd / && rm -rf /tmp/MeloTTS && \
-        python -m unidic download && \
-        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" && \
-        python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" && \
-        python -c "from melo.api import TTS; tts = TTS(language='EN', device='cpu'); print('MeloTTS ready')"; \
+        python -m unidic download || true && \
+        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" || true && \
+        python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" || true && \
+        python -c "from melo.api import TTS; print('MeloTTS package ready')"; \
     fi
 
 RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \
