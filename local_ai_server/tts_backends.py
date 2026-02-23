@@ -159,6 +159,7 @@ class MeloTTSBackend:
         """Initialize the MeloTTS model."""
         try:
             from melo.api import TTS
+            self._patch_legacy_download_urls()
             
             logging.info(
                 "🎙️ MELOTTS - Initializing (voice=%s, device=%s, speed=%.1f)",
@@ -203,6 +204,28 @@ class MeloTTSBackend:
         except Exception as exc:
             logging.error("❌ MELOTTS - Failed to initialize: %s", exc)
             return False
+
+    @staticmethod
+    def _patch_legacy_download_urls() -> None:
+        try:
+            import melo.download_utils as download_utils
+        except Exception:
+            return
+
+        patched = 0
+        for attr in ("DOWNLOAD_CKPT_URLS", "DOWNLOAD_CONFIG_URLS", "PRETRAINED_MODELS"):
+            value = getattr(download_utils, attr, None)
+            if isinstance(value, dict):
+                for key, url in list(value.items()):
+                    if isinstance(url, str) and "myshell-public-repo-hosting.s3.amazonaws.com" in url:
+                        value[key] = url.replace(
+                            "myshell-public-repo-hosting.s3.amazonaws.com",
+                            "myshell-public-repo-host.s3.amazonaws.com",
+                        )
+                        patched += 1
+
+        if patched:
+            logging.info("🎙️ MELOTTS - Patched %d legacy download URLs", patched)
     
     def synthesize(self, text: str) -> bytes:
         """
