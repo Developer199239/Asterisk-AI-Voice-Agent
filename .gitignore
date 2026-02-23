@@ -211,7 +211,6 @@ logs/
 archived/*
 !archived/GPU-LEARNINGS.md
 !archived/local-ai-server-audit-report.md
-!archived/GA-6.3.1-Readiness.md
 
 # IDE specific
 *.swp
