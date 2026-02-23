@@ -270,7 +270,7 @@ Response:
 {
   "type": "status_response",
   "status": "ok",
-  "stt_backend": "vosk|kroko|sherpa|faster_whisper",
+  "stt_backend": "vosk|kroko|sherpa|faster_whisper|whisper_cpp",
   "tts_backend": "piper|kokoro|melotts",
   "models": {
     "stt": { "loaded": true, "path": "/app/models/stt/...", "display": "vosk-model-en-us-0.22" },
@@ -350,8 +350,11 @@ Response:
     "vosk": true,
     "sherpa": true,
     "kroko_embedded": true,
+    "faster_whisper": true,
+    "whisper_cpp": false,
     "piper": true,
     "kokoro": true,
+    "melotts": false,
     "llama": true
   }
 }
@@ -579,5 +582,5 @@ Example:
 
 ## Versioning and Compatibility
 
-- Protocol is stable for v4.0 GA track. Message types and fields correspond to the implementation in `local_ai_server/ws_protocol.py`.
+- Protocol is stable for v6.3.1 GA track. Message types and fields correspond to the implementation in `local_ai_server/ws_protocol.py`.
 - The engine's local provider uses the same contract to support pipelines defined in `config/ai-agent.*.yaml`.

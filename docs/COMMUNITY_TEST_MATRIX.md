@@ -123,6 +123,61 @@ This auto-detects your hardware, queries the Local AI Server for model info, par
   ✅ demo_post_call_webhook: 1 executed [post_call]
 ```
 
+```
+**Date**: 2026-02-23
+**Hardware**: AMD EPYC 7443P 24-Core Processor, 66GB RAM
+**GPU**: NVIDIA GeForce RTX 4090 24GB
+**OS**: Ubuntu 22.04.5 LTS
+**Docker**: 29.2.1
+**STT**: kroko / Kroko (embedded, port 6006)
+**TTS**: kokoro / Kokoro (af_heart, mode=hf)
+**LLM**: Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf / n_ctx=4096
+**LLM GPU Layers**: -1
+**Transport**: ExternalMedia RTP
+**Pipeline**: local
+**Runtime Mode**: full
+**E2E Latency**: ~1.0s
+**LLM Latency**: ~541ms avg (16 samples, last=625ms)
+**STT Transcripts (last session)**: 35
+**TTS Responses (last session)**: 19
+**Quality (1-5)**: <your rating>
+**Notes**: Natural voice quality
+**Tool Calls**:
+  ⚠️ hangup_call: 2 executed, 1 blocked [guardrail, local_llm]
+  ✅ demo_post_call_webhook: 2 executed [post_call]
+```
+
+```
+**Date**: 2026-02-23
+**Hardware**: AMD EPYC 7443P 24-Core Processor, 66GB RAM
+**GPU**: NVIDIA GeForce RTX 4090 24GB
+**OS**: Ubuntu 22.04.5 LTS
+**Docker**: 29.2.1
+**STT**: kroko / Kroko (embedded, port 6006)
+**TTS**: melotts / MeloTTS (EN-US)
+**LLM**: Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf / n_ctx=4096
+**LLM GPU Layers**: -1
+**Transport**: ExternalMedia RTP
+**Pipeline**: local
+**Runtime Mode**: full
+**E2E Latency**: ~1.0s
+**LLM Latency**: ~546ms avg (18 samples, last=608ms)
+**STT Transcripts (last session)**: 52
+**TTS Responses (last session)**: 22
+**Quality (1-5)**: <your rating>
+**Notes**: Start of the conversation is slow but then it picks up
+**Tool Calls**:
+  ✅ hangup_call: 2 executed [local_llm]
+  ✅ demo_post_call_webhook: 2 executed [post_call]
+```
+
+#### Comparative Summary (2026-02-23 RTX 4090)
+
+- **LLM latency stability**: Both runs are tightly clustered (~541ms vs ~546ms avg) with similar tails (last=625ms vs 608ms).
+- **TTS behavior**: Kokoro notes “Natural voice quality”; MeloTTS notes “Start of the conversation is slow but then it picks up” (suggesting warm-up/caching or first-utterance overhead).
+- **Guardrails**: One extra `hangup_call` was blocked in the Kokoro run (`[guardrail, local_llm]`), while the MeloTTS run had only executed tool calls.
+- **Throughput**: MeloTTS run processed more transcripts (52 vs 35) and more TTS responses (22 vs 19) within the logged session, implying good steady-state performance under longer sessions.
+
 ## Submission Template
 
 Use this when adding a row or opening an issue:

@@ -12,6 +12,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [6.3.1] - 2026-02-23
+
+### Added
+
+- **CLI verification tooling**: `agent check --local/--remote` for Local AI Server + Asterisk/Admin UI validation; `agent rca --local` for automated local test report generation and Community Test Matrix submissions.
+- **Community Test Matrix**: Added `docs/COMMUNITY_TEST_MATRIX.md` and a GitHub issue template for standardized local AI test result reporting.
+- **Admin UI backend enable/rebuild flow**: One-click backend enable with progress tracking for optional Local AI Server backends (e.g., Faster-Whisper, Whisper.cpp, MeloTTS).
+- **Local AI Server WS protocol contract**: JSON-schema-based protocol contract + smoke test utilities to stabilize client/server evolution.
+
+### Improved
+
+- **CPU-first onboarding**: Local AI Server defaults to `runtime_mode=minimal` when preflight reports no GPU (`GPU_AVAILABLE=false`) so CPU-only systems start reliably without LLM model files.
+- **GPU ergonomics**: GPU layer auto-detection for `LOCAL_LLM_GPU_LAYERS=-1`, preflight warnings for GPU-detected-but-CPU-configured LLM runs, and GPU compose overlay improvements for out-of-the-box backend switching.
+- **Model lifecycle UX**: Expanded model catalog metadata, clearer rebuild requirements, and improved model switching + status reflection (including Kroko embedded inference and Kokoro settings alignment).
+
+### Fixed
+
+- **Local provider audio + barge-in stability**: Robust barge-in protocol handling, improved gating to avoid STT/TTS talk-loops, and stabilized timing/latency tracking for local calls.
+- **Tool-call parsing robustness**: Hardened local tool-call extraction against malformed wrappers/markdown/control-token leaks; improved clean-text extraction to prevent tool syntax from reaching TTS.
+- **Hangup correctness**: Added/strengthened hangup guardrails for local LLMs to prevent hallucinated end-call tool executions; improved farewell handling to avoid spoken tool chatter.
+- **MeloTTS reliability**: Fixed build/runtime pinning, warmup behavior, and upstream install regressions to restore stable container rebuilds.
+
+### Refactored
+
+- **Local AI Server internals**: Consolidated and hardened model loading, status reporting, and model switching paths with degraded-start behavior and operator-visible fallbacks.
+
+### Guardrails
+
+- **Structured local tool gateway**: Allowlist-driven tool execution path with repair/structured-decision fallbacks; explicit blocking of unsafe terminal tools without user intent (especially `hangup_call`).
+
+### Performance
+
+- **LLM startup tuning**: Improved default context sizing on GPU, optional auto-context selection/caching, and startup warmup/latency instrumentation for operator visibility.
+
+### Security
+
+- **Concurrent rebuild race condition**: Fixed TOCTOU race on `_active_rebuild` flag — atomic check-and-set under lock prevents duplicate Docker builds.
+- **Safe archive extraction**: Zip and tar `extractall` calls now pass validated member lists to prevent path traversal via crafted archives (zip-slip).
+- **GGUF magic-byte validation**: Downloaded `.gguf` model files are validated for the `GGUF` magic header before being accepted; corrupt or non-GGUF files are cleaned up automatically.
+- **Active-call guard on model switch**: `/api/local-ai/switch` blocks model switches while AI Engine reports active calls (override via `force_incompatible_apply`); unreachable engine treated as blocked.
+- **Path traversal hardening**: All model download paths, voice file names, and custom LLM model paths are sanitized via `_safe_filename` and `_safe_join_under_dir` helpers; strict filename validation rejects directory traversal patterns.
+
+### Docs
+
+- **Local AI onboarding docs refresh**: Updated installation + local-only setup guides, hardware requirements, local profiles, and CLI tools guide; added archived GPU learnings + audit report for GA readiness tracking.
+
 ## [6.2.2] - 2026-02-20
 
 ### Fixed
@@ -1434,9 +1480,10 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 
 ## Version History
 
+- **v6.3.1** (2026-02-23) - Local AI Server onboarding + model lifecycle hardening, tool gateway/guardrails, model catalog + UI rebuild flows, CLI verification tooling, expanded docs and audits
 - **v6.2.2** (2026-02-20) - Vertex AI credentials auto-management, ADC graceful fallback, secrets dir permissions, install.sh YAML dupe fix, dashboard pipeline variant display
 - **v6.2.1** (2026-02-20) - Google Vertex AI Live API Support, credential upload/verify/delete, preflight secrets dir check
-- **v6.2.0** (2026-02-20) - Google Live API integration, Admin UI provider settings, golden baseline configs
+- **v6.2.0** (2026-02-15) - Google Live API integration, Admin UI provider settings, golden baseline configs
 - **v5.3.1** (2026-02-01) - Phase Tools (HTTP + webhooks) + Deepgram language + Admin UI + RCA enhancements + stability fixes
 - **v5.2.5** (2026-01-28) - Stable Updates improvements + updater image publishing + AudioSocket default
 - **v5.2.4** (2026-01-26) - Admin UI Docker Services hardening + remove background update checks
@@ -1453,7 +1500,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.2...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.3.1...HEAD
+[6.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.2...v6.3.1
 [6.2.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.1...v6.2.2
 [6.2.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.1.1...v6.2.0

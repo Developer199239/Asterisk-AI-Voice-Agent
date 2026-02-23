@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
 import os
+import re
 import yaml
 import subprocess
 import stat
@@ -352,11 +353,53 @@ def _write_sha256_sidecar(path: str, sha256_hex: str) -> None:
     atomic_write_text(f"{path}.sha256", f"{sha256_hex}  {os.path.basename(path)}\n")
 
 
+GGUF_MAGIC = b"GGUF"
+
+
+def _validate_gguf_magic(path: str) -> bool:
+    """Check that a .gguf file starts with the GGUF magic bytes."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(4)
+        return header == GGUF_MAGIC
+    except Exception:
+        return False
+
+
 def _is_within_directory(base_dir: str, candidate_path: str) -> bool:
     """Return True when `candidate_path` resolves under `base_dir`."""
     base = os.path.abspath(base_dir)
     cand = os.path.abspath(candidate_path)
     return cand == base or cand.startswith(base + os.sep)
+
+
+_FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _safe_filename(name: str, *, default: str = "download") -> str:
+    """
+    Sanitize a user/catlog-provided label into a filename-ish token.
+
+    This is used only for temporary download filenames (not final paths).
+    """
+    raw = (name or "").strip()
+    raw = _FILENAME_SAFE_RE.sub("_", raw)
+    raw = raw.strip("._-")
+    return raw or default
+
+
+def _safe_join_under_dir(base_dir: str, rel_path: str) -> str:
+    """Join `rel_path` under `base_dir`, blocking absolute/.. traversal."""
+    rel = (rel_path or "").strip()
+    if not rel:
+        raise RuntimeError("Unsafe path: empty relative path")
+    pp = PurePosixPath(rel)
+    if pp.is_absolute() or ".." in pp.parts:
+        raise RuntimeError(f"Unsafe path: {rel_path}")
+    out_path = os.path.join(base_dir, *pp.parts)
+    if not _is_within_directory(base_dir, out_path):
+        raise RuntimeError(f"Unsafe path: {rel_path}")
+    return out_path
 
 
 def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
@@ -367,6 +410,7 @@ def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
     staging = tempfile.mkdtemp(prefix=".extract_", dir=dest_dir)
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
+            safe_members: List[str] = []
             for info in zf.infolist():
                 name = info.filename
                 if not name:
@@ -380,8 +424,9 @@ def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
                 out_path = os.path.join(staging, *pp.parts)
                 if not _is_within_directory(staging, out_path):
                     raise RuntimeError(f"Unsafe zip extraction path: {name}")
+                safe_members.append(name)
 
-            zf.extractall(staging)
+            zf.extractall(staging, members=safe_members)
 
         moved: List[str] = []
         for entry in os.listdir(staging):
@@ -410,6 +455,7 @@ def _safe_extract_tar(tar_path: str, dest_dir: str) -> List[str]:
     staging = tempfile.mkdtemp(prefix=".extract_", dir=dest_dir)
     try:
         with tarfile.open(tar_path, "r:*") as tf:
+            safe_members: list = []
             for member in tf.getmembers():
                 name = member.name
                 if not name:
@@ -424,8 +470,9 @@ def _safe_extract_tar(tar_path: str, dest_dir: str) -> List[str]:
                 out_path = os.path.join(staging, *pp.parts)
                 if not _is_within_directory(staging, out_path):
                     raise RuntimeError(f"Unsafe tar extraction path: {name}")
+                safe_members.append(member)
 
-            tf.extractall(staging)
+            tf.extractall(staging, members=safe_members)
 
         moved: List[str] = []
         for entry in os.listdir(staging):
@@ -1341,8 +1388,9 @@ async def download_single_model(request: SingleModelDownload):
                 ext = os.path.splitext(request.download_url)[1] or ''
                 is_archive = False
             
-            # Download to temp file
-            temp_file = os.path.join(target_dir, f".{request.model_id}.{uuid.uuid4().hex}.download{ext}.part")
+            # Download to temp file (sanitize label to avoid path traversal in filenames)
+            temp_label = _safe_filename(request.model_id, default="model")
+            temp_file = os.path.join(target_dir, f".{temp_label}.{uuid.uuid4().hex}.download{ext}.part")
             start_time = time.time()
             last_update_time = start_time
             
@@ -1427,12 +1475,24 @@ async def download_single_model(request: SingleModelDownload):
                     os.makedirs(kokoro_dir, exist_ok=True)
                     final_path = os.path.join(kokoro_dir, "kokoro-v1_0.pth")
                 elif request.model_path:
-                    final_path = os.path.join(target_dir, request.model_path)
+                    final_path = _safe_join_under_dir(target_dir, request.model_path)
                 else:
                     final_path = os.path.join(target_dir, os.path.basename(request.download_url))
                 
                 os.makedirs(os.path.dirname(final_path), exist_ok=True)
                 shutil.move(temp_file, final_path)
+
+                # Validate GGUF magic bytes for LLM models to catch truncated/corrupt downloads
+                if final_path.endswith(".gguf") and not _validate_gguf_magic(final_path):
+                    try:
+                        os.remove(final_path)
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"GGUF validation failed: {os.path.basename(final_path)} does not have valid GGUF magic header. "
+                        "The file may be corrupt or truncated. Please retry the download."
+                    )
+
                 _write_sha256_sidecar(final_path, sha)
                 _job_output(job.id, f"✅ Saved to {final_path} (sha256={sha[:12]}...)")
                 
@@ -1463,7 +1523,8 @@ async def download_single_model(request: SingleModelDownload):
                     _job_output(job.id, f"📥 Downloading voice files...")
                     for voice_name, voice_url in request.voice_files.items():
                         try:
-                            voice_dest = os.path.join(voices_dir, f"{voice_name}.pt")
+                            safe_voice = _safe_filename(voice_name, default="voice")
+                            voice_dest = os.path.join(voices_dir, f"{safe_voice}.pt")
                             tmp_voice = voice_dest + f".{uuid.uuid4().hex}.part"
                             urllib.request.urlretrieve(voice_url, tmp_voice)
                             v_sha = _sha256_file(tmp_voice)
@@ -1592,7 +1653,14 @@ async def download_selected_models(selection: ModelSelection):
         filename = (selection.llm_model_path or "").strip()
         if not filename:
             filename = os.path.basename(url.split("?", 1)[0])
-        if not filename.endswith(".gguf"):
+        # Require a simple filename to avoid path traversal under models/llm
+        pp = PurePosixPath(filename)
+        if pp.name != filename or pp.is_absolute() or ".." in pp.parts:
+            return {
+                "status": "error",
+                "message": "Custom LLM filename must be a simple filename (no directories, no '..')",
+            }
+        if not filename.lower().endswith(".gguf"):
             return {"status": "error", "message": "Custom LLM filename must end with .gguf"}
         llm_model = {
             "id": "custom_gguf_url",
@@ -1787,12 +1855,12 @@ async def download_selected_models(selection: ModelSelection):
                     # Kroko embedded ONNX models go to models/kroko/
                     kroko_dir = os.path.join(models_dir, "kroko")
                     os.makedirs(kroko_dir, exist_ok=True)
-                    dest = os.path.join(kroko_dir, stt_model["model_path"])
+                    dest = _safe_join_under_dir(kroko_dir, stt_model["model_path"])
                     if not download_file(stt_model["download_url"], dest, "Kroko Embedded STT Model", stt_model.get("sha256")):
                         success = False
                 else:
                     # Single file model
-                    dest = os.path.join(stt_dir, stt_model["model_path"])
+                    dest = _safe_join_under_dir(stt_dir, stt_model["model_path"])
                     if not download_file(stt_model["download_url"], dest, "STT Model", stt_model.get("sha256")):
                         success = False
             else:
@@ -1803,7 +1871,7 @@ async def download_selected_models(selection: ModelSelection):
                 if llm_model.get("download_url"):
                     llm_dir = os.path.join(models_dir, "llm")
                     os.makedirs(llm_dir, exist_ok=True)
-                    dest = os.path.join(llm_dir, llm_model["model_path"])
+                    dest = _safe_join_under_dir(llm_dir, llm_model["model_path"])
                     if not download_file(llm_model["download_url"], dest, "LLM Model", llm_model.get("sha256")):
                         success = False
                 else:
@@ -1839,11 +1907,12 @@ async def download_selected_models(selection: ModelSelection):
                     # Download voice files
                     if tts_model.get("voice_files"):
                         for voice_name, voice_url in tts_model["voice_files"].items():
-                            voice_dest = os.path.join(voices_dir, f"{voice_name}.pt")
+                            safe_voice = _safe_filename(voice_name, default="voice")
+                            voice_dest = os.path.join(voices_dir, f"{safe_voice}.pt")
                             download_file(voice_url, voice_dest, f"Kokoro Voice: {voice_name}")
                 else:
                     # Standard single-file TTS model (Piper)
-                    dest = os.path.join(tts_dir, tts_model["model_path"])
+                    dest = _safe_join_under_dir(tts_dir, tts_model["model_path"])
                     if not download_file(tts_model["download_url"], dest, "TTS Model", tts_model.get("sha256")):
                         success = False
                     
@@ -1877,31 +1946,31 @@ async def download_selected_models(selection: ModelSelection):
             if stt_model.get("model_path"):
                 stt_backend = (stt_model.get("backend") or selection.stt or "").lower()
                 if stt_backend == "sherpa":
-                    stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
+                    stt_path = _safe_join_under_dir("/app/models/stt", stt_model["model_path"])
                     env_updates.append(f"SHERPA_MODEL_PATH={stt_path}")
                 elif stt_backend == "kroko":
                     if selection.kroko_embedded:
-                        stt_path = os.path.join("/app/models/kroko", stt_model["model_path"])
+                        stt_path = _safe_join_under_dir("/app/models/kroko", stt_model["model_path"])
                         env_updates.append(f"KROKO_MODEL_PATH={stt_path}")
                 elif stt_backend == "faster_whisper":
                     env_updates.append(f"FASTER_WHISPER_MODEL={stt_model['model_path']}")
                 else:
-                    stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
+                    stt_path = _safe_join_under_dir("/app/models/stt", stt_model["model_path"])
                     env_updates.append(f"LOCAL_STT_MODEL_PATH={stt_path}")
             
             if not skip_llm_download and llm_model and llm_model.get("model_path") and llm_model.get("download_url"):
-                llm_path = os.path.join("/app/models/llm", llm_model["model_path"])
+                llm_path = _safe_join_under_dir("/app/models/llm", llm_model["model_path"])
                 env_updates.append(f"LOCAL_LLM_MODEL_PATH={llm_path}")
             
             if tts_model.get("model_path"):
                 tts_backend = (tts_model.get("backend") or selection.tts or "").lower()
                 if tts_backend == "kokoro":
-                    tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
+                    tts_path = _safe_join_under_dir("/app/models/tts", tts_model["model_path"])
                     env_updates.append(f"KOKORO_MODEL_PATH={tts_path}")
                 elif tts_backend == "melotts":
                     env_updates.append(f"MELOTTS_VOICE={tts_model['model_path']}")
                 elif tts_model.get("download_url"):
-                    tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
+                    tts_path = _safe_join_under_dir("/app/models/tts", tts_model["model_path"])
                     env_updates.append(f"LOCAL_TTS_MODEL_PATH={tts_path}")
 
             # Kokoro mode: local vs api/hf (no local files required)
@@ -2736,17 +2805,17 @@ async def save_setup_config(config: SetupConfig):
 
             stt_model_path = (stt_model or {}).get("model_path")
             if stt_backend == "sherpa" and stt_model_path:
-                env_updates["SHERPA_MODEL_PATH"] = os.path.join("/app/models/stt", stt_model_path)
+                env_updates["SHERPA_MODEL_PATH"] = _safe_join_under_dir("/app/models/stt", stt_model_path)
             elif stt_backend == "kroko":
                 env_updates["KROKO_EMBEDDED"] = "1" if config.kroko_embedded else "0"
                 if config.kroko_api_key:
                     env_updates["KROKO_API_KEY"] = config.kroko_api_key
                 if config.kroko_embedded and stt_model_path:
-                    env_updates["KROKO_MODEL_PATH"] = os.path.join("/app/models/kroko", stt_model_path)
+                    env_updates["KROKO_MODEL_PATH"] = _safe_join_under_dir("/app/models/kroko", stt_model_path)
             elif stt_backend == "faster_whisper" and stt_model_path:
                 env_updates["FASTER_WHISPER_MODEL"] = stt_model_path
             elif stt_model_path:
-                env_updates["LOCAL_STT_MODEL_PATH"] = os.path.join("/app/models/stt", stt_model_path)
+                env_updates["LOCAL_STT_MODEL_PATH"] = _safe_join_under_dir("/app/models/stt", stt_model_path)
 
             tts_model_path = (tts_model or {}).get("model_path")
             if tts_backend == "kokoro":
@@ -2756,7 +2825,7 @@ async def save_setup_config(config: SetupConfig):
                 env_updates["KOKORO_MODE"] = mode
                 env_updates["KOKORO_VOICE"] = (config.kokoro_voice or "af_heart").strip()
                 if tts_model_path:
-                    env_updates["KOKORO_MODEL_PATH"] = os.path.join("/app/models/tts", tts_model_path)
+                    env_updates["KOKORO_MODEL_PATH"] = _safe_join_under_dir("/app/models/tts", tts_model_path)
                 if mode == "api":
                     if config.kokoro_api_base_url:
                         env_updates["KOKORO_API_BASE_URL"] = config.kokoro_api_base_url
@@ -2766,15 +2835,23 @@ async def save_setup_config(config: SetupConfig):
                 if tts_model_path:
                     env_updates["MELOTTS_VOICE"] = tts_model_path
             elif tts_model_path:
-                env_updates["LOCAL_TTS_MODEL_PATH"] = os.path.join("/app/models/tts", tts_model_path)
+                env_updates["LOCAL_TTS_MODEL_PATH"] = _safe_join_under_dir("/app/models/tts", tts_model_path)
 
             if config.provider == "local":
                 if config.local_llm_model == "custom_gguf_url":
                     custom_name = (config.local_llm_custom_filename or "").strip()
                     if custom_name:
-                        env_updates["LOCAL_LLM_MODEL_PATH"] = os.path.join("/app/models/llm", custom_name)
+                        pp = PurePosixPath(custom_name)
+                        if pp.name != custom_name or pp.is_absolute() or ".." in pp.parts:
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Invalid custom LLM filename (must be a simple filename with no directories or '..')",
+                            )
+                        if not custom_name.lower().endswith(".gguf"):
+                            raise HTTPException(status_code=400, detail="Custom LLM filename must end with .gguf")
+                        env_updates["LOCAL_LLM_MODEL_PATH"] = _safe_join_under_dir("/app/models/llm", custom_name)
                 elif llm_model and llm_model.get("model_path"):
-                    env_updates["LOCAL_LLM_MODEL_PATH"] = os.path.join("/app/models/llm", llm_model["model_path"])
+                    env_updates["LOCAL_LLM_MODEL_PATH"] = _safe_join_under_dir("/app/models/llm", llm_model["model_path"])
 
         upsert_env_vars(ENV_PATH, env_updates, header="Setup Wizard")
 

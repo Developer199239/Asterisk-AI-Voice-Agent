@@ -15,8 +15,6 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import yaml
-
 from settings import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -26,7 +24,7 @@ BUILD_TIME_ESTIMATES = {
     "faster_whisper": 180,  # ~3 min
     "whisper_cpp": 240,     # ~4 min
     "melotts": 300,         # ~5 min
-    "kroko": 120,           # ~2 min
+    "kroko_embedded": 120,  # ~2 min
     "vosk": 60,             # ~1 min
     "default": 180,         # ~3 min fallback
 }
@@ -36,13 +34,133 @@ BACKEND_BUILD_ARGS = {
     "faster_whisper": "INCLUDE_FASTER_WHISPER",
     "whisper_cpp": "INCLUDE_WHISPER_CPP",
     "melotts": "INCLUDE_MELOTTS",
-    "kroko": "INCLUDE_KROKO",
+    "kroko_embedded": "INCLUDE_KROKO_EMBEDDED",
     "vosk": "INCLUDE_VOSK",
     "llama": "INCLUDE_LLAMA",
     "piper": "INCLUDE_PIPER",
     "kokoro": "INCLUDE_KOKORO",
     "sherpa": "INCLUDE_SHERPA",
 }
+
+# Defaults used when keys are not present in `.env`.
+# These follow the defaults embedded in docker-compose.yml / docker-compose.gpu.yml.
+_DEFAULT_INCLUDE_BASE: Dict[str, bool] = {
+    "faster_whisper": False,
+    "whisper_cpp": False,
+    "melotts": False,
+    "kroko_embedded": False,
+    "vosk": True,
+    "llama": True,
+    "piper": True,
+    "kokoro": True,
+    "sherpa": True,
+}
+
+_DEFAULT_INCLUDE_GPU: Dict[str, bool] = {
+    **_DEFAULT_INCLUDE_BASE,
+    # On GPU builds, Whisper backends default on (docker-compose.gpu.yml).
+    "faster_whisper": True,
+    "whisper_cpp": True,
+}
+
+
+def _is_truthy(value: Optional[str]) -> bool:
+    raw = (value or "").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _read_env_file(env_path: str) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    if not os.path.exists(env_path):
+        return values
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if "=" not in line:
+                    continue
+                if line.strip().startswith("#"):
+                    continue
+                key, _, value = line.partition("=")
+                k = (key or "").strip()
+                if not k:
+                    continue
+                v = (value or "").strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                    v = v[1:-1]
+                values[k] = v
+    except Exception:
+        return values
+    return values
+
+
+def _env_enabled_defaults() -> Dict[str, bool]:
+    env_path = os.path.join(PROJECT_ROOT, ".env")
+    env = _read_env_file(env_path)
+    gpu_available = _is_truthy(env.get("GPU_AVAILABLE"))
+    return _DEFAULT_INCLUDE_GPU if gpu_available else _DEFAULT_INCLUDE_BASE
+
+
+def _backup_env_file() -> Optional[str]:
+    env_path = os.path.join(PROJECT_ROOT, ".env")
+    if not os.path.exists(env_path):
+        return None
+    backup_path = os.path.join(PROJECT_ROOT, f".env.backup.{int(time.time())}")
+    try:
+        shutil.copy2(env_path, backup_path)
+        return backup_path
+    except Exception as e:
+        logger.error("Failed to backup .env: %s", e)
+        return None
+
+
+def _restore_env_backup(backup_path: str) -> bool:
+    env_path = os.path.join(PROJECT_ROOT, ".env")
+    try:
+        if backup_path and os.path.exists(backup_path):
+            shutil.copy2(backup_path, env_path)
+            os.remove(backup_path)
+            return True
+        return False
+    except Exception as e:
+        logger.error("Failed to restore .env backup: %s", e)
+        return False
+
+
+def _upsert_env(updates: Dict[str, str]) -> bool:
+    try:
+        from services.fs import upsert_env_vars
+
+        env_path = os.path.join(PROJECT_ROOT, ".env")
+        if not os.path.exists(env_path):
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write("# Auto-created by Admin UI (backend enable)\n")
+        upsert_env_vars(env_path, updates, header="Local AI backend enable")
+        return True
+    except Exception as e:
+        logger.error("Failed to update .env: %s", e)
+        return False
+
+
+def _build_args_for_backend(backend: str, env: Dict[str, str]) -> List[str]:
+    """
+    Extra build args for `docker compose build`.
+
+    We still pass the backend INCLUDE_* arg explicitly (defense-in-depth) so CPU builds
+    that don't reference a given build arg in docker-compose.yml still receive it.
+    """
+    args: List[str] = []
+    arg_name = BACKEND_BUILD_ARGS.get(backend)
+    if arg_name:
+        args.extend(["--build-arg", f"{arg_name}=true"])
+
+    if backend == "kroko_embedded":
+        sha = (env.get("KROKO_SERVER_SHA256") or "").strip()
+        if sha:
+            args.extend(["--build-arg", f"KROKO_SERVER_SHA256={sha}"])
+        onnx_sha = (env.get("ONNX_RUNTIME_SHA256") or "").strip()
+        if onnx_sha:
+            args.extend(["--build-arg", f"ONNX_RUNTIME_SHA256={onnx_sha}"])
+    return args
 
 
 @dataclass
@@ -76,34 +194,39 @@ _active_rebuild: bool = False  # Only one rebuild at a time
 
 
 def get_enabled_backends() -> Dict[str, bool]:
-    """Check which backends are currently enabled in docker-compose.override.yml."""
-    override_path = os.path.join(PROJECT_ROOT, "docker-compose.override.yml")
-    enabled = {k: False for k in BACKEND_BUILD_ARGS.keys()}
-    
-    if not os.path.exists(override_path):
-        return enabled
-    
-    try:
-        with open(override_path, "r") as f:
-            override = yaml.safe_load(f) or {}
-        
-        services = override.get("services", {})
-        local_ai = services.get("local_ai_server", {})
-        build_config = local_ai.get("build", {})
-        build_args = build_config.get("args", {})
-        
-        for backend, arg_name in BACKEND_BUILD_ARGS.items():
-            val = build_args.get(arg_name, "false")
-            enabled[backend] = str(val).lower() == "true"
-        
-        return enabled
-    except Exception as e:
-        logger.error(f"Failed to read enabled backends: {e}")
-        return enabled
+    """
+    Return which backends are configured as enabled via `.env` INCLUDE_* flags.
+
+    This matches how docker-compose.yml parameterizes build args, and avoids relying
+    on docker-compose.override.yml (which can cause host path resolution issues when
+    compose is executed inside the admin_ui container).
+    """
+    defaults = _env_enabled_defaults()
+    env_path = os.path.join(PROJECT_ROOT, ".env")
+    env = _read_env_file(env_path)
+
+    enabled: Dict[str, bool] = {}
+    for backend, arg_name in BACKEND_BUILD_ARGS.items():
+        raw = env.get(arg_name)
+        if raw is None:
+            enabled[backend] = bool(defaults.get(backend, False))
+        else:
+            enabled[backend] = _is_truthy(raw)
+    return enabled
 
 
 def _create_rebuild_job(backend: str) -> RebuildJob:
     """Create and register a new rebuild job."""
+    with _rebuild_jobs_lock:
+        return _create_rebuild_job_locked(backend)
+
+
+def _create_rebuild_job_locked(backend: str) -> RebuildJob:
+    """
+    Create and register a new rebuild job.
+
+    Caller must hold `_rebuild_jobs_lock`.
+    """
     global _latest_rebuild_job_id
     job_id = str(uuid.uuid4())
     job = RebuildJob(id=job_id, backend=backend)
@@ -111,14 +234,13 @@ def _create_rebuild_job(backend: str) -> RebuildJob:
     job.progress["estimated_seconds"] = BUILD_TIME_ESTIMATES.get(backend, BUILD_TIME_ESTIMATES["default"])
     job.progress["message"] = f"Starting {backend} backend installation..."
     
-    with _rebuild_jobs_lock:
-        _rebuild_jobs[job_id] = job
-        _latest_rebuild_job_id = job_id
-        # Keep only last 10 jobs
-        if len(_rebuild_jobs) > 10:
-            oldest = sorted(_rebuild_jobs.values(), key=lambda j: j.created_at)[:-10]
-            for j in oldest:
-                _rebuild_jobs.pop(j.id, None)
+    _rebuild_jobs[job_id] = job
+    _latest_rebuild_job_id = job_id
+    # Keep only last 10 jobs
+    if len(_rebuild_jobs) > 10:
+        oldest = sorted(_rebuild_jobs.values(), key=lambda j: j.created_at)[:-10]
+        for j in oldest:
+            _rebuild_jobs.pop(j.id, None)
     return job
 
 
@@ -174,126 +296,85 @@ def is_rebuild_in_progress() -> bool:
     """Check if a rebuild is currently in progress."""
     return _active_rebuild
 
-
-def _backup_override_file() -> Optional[str]:
-    """Backup docker-compose.override.yml. Returns backup path or None."""
-    override_path = os.path.join(PROJECT_ROOT, "docker-compose.override.yml")
-    if not os.path.exists(override_path):
-        return None
-    
-    backup_path = os.path.join(PROJECT_ROOT, f".docker-compose.override.backup.{int(time.time())}.yml")
-    try:
-        shutil.copy2(override_path, backup_path)
-        return backup_path
-    except Exception as e:
-        logger.error(f"Failed to backup override file: {e}")
-        return None
-
-
-def _restore_backup(backup_path: str) -> bool:
-    """Restore docker-compose.override.yml from backup."""
-    override_path = os.path.join(PROJECT_ROOT, "docker-compose.override.yml")
-    try:
-        if backup_path and os.path.exists(backup_path):
-            shutil.copy2(backup_path, override_path)
-            os.remove(backup_path)
-            return True
-        return False
-    except Exception as e:
-        logger.error(f"Failed to restore backup: {e}")
-        return False
-
-
-def _update_build_arg(backend: str, enabled: bool = True) -> bool:
-    """Update docker-compose.override.yml with build arg for backend."""
-    override_path = os.path.join(PROJECT_ROOT, "docker-compose.override.yml")
-    
-    # Load existing or create new
-    if os.path.exists(override_path):
-        with open(override_path, "r") as f:
-            override = yaml.safe_load(f) or {}
-    else:
-        override = {}
-    
-    # Ensure structure exists
-    if "services" not in override:
-        override["services"] = {}
-    if "local_ai_server" not in override["services"]:
-        override["services"]["local_ai_server"] = {}
-    if "build" not in override["services"]["local_ai_server"]:
-        override["services"]["local_ai_server"]["build"] = {
-            "context": "./local_ai_server",
-            "dockerfile": "Dockerfile.gpu",
-        }
-    if "args" not in override["services"]["local_ai_server"]["build"]:
-        override["services"]["local_ai_server"]["build"]["args"] = {}
-    
-    # Set the build arg
-    arg_name = BACKEND_BUILD_ARGS.get(backend)
-    if not arg_name:
-        return False
-    
-    override["services"]["local_ai_server"]["build"]["args"][arg_name] = "true" if enabled else "false"
-    
-    # Write back
-    try:
-        with open(override_path, "w") as f:
-            yaml.dump(override, f, default_flow_style=False)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to update build arg: {e}")
-        return False
-
-
 def _run_docker_build(job_id: str, service: str = "local_ai_server") -> bool:
-    """Run docker compose build with streaming output."""
+    """
+    Run docker compose build via updater-runner so relative host binds resolve correctly.
+
+    Output is captured (not truly streamed) because builds run in an ephemeral helper container.
+    """
     try:
-        cmd = ["docker", "compose", "build", "--no-cache", service]
-        _job_output(job_id, f"$ {' '.join(cmd)}")
-        
-        process = subprocess.Popen(
-            cmd,
-            cwd=PROJECT_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+        from api.system import (
+            _compose_files_flags_for_service,
+            _project_host_root_from_admin_ui_container,
+            _run_updater_ephemeral,
         )
-        
-        # Stream output
-        for line in iter(process.stdout.readline, ""):
-            line = line.rstrip()
-            if line:
-                _job_output(job_id, line)
-                # Update progress based on build stages
-                if "FROM" in line or "COPY" in line or "RUN" in line:
-                    _job_set_progress(job_id, message=line[:80])
-        
-        process.wait()
-        return process.returncode == 0
+
+        host_root = _project_host_root_from_admin_ui_container()
+        compose_files = _compose_files_flags_for_service(service)
+        compose_prefix = f"{compose_files} " if compose_files else ""
+
+        job = get_rebuild_job(job_id)
+        backend = (job.backend if job else "").strip().lower()
+        env_path = os.path.join(PROJECT_ROOT, ".env")
+        env = _read_env_file(env_path)
+        build_args = _build_args_for_backend(backend, env)
+        build_args_str = " ".join(build_args)
+
+        cmd = (
+            "set -euo pipefail; "
+            "cd \"$PROJECT_ROOT\"; "
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent build --no-cache {build_args_str} {service}"
+        )
+        _job_output(job_id, f"$ {cmd}")
+
+        started = time.time()
+        hb_stop = threading.Event()
+
+        def _hb() -> None:
+            while not hb_stop.is_set():
+                time.sleep(10)
+                if hb_stop.is_set():
+                    return
+                elapsed = int(time.time() - started)
+                _job_set_progress(job_id, message=f"Building... ({elapsed}s elapsed)")
+
+        hb_thread = threading.Thread(target=_hb, daemon=True)
+        hb_thread.start()
+        try:
+            code, out = _run_updater_ephemeral(
+                host_root,
+                env={"PROJECT_ROOT": host_root},
+                command=cmd,
+                timeout_sec=1800,
+            )
+        finally:
+            hb_stop.set()
+
+        for line in (out or "").splitlines():
+            if line.strip():
+                _job_output(job_id, line.rstrip())
+        return code == 0
     except Exception as e:
         _job_output(job_id, f"Build error: {e}")
         return False
 
 
 def _run_docker_up(job_id: str, service: str = "local_ai_server") -> bool:
-    """Restart the container with docker compose up."""
+    """Force-recreate the service so `.env` changes apply."""
     try:
-        cmd = ["docker", "compose", "up", "-d", service]
-        _job_output(job_id, f"$ {' '.join(cmd)}")
-        
-        result = subprocess.run(
-            cmd,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
+        from api.system import _recreate_via_compose
+
+        import asyncio
+
+        async def _run() -> Dict[str, Any]:
+            return await _recreate_via_compose(service, health_check=True)
+
+        recreated = asyncio.run(_run())
+        _job_output(
+            job_id,
+            f"recreate: {recreated.get('status')} (health={recreated.get('health_status', 'n/a')})",
         )
-        
-        _job_output(job_id, result.stdout)
-        if result.stderr:
-            _job_output(job_id, result.stderr)
-        
-        return result.returncode == 0
+        return recreated.get("status") in {"success", "degraded"}
     except Exception as e:
         _job_output(job_id, f"Restart error: {e}")
         return False
@@ -301,8 +382,6 @@ def _run_docker_up(job_id: str, service: str = "local_ai_server") -> bool:
 
 def _verify_backend_loaded(job_id: str, backend: str, timeout: int = 60) -> bool:
     """Wait for container to be healthy and verify backend is available."""
-    import httpx
-    
     _job_output(job_id, f"Waiting for local_ai_server to be healthy...")
     
     start = time.time()
@@ -318,20 +397,44 @@ def _verify_backend_loaded(job_id: str, backend: str, timeout: int = 60) -> bool
             
             if status == "healthy":
                 _job_output(job_id, "Container is healthy, checking backend availability...")
-                
-                # Check capabilities endpoint
+
                 try:
-                    resp = httpx.get("http://localhost:8088/capabilities", timeout=5.0)
-                    if resp.status_code == 200:
-                        caps = resp.json()
-                        available = caps.get("stt_backends", []) + caps.get("tts_backends", [])
-                        if backend in available or backend.replace("_", "-") in available:
-                            _job_output(job_id, f"✅ Backend '{backend}' is now available!")
-                            return True
-                        else:
-                            _job_output(job_id, f"Backend '{backend}' not in available list: {available}")
+                    import asyncio
+                    import json
+                    import os
+                    import websockets
+
+                    async def _probe() -> Dict[str, Any]:
+                        env = _read_env_file(os.path.join(PROJECT_ROOT, ".env"))
+                        port = (env.get("LOCAL_WS_PORT") or "8765").strip() or "8765"
+                        token = (env.get("LOCAL_WS_AUTH_TOKEN") or "").strip()
+                        url = f"ws://127.0.0.1:{port}"
+                        async with websockets.connect(url, open_timeout=5, max_size=None) as ws:
+                            if token:
+                                await ws.send(json.dumps({"type": "auth", "auth_token": token}))
+                                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                                msg = json.loads(raw)
+                                if msg.get("type") != "auth_response" or msg.get("status") != "ok":
+                                    raise RuntimeError(f"auth_failed: {msg}")
+
+                            await ws.send(json.dumps({"type": "capabilities"}))
+                            raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                            msg = json.loads(raw)
+                            if msg.get("type") != "capabilities_response":
+                                raise RuntimeError(f"unexpected: {msg}")
+                            return msg.get("capabilities", {}) or {}
+
+                    caps = asyncio.run(_probe())
+                    cap_key = backend
+                    if backend == "kroko":
+                        cap_key = "kroko_embedded"
+                    if caps.get(cap_key):
+                        _job_output(job_id, f"✅ Backend '{cap_key}' is now available!")
+                        return True
+                    available = sorted([k for k, v in (caps or {}).items() if v])
+                    _job_output(job_id, f"Backend '{cap_key}' not available yet (available={available})")
                 except Exception as e:
-                    _job_output(job_id, f"Capabilities check failed: {e}")
+                    _job_output(job_id, f"Capabilities probe failed: {e}")
             
             time.sleep(3)
         except Exception as e:
@@ -346,24 +449,23 @@ def start_rebuild_job(backend: str) -> Dict[str, Any]:
     """Start a rebuild job for a backend. Returns job info."""
     global _active_rebuild
     
-    # Check if rebuild already in progress
-    if _active_rebuild:
-        return {"error": "A rebuild is already in progress", "job_id": _latest_rebuild_job_id}
-    
-    # Validate backend
+    # Validate backend (stateless check, safe outside lock)
     if backend not in BACKEND_BUILD_ARGS:
         return {"error": f"Unknown backend: {backend}"}
     
-    # Check if already enabled
+    # Check if already enabled (stateless check, safe outside lock)
     enabled = get_enabled_backends()
     if enabled.get(backend):
         return {"error": f"Backend '{backend}' is already enabled", "already_enabled": True}
     
-    # Create job
-    job = _create_rebuild_job(backend)
-    _active_rebuild = True
+    # Atomic check-and-set under lock to prevent concurrent rebuild race condition
+    with _rebuild_jobs_lock:
+        if _active_rebuild:
+            return {"error": "A rebuild is already in progress", "job_id": _latest_rebuild_job_id}
+        _active_rebuild = True
+        job = _create_rebuild_job_locked(backend)
     
-    # Start rebuild in background thread
+    # Start rebuild in background thread (outside lock)
     thread = threading.Thread(target=_rebuild_worker, args=(job.id, backend), daemon=True)
     thread.start()
     
@@ -382,17 +484,17 @@ def _rebuild_worker(job_id: str, backend: str) -> None:
     try:
         # Phase 1: Backup
         _job_set_progress(job_id, phase="backup", percent=5, message="Creating backup...")
-        _job_output(job_id, "Creating backup of docker-compose.override.yml...")
-        backup_path = _backup_override_file()
+        _job_output(job_id, "Creating backup of .env...")
+        backup_path = _backup_env_file()
         if backup_path:
             _job_output(job_id, f"Backup created: {backup_path}")
         
         # Phase 2: Update config
         _job_set_progress(job_id, phase="updating", percent=10, message="Updating build configuration...")
-        _job_output(job_id, f"Setting {BACKEND_BUILD_ARGS[backend]}=true...")
-        if not _update_build_arg(backend, enabled=True):
-            raise Exception("Failed to update docker-compose.override.yml")
-        _job_output(job_id, "Build configuration updated successfully")
+        _job_output(job_id, f"Setting {BACKEND_BUILD_ARGS[backend]}=true in .env...")
+        if not _upsert_env({BACKEND_BUILD_ARGS[backend]: "true"}):
+            raise Exception("Failed to update .env")
+        _job_output(job_id, "Build configuration updated successfully (.env)")
         
         # Phase 3: Build
         _job_set_progress(job_id, phase="building", percent=15, message="Building container (this may take several minutes)...")
@@ -435,7 +537,7 @@ def _rebuild_worker(job_id: str, backend: str) -> None:
         rolled_back = False
         if backup_path:
             _job_output(job_id, "Rolling back configuration...")
-            if _restore_backup(backup_path):
+            if _restore_env_backup(backup_path):
                 _job_output(job_id, "Configuration restored from backup")
                 rolled_back = True
             else:

@@ -559,6 +559,11 @@ Models are **not bundled** in Docker images. Download them via:
 - `docker compose build --build-arg INCLUDE_KROKO_EMBEDDED=true local_ai_server`
 - Models: Download from Admin UI → Models Page
 
+**Whisper.cpp** (optional, GGML-based offline STT):
+- Uses `pywhispercpp` with GGML Whisper models (e.g., `ggml-base.bin`, `ggml-small.bin`)
+- Set `LOCAL_STT_BACKEND=whisper_cpp` and `LOCAL_WHISPER_CPP_MODEL_PATH=/app/models/stt/ggml-base.bin`
+- Requires rebuild: `docker compose build --build-arg INCLUDE_WHISPER_CPP=true local_ai_server`
+
 ### Supported LLM Models (GGUF)
 
 - `phi-3-mini-4k-instruct.Q4_K_M.gguf` (recommended — good quality/speed balance)

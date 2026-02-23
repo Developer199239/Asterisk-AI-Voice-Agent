@@ -140,7 +140,6 @@ cython_debug/
 !.windsurf/rules/asterisk_ai_voice_agent.md
 
 # Archives and old documentation
-Archived/
 "Project Requirement Documents"/
 
 # Taskmaster-AI
@@ -210,6 +209,9 @@ config/ai-agent.local.yaml
 # Logs and archived folders (development artifacts, not for main)
 logs/
 archived/*
+!archived/GPU-LEARNINGS.md
+!archived/local-ai-server-audit-report.md
+!archived/GA-6.3.1-Readiness.md
 
 # IDE specific
 *.swp

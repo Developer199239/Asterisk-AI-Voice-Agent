@@ -158,7 +158,7 @@ Flags:
 ```bash
 agent update --remote origin
 agent update --ref main
-agent update --ref v6.2.0
+agent update --ref v6.3.1
 agent update --checkout
 agent update --include-ui
 agent update --rebuild auto

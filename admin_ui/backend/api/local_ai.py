@@ -722,7 +722,32 @@ async def switch_model(request: SwitchModelRequest):
     """
     from settings import PROJECT_ROOT, get_setting, CONFIG_PATH
     from api.config import update_yaml_provider_field
-    from api.system import _recreate_via_compose
+    from api.system import _recreate_via_compose, _check_active_calls
+
+    # Guard: warn if there are active calls (model switch can disrupt in-flight audio)
+    if not request.force_incompatible_apply:
+        try:
+            call_status = await _check_active_calls()
+            if not call_status.get("reachable", False):
+                return SwitchModelResponse(
+                    success=False,
+                    message=(
+                        "Cannot switch model: unable to verify active calls (AI Engine sessions API unreachable). "
+                        "Ensure ai_engine is running, or set force_incompatible_apply=true to override."
+                    ),
+                    requires_restart=False,
+                )
+            if call_status.get("active_calls", 0) > 0:
+                return SwitchModelResponse(
+                    success=False,
+                    message=(
+                        f"Cannot switch model: {call_status['active_calls']} active call(s) in progress. "
+                        "Wait for calls to complete or set force_incompatible_apply=true to override."
+                    ),
+                    requires_restart=False,
+                )
+        except Exception:
+            pass  # Best-effort check; proceed only if the check itself crashes unexpectedly
 
     request = _normalize_switch_request(request)
     env_file = os.path.join(PROJECT_ROOT, ".env")

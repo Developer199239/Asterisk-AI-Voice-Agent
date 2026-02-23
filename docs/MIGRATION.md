@@ -2,6 +2,31 @@
 
 This guide covers upgrading between major versions of Asterisk AI Voice Agent.
 
+## v6.2.x to v6.3.1
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.3.1:
+- Local AI Server: backend enable/rebuild flow, expanded model catalog, GGUF validation, checksum sidecars
+- GPU ergonomics: `LOCAL_LLM_GPU_LAYERS=-1` auto-detection, GPU compose overlay improvements
+- CPU-first onboarding: defaults to `runtime_mode=minimal` on CPU-only hosts
+- Security hardening: path traversal protection, concurrent rebuild race fix, active-call guard on model switch
+- Structured local tool gateway with hangup guardrails
+- CLI `agent check --local` / `--remote` for Local AI Server validation
+- New STT backends: Whisper.cpp (`LOCAL_STT_BACKEND=whisper_cpp`)
+- New TTS backend: MeloTTS (`LOCAL_TTS_BACKEND=melotts`)
+
+If you use `local_ai_server` with optional backends, rebuild to pick up new capabilities:
+```bash
+docker compose build --build-arg INCLUDE_FASTER_WHISPER=true --build-arg INCLUDE_WHISPER_CPP=true local_ai_server
+```
+
 ## v6.1.1 to v6.2.0
 
 **No breaking changes.** All new features are additive or opt-in.
