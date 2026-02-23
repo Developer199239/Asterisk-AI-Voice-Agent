@@ -6727,6 +6727,16 @@ class Engine:
             except Exception:
                 logger.debug("Failed to record barge-in state", call_id=call_id, exc_info=True)
 
+            # Local provider only: clear Whisper-family STT suppression window on the
+            # Local AI Server immediately after barge-in so first caller speech turn
+            # is captured without requiring a second attempt.
+            try:
+                provider = (getattr(self, "_call_providers", {}) or {}).get(call_id)
+                if isinstance(provider, LocalProvider):
+                    await provider.notify_barge_in(call_id)
+            except Exception:
+                logger.debug("Failed to notify local provider about barge-in", call_id=call_id, exc_info=True)
+
             logger.info("🎧 BARGE-IN action applied", call_id=call_id, source=source, reason=reason)
         except Exception:
             logger.error("Barge-in action failed", call_id=call_id, source=source, reason=reason, exc_info=True)

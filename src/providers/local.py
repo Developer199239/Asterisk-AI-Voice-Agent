@@ -116,6 +116,31 @@ class LocalProvider(AIProviderInterface):
             value = ""
         self._initial_greeting = value or None
 
+    async def notify_barge_in(self, call_id: Optional[str]) -> None:
+        """Notify local_ai_server that engine barge-in occurred for this call.
+
+        This allows the server to clear Whisper-family STT suppression timers
+        immediately after playback interruption so the caller does not need to
+        repeat the first utterance after barge-in.
+        """
+        if not self.websocket or self.websocket.state.name != "OPEN":
+            return
+        target_call_id = str(call_id or self._active_call_id or "").strip()
+        if not target_call_id:
+            return
+        try:
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "type": "barge_in",
+                        "call_id": target_call_id,
+                    }
+                )
+            )
+            logger.debug("Sent barge_in notification to Local AI Server", call_id=target_call_id)
+        except Exception:
+            logger.debug("Failed to send barge_in notification to Local AI Server", call_id=target_call_id, exc_info=True)
+
     def _resolve_tool_policy(self, context: Optional[Dict[str, Any]] = None) -> str:
         """
         Resolve local tool-call policy.

@@ -3352,6 +3352,25 @@ class LocalAIServer:
             clean,
             flags=re.IGNORECASE,
         )
+        clean = re.sub(
+            r"\b(?:hangup|hang up)\s+call\s+(?:successful|succeeded|executed|complete(?:d)?|requested)\b[.!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\btool\s*call(?:s)?\s*(?:successful|succeeded|executed|complete(?:d)?)\b[.!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if re.search(r"(?:hangup|hang up)\s+call|tool\s*call", clean, flags=re.IGNORECASE):
+            clean = re.sub(
+                r"\bcall\s+duration\s*[:\-]?\s*[^.?!]{0,96}[.?!]?",
+                "",
+                clean,
+                flags=re.IGNORECASE,
+            )
 
         # Strip markdown-style tool markers (e.g. *hangup_call* or *hangup*).
         for name in tool_names:
@@ -3708,6 +3727,25 @@ class LocalAIServer:
         if not text:
             return "Thank you for calling. Goodbye."
         text = re.sub(r"<\|[^>]*\|>", "", text).strip()
+        text = re.sub(
+            r"\b(?:hangup|hang up)\s+call\s+(?:successful|succeeded|executed|complete(?:d)?|requested)\b[.!]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\btool\s*call(?:s)?\s*(?:successful|succeeded|executed|complete(?:d)?)\b[.!]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bcall\s+duration\s*[:\-]?\s*[^.?!]{0,96}[.?!]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\s+", " ", text).strip()
         if not text:
             return "Thank you for calling. Goodbye."
         sentence_match = re.match(r"(.+?[.!?])(?:\s|$)", text)
@@ -3925,6 +3963,20 @@ class LocalAIServer:
             self.stt_backend,
             source,
             duration_s + grace_s,
+        )
+
+    def _clear_whisper_stt_suppression(self, session: SessionContext, *, reason: str) -> None:
+        if self.stt_backend not in {"faster_whisper", "whisper_cpp"}:
+            return
+        current_until = float(getattr(session, "stt_suppress_until", 0.0) or 0.0)
+        if current_until <= monotonic():
+            return
+        session.stt_suppress_until = 0.0
+        logging.info(
+            "🔊 WHISPER STT SUPPRESSION CLEARED - call_id=%s backend=%s reason=%s",
+            session.call_id,
+            self.stt_backend,
+            reason,
         )
 
     async def _handle_final_transcript(
@@ -4531,6 +4583,21 @@ class LocalAIServer:
 
         if msg_type == "audio":
             await self._handle_audio_payload(websocket, session, data)
+            return
+
+        if msg_type == "barge_in":
+            call_id = data.get("call_id")
+            if call_id:
+                session.call_id = call_id
+            self._clear_whisper_stt_suppression(session, reason="engine_barge_in")
+            await self._send_json(
+                websocket,
+                {
+                    "type": "barge_in_ack",
+                    "status": "ok",
+                    "call_id": session.call_id,
+                },
+            )
             return
 
         if msg_type == "tts_request":
