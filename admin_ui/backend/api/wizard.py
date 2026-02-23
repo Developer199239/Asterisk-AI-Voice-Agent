@@ -3112,7 +3112,23 @@ async def enable_backend(request: EnableBackendRequest):
     
     if "error" in result:
         if result.get("already_enabled"):
-            raise HTTPException(status_code=400, detail=result["error"])
+            backend = request.backend.strip().lower()
+            if backend in {"piper", "kokoro", "melotts"}:
+                location_hint = "Local AI Server → TTS model selector"
+            elif backend in {"vosk", "sherpa", "faster_whisper", "whisper_cpp", "kroko_embedded", "kroko"}:
+                location_hint = "Local AI Server → STT model selector"
+            elif backend in {"llama", "llm"}:
+                location_hint = "Local AI Server → LLM model selector"
+            else:
+                location_hint = "Local AI Server model selector"
+            return {
+                "already_enabled": True,
+                "backend": backend,
+                "message": (
+                    f"Backend '{backend}' is already enabled. "
+                    f"It is available to load under {location_hint}."
+                ),
+            }
         raise HTTPException(status_code=409, detail=result["error"])
     
     return result

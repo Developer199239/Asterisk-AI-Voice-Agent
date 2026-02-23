@@ -52,6 +52,7 @@ export const RebuildBackendDialog = ({
     const [stage, setStage] = useState<'confirm' | 'progress' | 'result'>('confirm');
     const [job, setJob] = useState<RebuildJob | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [alreadyEnabledMessage, setAlreadyEnabledMessage] = useState<string | null>(null);
     const outputRef = useRef<HTMLDivElement>(null);
     const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -64,10 +65,17 @@ export const RebuildBackendDialog = ({
     const startRebuild = async () => {
         setStage('progress');
         setError(null);
+        setAlreadyEnabledMessage(null);
         
         try {
             const res = await axios.post('/api/wizard/local/backends/enable', { backend });
-            if (res.data.job_id) {
+            if (res.data.already_enabled) {
+                setAlreadyEnabledMessage(
+                    res.data.message || `${backendDisplayName} backend is already enabled and available in Local AI Server model settings.`
+                );
+                setStage('result');
+                onComplete(true);
+            } else if (res.data.job_id) {
                 startPolling(res.data.job_id);
             } else if (res.data.error) {
                 setError(res.data.error);
@@ -121,6 +129,7 @@ export const RebuildBackendDialog = ({
             setStage('confirm');
             setJob(null);
             setError(null);
+            setAlreadyEnabledMessage(null);
             if (pollIntervalRef.current) {
                 clearInterval(pollIntervalRef.current);
                 pollIntervalRef.current = null;
@@ -146,7 +155,11 @@ export const RebuildBackendDialog = ({
                     <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                         {stage === 'confirm' && `Enable ${backendDisplayName} Backend`}
                         {stage === 'progress' && `Installing ${backendDisplayName}...`}
-                        {stage === 'result' && (job?.completed ? 'Installation Complete' : 'Installation Failed')}
+                        {stage === 'result' && (
+                            alreadyEnabledMessage
+                                ? 'Backend Already Enabled'
+                                : (job?.completed ? 'Installation Complete' : 'Installation Failed')
+                        )}
                     </h2>
                 </div>
 
@@ -245,7 +258,14 @@ export const RebuildBackendDialog = ({
 
                     {stage === 'result' && (
                         <div className="space-y-4">
-                            {job?.completed ? (
+                            {alreadyEnabledMessage ? (
+                                <div className="flex items-start gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                    <CheckCircle2 className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                    <div className="text-sm text-blue-800 dark:text-blue-200">
+                                        <p className="font-medium">{alreadyEnabledMessage}</p>
+                                    </div>
+                                </div>
+                            ) : job?.completed ? (
                                 <div className="flex items-start gap-3 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
                                     <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
                                     <div className="text-sm text-green-800 dark:text-green-200">
@@ -320,7 +340,7 @@ export const RebuildBackendDialog = ({
                             onClick={onClose}
                             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
                         >
-                            {job?.completed ? 'Done' : 'Close'}
+                            {job?.completed || alreadyEnabledMessage ? 'Done' : 'Close'}
                         </button>
                     )}
                 </div>
