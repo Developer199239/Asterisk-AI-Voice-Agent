@@ -7597,7 +7597,6 @@ class Engine:
                     try:
                         cfg = getattr(self.config, "barge_in", None)
                         cooldown_ms = int(getattr(cfg, "cooldown_ms", 500)) if cfg else 500
-                        import time
                         now = time.time()
                         last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
                         if last_barge_in_ts and (now - last_barge_in_ts) * 1000 < cooldown_ms:
@@ -7755,8 +7754,6 @@ class Engine:
                 # If barge-in fired, suppress provider audio locally for a short window so streaming
                 # doesn't immediately restart with the remainder of the previous sentence.
                 try:
-                    import time
-
                     now = time.time()
                     sup = session.vad_state.get("output_suppression") or {}
                     until_ts = float(sup.get("until_ts", 0.0) or 0.0)
@@ -8693,7 +8690,7 @@ class Engine:
                         # as the best-available proxy for "user finished speaking".
                         session.last_user_speech_end_ts = float(now_ts)
                     except Exception:
-                        pass
+                        logger.debug("Failed to stamp transcript latency timestamps", call_id=call_id, exc_info=True)
                     # Add to conversation history
                     if not hasattr(session, 'conversation_history') or session.conversation_history is None:
                         session.conversation_history = []
