@@ -1,10 +1,8 @@
 <div align="center">
 
 <picture>
-  <img src="assets/mascot.png" width="120" alt="AVA Mascot" style="margin-bottom: -30px;">
+  <img src="assets/banner.png" alt="Asterisk AI Voice Agent">
 </picture>
-
-# Asterisk AI Voice Agent
 
 ![Version](https://img.shields.io/badge/version-6.3.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
