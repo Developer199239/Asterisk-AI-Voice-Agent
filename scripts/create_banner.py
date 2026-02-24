@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create banner image with mascot on left, title on right."""
+"""Create banner image with transparent background, white text, and mascot overlap."""
 
 from PIL import Image, ImageDraw, ImageFont
 import os
@@ -10,41 +10,45 @@ project_root = os.path.dirname(script_dir)
 mascot_path = os.path.join(project_root, "archived/AAVA-Mascots/aava.jpg")
 output_path = os.path.join(project_root, "assets/banner.png")
 
-# Banner dimensions (wide for README header)
-BANNER_WIDTH = 700
-BANNER_HEIGHT = 140
+# Banner dimensions
+BANNER_WIDTH = 800
+BANNER_HEIGHT = 160
 
-# Colors (GitHub dark theme - exact match)
-BG_COLOR = (13, 17, 23)  # #0d1117 GitHub dark background
-TEXT_COLOR = (255, 255, 255)  # White text
+# Fully transparent background
+banner = Image.new('RGBA', (BANNER_WIDTH, BANNER_HEIGHT), (0, 0, 0, 0))
 
-# Create banner with GitHub dark background
-banner = Image.new('RGBA', (BANNER_WIDTH, BANNER_HEIGHT), BG_COLOR + (255,))
+def remove_white_bg(img):
+    """Remove white background from image."""
+    img = img.convert("RGBA")
+    datas = img.getdata()
+    new_data = []
+    for item in datas:
+        # If pixel is close to white, make it transparent
+        if item[0] > 240 and item[1] > 240 and item[2] > 240:
+            new_data.append((255, 255, 255, 0))
+        else:
+            new_data.append(item)
+    img.putdata(new_data)
+    return img
 
-# Load mascot
-mascot = Image.open(mascot_path).convert('RGBA')
+# Load and process mascot
+mascot = Image.open(mascot_path)
+mascot = remove_white_bg(mascot)
 
-# Resize mascot to fit nicely on left
-mascot_height = 130
+# Resize mascot
+mascot_height = 150
 aspect = mascot.width / mascot.height
 mascot_width = int(mascot_height * aspect)
 mascot = mascot.resize((mascot_width, mascot_height), Image.Resampling.LANCZOS)
 
-# Position mascot on left side, vertically centered
-mascot_x = 20
-mascot_y = (BANNER_HEIGHT - mascot_height) // 2
+# Setup text
+text = "Asterisk AI Voice Agent"
+TEXT_COLOR = (255, 255, 255)  # White text for dark theme
 
-# Paste mascot (full opacity)
-banner.paste(mascot, (mascot_x, mascot_y), mascot)
-
-# Add text on right side
-draw = ImageDraw.Draw(banner)
-
-# Try to use a bold font
-font_size = 42
+# Use extra bold font if possible
+font_size = 56
 font = None
 try:
-    # Try system fonts - prefer bold
     for font_name in ["/System/Library/Fonts/Supplemental/Arial Bold.ttf",
                       "/System/Library/Fonts/Helvetica.ttc",
                       "/Library/Fonts/Arial.ttf"]:
@@ -56,18 +60,27 @@ try:
 except:
     font = ImageFont.load_default()
 
-text = "Asterisk AI Voice Agent"
-
-# Get text bounding box
+draw = ImageDraw.Draw(banner)
 bbox = draw.textbbox((0, 0), text, font=font)
 text_width = bbox[2] - bbox[0]
 text_height = bbox[3] - bbox[1]
 
-# Position text to the right of mascot, vertically centered
-text_x = mascot_x + mascot_width + 30
-text_y = (BANNER_HEIGHT - text_height) // 2
+# Overlap text over mascot
+overlap = 25  # pixels
+total_width = mascot_width + text_width - overlap
 
-# Draw text
+start_x = (BANNER_WIDTH - total_width) // 2
+
+mascot_x = start_x
+mascot_y = (BANNER_HEIGHT - mascot_height) // 2
+
+text_x = mascot_x + mascot_width - overlap
+text_y = mascot_y + (mascot_height - text_height) // 2 + 10  # aligned slightly lower like snapshot
+
+# Draw mascot FIRST
+banner.paste(mascot, (mascot_x, mascot_y), mascot)
+
+# Draw text OVER the mascot
 draw.text((text_x, text_y), text, font=font, fill=TEXT_COLOR)
 
 # Save banner
