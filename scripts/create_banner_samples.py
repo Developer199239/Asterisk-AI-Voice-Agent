@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate banner samples with mascot BEHIND text (text overlapping mascot)."""
+"""Generate banner samples with mascot BEHIND text - "A" overlapping yellow circle."""
 
 from PIL import Image, ImageDraw, ImageFont
 import os
@@ -21,7 +21,7 @@ def remove_white_bg(img):
     img.putdata(new_data)
     return img
 
-# Load mascot
+# Load mascot from aava.jpg (the one without black ink on head)
 mascot = Image.open(mascot_path)
 mascot = remove_white_bg(mascot)
 
@@ -32,7 +32,7 @@ mascot_width = int(mascot_height * aspect)
 mascot = mascot.resize((mascot_width, mascot_height), Image.Resampling.LANCZOS)
 
 text = "Asterisk AI Voice Agent"
-font_size = 130
+font_size = 120
 font = None
 font_paths = [
     "/System/Library/Fonts/HelveticaNeue.ttc",
@@ -57,9 +57,9 @@ padding_x = 40
 padding_y = 40
 
 def create_sample(name, bg_color, text_color):
-    # KEY CHANGE: Increase overlap so "A" is over the yellow circle
-    # The text starts overlapping the mascot's yellow circle
-    overlap = 100  # Pixels - how much text overlaps into mascot area
+    # CRITICAL: Large negative overlap so "A" is INSIDE the yellow circle
+    # This means text_x starts BEFORE the mascot ends
+    overlap = 180  # Pixels - "A" will be inside the yellow circle
     
     total_width = mascot_width + text_width - overlap + (padding_x * 2)
     total_height = max(mascot_height, text_height) + (padding_y * 2)
@@ -70,13 +70,12 @@ def create_sample(name, bg_color, text_color):
     mascot_x = padding_x
     mascot_y = (total_height - mascot_height) // 2
     
-    # Text position: overlapping the mascot's yellow circle
+    # Text position: "A" should be INSIDE the yellow circle
     text_x = mascot_x + mascot_width - overlap
-    # Align text lower, at the bottom portion of the mascot (like the snapshot)
-    text_y = mascot_y + mascot_height - text_height - 50
+    # Align text lower, at the bottom portion of the mascot
+    text_y = mascot_y + mascot_height - text_height - 40
     
-    # IMPORTANT: Draw mascot FIRST, then text ON TOP
-    # This makes the mascot appear BEHIND the text
+    # Draw mascot FIRST, then text ON TOP (mascot behind text)
     banner.paste(mascot, (mascot_x, mascot_y), mascot)
     draw.text((text_x, text_y), text, font=font, fill=text_color)
     
