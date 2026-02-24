@@ -32,6 +32,11 @@ const LoginPage: React.FC = () => {
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
             <div className="w-full max-w-md space-y-8 bg-card p-8 rounded-lg border border-border shadow-lg">
                 <div className="text-center">
+                    <img 
+                        src="/mascot.png" 
+                        alt="AVA Mascot" 
+                        className="w-24 h-24 mx-auto mb-4 rounded-full shadow-lg"
+                    />
                     <h2 className="text-3xl font-bold text-foreground">Admin Login</h2>
                     <p className="mt-2 text-sm text-muted-foreground">
                         Sign in to manage your AI Voice Agent
