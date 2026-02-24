@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create high-resolution banner image with mascot overlap."""
+"""Create dynamic high-resolution banner image."""
 
 from PIL import Image, ImageDraw, ImageFont
 import os
@@ -10,13 +10,6 @@ project_root = os.path.dirname(script_dir)
 mascot_path = os.path.join(project_root, "archived/AAVA-Mascots/aava.jpg")
 output_path = os.path.join(project_root, "assets/banner.png")
 
-# Retina dimensions (2x)
-BANNER_WIDTH = 1600
-BANNER_HEIGHT = 360
-
-# Fully transparent background
-banner = Image.new('RGBA', (BANNER_WIDTH, BANNER_HEIGHT), (0, 0, 0, 0))
-
 def remove_white_bg(img):
     """Remove white background from image smoothly."""
     img = img.convert("RGBA")
@@ -24,8 +17,7 @@ def remove_white_bg(img):
     new_data = []
     for item in datas:
         # If pixel is close to white, make it transparent
-        # Use a slightly stricter threshold to avoid white halos
-        if item[0] > 245 and item[1] > 245 and item[2] > 245:
+        if item[0] > 240 and item[1] > 240 and item[2] > 240:
             new_data.append((255, 255, 255, 0))
         else:
             new_data.append(item)
@@ -36,8 +28,8 @@ def remove_white_bg(img):
 mascot = Image.open(mascot_path)
 mascot = remove_white_bg(mascot)
 
-# Resize mascot (make it larger and crisp)
-mascot_height = 320
+# Resize mascot (make it large for crisp retina display)
+mascot_height = 360
 aspect = mascot.width / mascot.height
 mascot_width = int(mascot_height * aspect)
 mascot = mascot.resize((mascot_width, mascot_height), Image.Resampling.LANCZOS)
@@ -47,7 +39,7 @@ text = "Asterisk AI Voice Agent"
 TEXT_COLOR = (255, 255, 255)  # White text
 
 # Use the best available bold font for Mac
-font_size = 110
+font_size = 140
 font = None
 font_paths = [
     "/System/Library/Fonts/HelveticaNeue.ttc",
@@ -67,23 +59,32 @@ for font_name in font_paths:
 if font is None:
     font = ImageFont.load_default()
 
-draw = ImageDraw.Draw(banner)
-bbox = draw.textbbox((0, 0), text, font=font)
+# Get text dimensions using a temporary image
+temp_img = Image.new('RGBA', (1, 1))
+temp_draw = ImageDraw.Draw(temp_img)
+bbox = temp_draw.textbbox((0, 0), text, font=font)
 text_width = bbox[2] - bbox[0]
 text_height = bbox[3] - bbox[1]
 
-# Position text and mascot to overlap exactly like Snapshot 1
-# Mascot is on the left, text overlaps the bottom right of the mascot circle
-overlap = 60  # Pixels of overlap
-total_width = mascot_width + text_width - overlap
+# Layout parameters
+overlap = 70  # Pixels of overlap
+padding_x = 40
+padding_y = 40
 
-start_x = (BANNER_WIDTH - total_width) // 2
+# Calculate exact required image dimensions to prevent cutoff
+total_width = mascot_width + text_width - overlap + (padding_x * 2)
+total_height = max(mascot_height, text_height) + (padding_y * 2)
 
-mascot_x = start_x
-mascot_y = (BANNER_HEIGHT - mascot_height) // 2
+# Create perfectly sized transparent background
+banner = Image.new('RGBA', (total_width, total_height), (0, 0, 0, 0))
+draw = ImageDraw.Draw(banner)
+
+# Calculate positions
+mascot_x = padding_x
+mascot_y = (total_height - mascot_height) // 2
 
 text_x = mascot_x + mascot_width - overlap
-# Align text lower, overlapping the hand/circle area
+# Align text slightly lower to overlap the hand/circle area smoothly like the snapshot
 text_y = mascot_y + mascot_height - text_height - 60
 
 # Draw mascot FIRST
@@ -94,4 +95,4 @@ draw.text((text_x, text_y), text, font=font, fill=TEXT_COLOR)
 
 # Save banner
 banner.save(output_path, 'PNG')
-print(f"Banner created: {output_path}")
+print(f"Banner created: {output_path} (Size: {total_width}x{total_height})")
