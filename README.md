@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/banner_dark_mode.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/banner_light_mode.png">
-  <img alt="Asterisk AI Voice Agent" src="assets/banner_light_mode.png" style="max-width: 100%;">
+  <img alt="Asterisk AI Voice Agent" src="assets/banner_light_mode.png" width="100%">
 </picture>
 
 ![Version](https://img.shields.io/badge/version-6.3.1-blue.svg)
