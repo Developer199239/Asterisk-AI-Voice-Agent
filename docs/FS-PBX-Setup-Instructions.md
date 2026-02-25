@@ -10,6 +10,7 @@ sidebar_position: 1
 This guide will help you setup an Asterisk AI application server that has two way communication, though some entries are static, it will shed light on the usability of both FreePBX and FusionPBX.  The setup of this took two days of research, using various tools such as OpenAI, Claude, and Grok.
 
 Further documentation and setup is found by going to: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/
+Originally Published at: https://www.fspbx.com/docs/integrations/asterisk-ai/
 
 At the time of writing this, the development was fairly active, and offers a Discord as well for support.  We go into detail on the bottom of this page for supporting the maintainer, as well as their support Discord.
 
