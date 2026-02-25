@@ -59,6 +59,7 @@ const EnvPage = () => {
     const [applyPlan, setApplyPlan] = useState<Array<{ service: string; method: string; endpoint: string }>>([]);
     const [changedKeys, setChangedKeys] = useState<string[]>([]);
     const [showAdvancedKokoro, setShowAdvancedKokoro] = useState(false);
+    const [localCaps, setLocalCaps] = useState<Record<string, any> | null>(null);
     const [smtpTestTo, setSmtpTestTo] = useState('');
     const [smtpTesting, setSmtpTesting] = useState(false);
     const [smtpTestResult, setSmtpTestResult] = useState<{success: boolean; message?: string; error?: string} | null>(null);
@@ -90,6 +91,22 @@ const EnvPage = () => {
         window.addEventListener('hashchange', handleHashChange);
         return () => window.removeEventListener('hashchange', handleHashChange);
     }, []);
+
+    // Load local AI server capabilities when on local-ai tab
+    useEffect(() => {
+        if (activeTab !== 'local-ai') return;
+        const loadCaps = async () => {
+            try {
+                const res = await axios.get('/api/local-ai/capabilities', {
+                    headers: token ? { Authorization: `Bearer ${token}` } : undefined
+                });
+                setLocalCaps(res.data || null);
+            } catch {
+                // Best-effort; capabilities unavailable if local_ai_server is not running.
+            }
+        };
+        loadCaps();
+    }, [activeTab, token]);
 
     const kokoroMode = (env['KOKORO_MODE'] || 'local').toLowerCase();
     const showHfKokoroMode = showAdvancedKokoro || kokoroMode === 'hf';
@@ -1119,7 +1136,8 @@ const EnvPage = () => {
                                 { value: 'vosk', label: 'Vosk (Local)' },
                                 { value: 'kroko', label: 'Kroko (Cloud/Embedded)' },
                                 { value: 'sherpa', label: 'Sherpa-ONNX (Local)' },
-                                { value: 'faster_whisper', label: 'Faster Whisper (High Accuracy)' },
+                                { value: 'faster_whisper', label: `Faster Whisper${localCaps && !localCaps.stt?.faster_whisper?.available ? ' (requires rebuild)' : ''}` },
+                                { value: 'whisper_cpp', label: `Whisper.cpp (GGML)${localCaps && !localCaps.stt?.whisper_cpp?.available ? ' (requires rebuild)' : ''}` },
                             ]}
                         />
                         <FormInput
@@ -1144,10 +1162,13 @@ const EnvPage = () => {
                             <>
                                 <FormSwitch
                                     id="kroko-embedded"
-                                    label="Embedded Mode"
-                                    description="Run Kroko locally (requires model download)."
+                                    label={`Embedded Mode${localCaps?.stt?.kroko_embedded && !localCaps.stt.kroko_embedded.available ? ' (requires rebuild)' : ''}`}
+                                    description={localCaps?.stt?.kroko_embedded && !localCaps.stt.kroko_embedded.available
+                                        ? 'Rebuild local_ai_server with INCLUDE_KROKO_EMBEDDED=true to enable.'
+                                        : 'Run Kroko locally (requires model download).'}
                                     checked={isTrue(env['KROKO_EMBEDDED'])}
                                     onChange={(e) => updateEnv('KROKO_EMBEDDED', String(e.target.checked))}
+                                    disabled={localCaps?.stt?.kroko_embedded ? !localCaps.stt.kroko_embedded.available : false}
                                 />
                                 {isTrue(env['KROKO_EMBEDDED']) ? (
                                     <>
@@ -1242,6 +1263,16 @@ const EnvPage = () => {
                                 />
                             </>
                         )}
+
+                        {/* Whisper.cpp Settings */}
+                        {env['LOCAL_STT_BACKEND'] === 'whisper_cpp' && (
+                            <FormInput
+                                label="Whisper.cpp Model Path"
+                                value={env['LOCAL_WHISPER_CPP_MODEL_PATH'] || '/app/models/stt/ggml-base.en.bin'}
+                                onChange={(e) => updateEnv('LOCAL_WHISPER_CPP_MODEL_PATH', e.target.value)}
+                                tooltip="Path to a GGML Whisper model file (e.g., ggml-base.en.bin). Download from Models page."
+                            />
+                        )}
                             </div>
                         </ConfigCard>
                     </ConfigSection>
@@ -1257,7 +1288,7 @@ const EnvPage = () => {
                             options={[
                                 { value: 'piper', label: 'Piper (Local)' },
                                 { value: 'kokoro', label: 'Kokoro (Local, Premium)' },
-                                { value: 'melotts', label: 'MeloTTS (CPU-Optimized)' },
+                                { value: 'melotts', label: `MeloTTS (CPU-Optimized)${localCaps && !localCaps.tts?.melotts?.available ? ' (requires rebuild)' : ''}` },
                             ]}
                         />
 

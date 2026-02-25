@@ -1818,11 +1818,17 @@ exten => s,1,NoOp(AI Agent Call)
                                                     {/* Language-specific models */}
                                                     {modelCatalog?.stt?.filter((m: any) => 
                                                         m.language === selectedLanguage || m.language === 'multi'
-                                                    ).map((model: any) => (
-                                                        <option key={model.id} value={model.id}>
-                                                            {model.name} ({model.backend}) - {model.size_display}
-                                                        </option>
-                                                    ))}
+                                                    ).map((model: any) => {
+                                                        const needsRebuild =
+                                                            (model.backend === 'faster_whisper' && backendCaps && !backendCaps.stt?.faster_whisper?.available) ||
+                                                            (model.backend === 'whisper_cpp' && backendCaps && !backendCaps.stt?.whisper_cpp?.available) ||
+                                                            (model.backend === 'kroko' && model.embedded && backendCaps && !backendCaps.stt?.kroko_embedded?.available);
+                                                        return (
+                                                            <option key={model.id} value={model.id} disabled={!!needsRebuild}>
+                                                                {model.name} ({model.backend}) - {model.size_display}{needsRebuild ? ' (requires rebuild)' : ''}
+                                                            </option>
+                                                        );
+                                                    })}
                                                     {/* Fallback if no models for language */}
                                                     {(!modelCatalog?.stt || modelCatalog.stt.filter((m: any) => 
                                                         m.language === selectedLanguage || m.language === 'multi'
@@ -1877,11 +1883,15 @@ exten => s,1,NoOp(AI Agent Call)
                                                     {/* Language-specific voices */}
                                                     {modelCatalog?.tts?.filter((m: any) => 
                                                         m.language === selectedLanguage || m.language === 'multi'
-                                                    ).map((model: any) => (
-                                                        <option key={model.id} value={model.id}>
-                                                            {model.name} ({model.backend}) - {model.size_display}
-                                                        </option>
-                                                    ))}
+                                                    ).map((model: any) => {
+                                                        const needsRebuild =
+                                                            (model.backend === 'melotts' && backendCaps && !backendCaps.tts?.melotts?.available);
+                                                        return (
+                                                            <option key={model.id} value={model.id} disabled={!!needsRebuild}>
+                                                                {model.name} ({model.backend}) - {model.size_display}{needsRebuild ? ' (requires rebuild)' : ''}
+                                                            </option>
+                                                        );
+                                                    })}
                                                     {/* Fallback if no models for language */}
                                                     {(!modelCatalog?.tts || modelCatalog.tts.filter((m: any) => 
                                                         m.language === selectedLanguage || m.language === 'multi'

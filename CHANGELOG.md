@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool-call parsing robustness**: Hardened local tool-call extraction against malformed wrappers/markdown/control-token leaks; improved clean-text extraction to prevent tool syntax from reaching TTS.
 - **Hangup correctness**: Added/strengthened hangup guardrails for local LLMs to prevent hallucinated end-call tool executions; improved farewell handling to avoid spoken tool chatter.
 - **MeloTTS reliability**: Fixed build/runtime pinning, warmup behavior, and upstream install regressions to restore stable container rebuilds.
+- **AAVA-200 — Cosmetic UI bug at end of local full setup**: Fixed "No such container" error displayed at completion of the local AI setup wizard flow.
+- **AAVA-199 — Transfer tool enabling error on fresh install**: Fixed `TypeError: Cannot read properties of null` when enabling the transfer tool on a fresh installation.
+- **AAVA-193 — Setup Wizard local_ai_server start/logs fails**: Fixed compose execution context issue where the wizard's start and log-streaming commands failed due to incorrect working directory.
+- **AAVA-195 — Kroko embedded selection when binary unavailable**: Admin UI now gates Kroko embedded mode behind capability detection across Wizard, Env page, and model selectors; added rebuild hints for all optional backends (Faster-Whisper, Whisper.cpp, MeloTTS) and added missing Whisper.cpp backend to Env page STT dropdown.
 
 ### Refactored
 
