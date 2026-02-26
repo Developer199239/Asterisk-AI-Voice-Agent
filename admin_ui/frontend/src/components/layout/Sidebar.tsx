@@ -69,7 +69,7 @@ const Sidebar = () => {
                     <img
                         src="/mascot_transparent.png"
                         alt="AVA Mascot"
-                        className="w-8 h-8 object-contain"
+                        className="w-11 h-11 object-contain"
                     />
                     <div className="flex flex-col leading-none">
                         <span>AVA</span>
