@@ -83,6 +83,27 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
         }
     }, [expertEnabled]);
 
+    // Auto-switch model when API mode changes so Vertex ↔ Developer models stay in sync.
+    // This useEffect is the authoritative guard — it fires whenever use_vertex_ai flips
+    // and corrects the model if it belongs to the wrong API group.
+    const prevVertexRef = useRef<boolean | undefined>(undefined);
+    useEffect(() => {
+        const useVertex = config.use_vertex_ai ?? false;
+        // Only fire on actual toggles, not on initial mount
+        if (prevVertexRef.current !== undefined && prevVertexRef.current !== useVertex) {
+            const currentModel = config.llm_model || '';
+            const isModelVertex = currentModel.startsWith('gemini-live-');
+            const mismatch = useVertex ? !isModelVertex : isModelVertex;
+            if (mismatch) {
+                const newModel = useVertex
+                    ? 'gemini-live-2.5-flash-native-audio'
+                    : 'gemini-2.5-flash-native-audio-latest';
+                onChange({ ...config, llm_model: newModel });
+            }
+        }
+        prevVertexRef.current = useVertex;
+    }, [config.use_vertex_ai]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const selectedModel = normalizeGoogleLiveModelForUi(config.llm_model);
 
     // File upload handler
@@ -142,6 +163,11 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
         try {
             const res = await axios.post('/api/config/vertex-ai/verify');
             setVerifyResult({ status: 'success', message: res.data.message || 'Credentials verified!' });
+            // Auto-switch to a Vertex-compatible model on successful verification
+            const currentModel = config.llm_model || '';
+            if (!currentModel.startsWith('gemini-live-')) {
+                onChange({ ...config, llm_model: 'gemini-live-2.5-flash-native-audio' });
+            }
         } catch (e: any) {
             setVerifyResult({ status: 'error', message: e.response?.data?.detail || 'Verification failed' });
         } finally {
@@ -162,20 +188,8 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             className="mt-1 rounded border-input"
                             checked={config.use_vertex_ai ?? false}
                             onChange={(e) => {
-                                const useVertex = e.target.checked;
-                                // Auto-switch to a compatible model when toggling API mode
-                                const currentModel = config.llm_model || '';
-                                const isCurrentModelVertex = currentModel.startsWith('gemini-live-');
-                                const needsModelSwitch = useVertex ? !isCurrentModelVertex : isCurrentModelVertex;
-                                
-                                if (needsModelSwitch) {
-                                    const newModel = useVertex 
-                                        ? 'gemini-live-2.5-flash-native-audio'  // Default Vertex AI model
-                                        : 'gemini-2.5-flash-native-audio-latest';  // Default Developer API model
-                                    onChange({ ...config, use_vertex_ai: useVertex, llm_model: newModel });
-                                } else {
-                                    handleChange('use_vertex_ai', useVertex);
-                                }
+                                handleChange('use_vertex_ai', e.target.checked);
+                                // Model auto-switch is handled by the useEffect above
                             }}
                         />
                         <div>
