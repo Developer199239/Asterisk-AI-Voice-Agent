@@ -65,11 +65,16 @@ const Sidebar = () => {
     return (
         <aside className="w-64 border-r border-border bg-card/50 backdrop-blur flex flex-col h-full">
             <div className="p-6 border-b border-border/50">
-                <div className="flex items-center gap-2 font-bold text-xl tracking-tight">
-                    <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground">
-                        <Activity className="w-5 h-5" />
+                <div className="flex items-center gap-3 font-bold text-xl tracking-tight">
+                    <img
+                        src="/mascot_transparent.png"
+                        alt="AVA Mascot"
+                        className="w-8 h-8 object-contain"
+                    />
+                    <div className="flex flex-col leading-none">
+                        <span>AVA</span>
+                        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mt-1">AI Agent for Asterisk</span>
                     </div>
-                    Asterisk AI
                 </div>
             </div>
 
