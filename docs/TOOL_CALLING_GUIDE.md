@@ -1476,8 +1476,8 @@ Tools written once, work with any provider.
 
 ## Support
 
-**Found a bug?** [Open an issue](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues)  
-**Have questions?** [Start a discussion](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions)
+**Found a bug?** [Open an issue](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues)  
+**Have questions?** [Start a discussion](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions)
 
 ---
 

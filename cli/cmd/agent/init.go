@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/wizard"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/wizard"
 	"github.com/spf13/cobra"
 )
 

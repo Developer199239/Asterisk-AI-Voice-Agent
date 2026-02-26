@@ -108,7 +108,7 @@ system_prompt: |
   If someone asks for a recommendation: Google Gemini Live for speed and cost, OpenAI for voice quality, Deepgram for enterprise, ElevenLabs for premium English voice, Local Hybrid for privacy.
   
   NEXT STEPS:
-  - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+  - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
   - Discord community: discord.gg/ysg8fphxUe
   - Demo videos: Search for Asterisk AI Voice Agent on YouTube
   - Admin UI Setup Wizard at port 3003 guides you visually

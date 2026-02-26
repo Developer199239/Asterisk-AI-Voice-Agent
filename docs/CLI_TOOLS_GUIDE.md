@@ -24,7 +24,7 @@ The CLI is included with standard installs (for example via `install.sh` / Admin
 From a Linux/macOS host:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash
+curl -sSL https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/main/scripts/install-cli.sh | bash
 ```
 
 Verify:

@@ -81,7 +81,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -254,7 +254,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -499,7 +499,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -720,7 +720,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -885,7 +885,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -1173,7 +1173,7 @@ contexts:
 
       - MCP tools can be extended to do customer lookups, calendar scheduling, database queries, and more
 
-      - For more info, visit github.com/hkjarral/Asterisk-AI-Voice-Agent or join Discord at discord.gg/ysg8fphxUe
+      - For more info, visit github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk or join Discord at discord.gg/ysg8fphxUe
 
 
       CALL ENDING:
@@ -1967,7 +1967,7 @@ mcp:
       env:
         METNO_USER_AGENT: >-
           Asterisk-AI-Voice-Agent
-          (+https://github.com/hkjarral/Asterisk-AI-Voice-Agent)
+          (+https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk)
       defaults:
         timeout_ms: 15000
         slow_response_threshold_ms: 3000

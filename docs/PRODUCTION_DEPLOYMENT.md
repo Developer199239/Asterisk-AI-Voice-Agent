@@ -669,7 +669,7 @@ aws s3 sync /backups/ai-voice-agent/ "$BUCKET/" \
 
 3. **Clone repository**:
    ```bash
-   git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+   git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
    cd Asterisk-AI-Voice-Agent
    ```
 
@@ -1096,8 +1096,8 @@ ulimit -n 65536
 
 ### External Support
 
-- **GitHub Issues**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
-- **Community Forum**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions
+- **GitHub Issues**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues
+- **Community Forum**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions
 - **Documentation**: [docs/README.md](README.md)
 
 ---

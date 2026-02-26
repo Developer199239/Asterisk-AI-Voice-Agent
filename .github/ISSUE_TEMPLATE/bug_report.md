@@ -47,11 +47,11 @@ These make issues actionable and help us update the Supported Platforms matrix:
 
 If the `agent` CLI is not installed:
 ```bash
-curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash
+curl -sSL https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/main/scripts/install-cli.sh | bash
 agent version
 ```
 
-Note for forks: replace `hkjarral/Asterisk-AI-Voice-Agent` in the URL above with your fork owner/repo.
+Note for forks: replace `hkjarral/AVA-AI-Voice-Agent-for-Asterisk` in the URL above with your fork owner/repo.
 
 Then attach diagnostics:
 ```bash

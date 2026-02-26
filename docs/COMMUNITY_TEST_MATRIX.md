@@ -1,7 +1,7 @@
 # Community Test Matrix — Local AI Server
 
 Help us build the definitive reference for what works best when running AAVA fully local.
-Submit your results via [GitHub Issue](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues/new?template=local-ai-test-result.md) or PR to this file.
+Submit your results via [GitHub Issue](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues/new?template=local-ai-test-result.md) or PR to this file.
 
 ---
 

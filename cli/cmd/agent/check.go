@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/check"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/check"
 	"github.com/spf13/cobra"
 )
 

@@ -2723,44 +2723,28 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                         onClick={async () => {
                                             setReloadingEngine(true);
                                             try {
-                                                const res = await axios.post('/api/system/containers/ai_engine/reload');
-                                                if (res.data.restart_required) {
-                                                    // New provider needs full restart
-                                                    const shouldRestart = await confirm({
-                                                        title: 'Restart Required',
-                                                        description: 'New provider detected. A full restart is needed to load it. Restart now?',
-                                                        confirmText: 'Restart',
-                                                        variant: 'default'
+                                                showToast('Restarting AI Engine with new settings...', 'success');
+                                                const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false&recreate=true');
+                                                if (restartRes.data?.status === 'warning') {
+                                                    const confirmForce = await confirm({
+                                                        title: 'Force Restart?',
+                                                        description: `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`,
+                                                        confirmText: 'Force Restart',
+                                                        variant: 'destructive'
                                                     });
-                                                    if (shouldRestart) {
-                                                        showToast('Restarting AI Engine...', 'success');
-                                                        const restartRes = await axios.post('/api/system/containers/ai_engine/restart?force=false&recreate=true');
-                                                        if (restartRes.data?.status === 'warning') {
-                                                            const confirmForce = await confirm({
-                                                                title: 'Force Restart?',
-                                                                description: `${restartRes.data.message}\n\nForce restart anyway? This may disconnect active calls.`,
-                                                                confirmText: 'Force Restart',
-                                                                variant: 'destructive'
-                                                            });
-                                                            if (confirmForce) {
-                                                                await axios.post('/api/system/containers/ai_engine/restart?force=true&recreate=true');
-                                                                showToast('AI Engine restarted! New provider is now available.', 'success');
-                                                            } else {
-                                                                showToast('Restart skipped due to active calls. Restart later to use new provider.', 'warning');
-                                                            }
-                                                        } else if (restartRes.data?.status === 'degraded') {
-                                                            showToast('AI Engine restarted but may not be fully healthy. Verify manually.', 'warning');
-                                                        } else {
-                                                            showToast('AI Engine restarted! New provider is now available.', 'success');
-                                                        }
+                                                    if (confirmForce) {
+                                                        await axios.post('/api/system/containers/ai_engine/restart?force=true&recreate=true');
+                                                        showToast('AI Engine restarted with new settings!', 'success');
                                                     } else {
-                                                        showToast('Config saved. Restart AI Engine later to use new provider.', 'success');
+                                                        showToast('Restart skipped due to active calls. Restart later from the Dashboard.', 'warning');
                                                     }
+                                                } else if (restartRes.data?.status === 'degraded') {
+                                                    showToast('AI Engine restarted but may not be fully healthy. Check the Dashboard.', 'warning');
                                                 } else {
-                                                    showToast('AI Engine configuration reloaded successfully!', 'success');
+                                                    showToast('AI Engine restarted with new settings!', 'success');
                                                 }
                                             } catch (err: any) {
-                                                showToast(err.response?.data?.detail || 'Failed to reload', 'error');
+                                                showToast(err.response?.data?.detail || 'Failed to restart AI Engine', 'error');
                                             } finally {
                                                 setReloadingEngine(false);
                                             }
@@ -2769,11 +2753,11 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                         className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
                                     >
                                         <RefreshCw className={`w-4 h-4 ${reloadingEngine ? 'animate-spin' : ''}`} />
-                                        {reloadingEngine ? 'Applying...' : 'Apply Changes'}
+                                        {reloadingEngine ? 'Restarting...' : 'Apply & Restart Engine'}
                                     </button>
                                 </div>
                                 <p className="text-xs text-green-600 dark:text-green-500 mt-2">
-                                    Click "Apply Changes" to activate your new provider settings.
+                                    Click "Apply & Restart Engine" to activate your new settings (including ARI credentials).
                                 </p>
                             </div>
                         )}

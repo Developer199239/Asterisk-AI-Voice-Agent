@@ -46,7 +46,7 @@ ASTERISK_FOUND=false
 COMPOSE_CMD=""
 
 # Docs and platform config (best-effort; script still works without them)
-AAVA_DOCS_BASE_URL="${AAVA_DOCS_BASE_URL:-https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/}"
+AAVA_DOCS_BASE_URL="${AAVA_DOCS_BASE_URL:-https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/}"
 PLATFORMS_YAML="$SCRIPT_DIR/config/platforms.yaml"
 
 github_docs_url() {
@@ -377,7 +377,7 @@ detect_os() {
         log_fail "Unsupported architecture: $ARCH"
         log_info "  AAVA requires x86_64 (64-bit Intel/AMD) architecture"
         log_info "  ARM64/aarch64 support is planned for a future release"
-        log_info "  Docs: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/SUPPORTED_PLATFORMS.md"
+        log_info "  Docs: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/SUPPORTED_PLATFORMS.md"
     else
         log_ok "Architecture: $ARCH"
     fi
@@ -415,7 +415,7 @@ detect_os() {
             else
                 log_ok "NumPy already pinned to <2.0 for CPU compatibility"
             fi
-            log_info "  Docs: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md#troubleshooting"
+            log_info "  Docs: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md#troubleshooting"
         else
             log_ok "CPU supports SSE4.1/SSE4.2 (NumPy 2.x compatible)"
         fi
@@ -442,7 +442,7 @@ detect_os() {
         log_info "    3. Ensure systemd is available"
         log_info ""
         log_info "  Supported platforms matrix:"
-        log_info "    https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/SUPPORTED_PLATFORMS.md"
+        log_info "    https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/SUPPORTED_PLATFORMS.md"
         log_info ""
         log_info "  Then re-run with --force to skip this check:"
         log_info "    ./preflight.sh --force"
@@ -738,7 +738,7 @@ check_docker() {
         local DOCKER_AAVA_DOCS_PATH
         DOCKER_AAVA_DOCS_PATH="$(platform_yaml_get docker.aava_docs || echo "docs/INSTALLATION.md")"
         local DOCKER_AAVA_DOCS_URL
-        DOCKER_AAVA_DOCS_URL="$(github_docs_url "$DOCKER_AAVA_DOCS_PATH" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md")"
+        DOCKER_AAVA_DOCS_URL="$(github_docs_url "$DOCKER_AAVA_DOCS_PATH" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md")"
         
         # Offer to install based on OS family
         if [ "$APPLY_FIXES" = true ]; then
@@ -784,7 +784,7 @@ check_docker() {
             local ROOTLESS_START_CMD
             ROOTLESS_START_CMD="$(platform_yaml_get docker.rootless_start_cmd || echo "systemctl --user start docker")"
             local ROOTLESS_DOCS
-            ROOTLESS_DOCS="$(github_docs_url "$(platform_yaml_get docker.rootless_docs || echo "docs/CROSS_PLATFORM_PLAN.md")" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/CROSS_PLATFORM_PLAN.md")"
+            ROOTLESS_DOCS="$(github_docs_url "$(platform_yaml_get docker.rootless_docs || echo "docs/CROSS_PLATFORM_PLAN.md")" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/CROSS_PLATFORM_PLAN.md")"
             MANUAL_CMDS+=("$ROOTLESS_START_CMD")
             print_fix_and_docs "$ROOTLESS_START_CMD" "$ROOTLESS_DOCS"
         else
@@ -827,7 +827,7 @@ check_docker() {
         log_fail "Docker $DOCKER_VERSION too old (minimum: 20.10) - upgrade required"
         local DOCKER_INSTALL_CMD
         DOCKER_INSTALL_CMD="$(platform_yaml_get docker.install_cmd || true)"
-        print_fix_and_docs "$DOCKER_INSTALL_CMD" "$(github_docs_url "$(platform_yaml_get docker.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md")"
+        print_fix_and_docs "$DOCKER_INSTALL_CMD" "$(github_docs_url "$(platform_yaml_get docker.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md")"
     elif [ "$DOCKER_MAJOR" -lt 25 ]; then
         log_warn "Docker $DOCKER_VERSION supported but upgrade to 25.x+ recommended"
     else
@@ -925,7 +925,7 @@ check_compose() {
     COMPOSE_CMD=""
     COMPOSE_VER=""
     local COMPOSE_AAVA_DOCS_URL
-    COMPOSE_AAVA_DOCS_URL="$(github_docs_url "$(platform_yaml_get compose.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md")"
+    COMPOSE_AAVA_DOCS_URL="$(github_docs_url "$(platform_yaml_get compose.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md")"
     
     if docker compose version &>/dev/null 2>&1; then
         COMPOSE_CMD="docker compose"

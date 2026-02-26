@@ -21,7 +21,7 @@ The maintainer makes routine decisions about bug fixes, minor features, and rele
 
 For new features or significant changes:
 
-1. **Start a discussion**: Open a [GitHub Discussion](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions) in the "Ideas" category, or file a Feature Request issue
+1. **Start a discussion**: Open a [GitHub Discussion](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions) in the "Ideas" category, or file a Feature Request issue
 2. **Get feedback**: The maintainer and community provide input on scope, approach, and priority
 3. **Write a milestone spec**: If accepted, create a spec using the [milestone template](docs/contributing/milestones/TEMPLATE.md) and submit as a Draft PR
 4. **Implement**: Once the spec is approved, the feature moves to the [Roadmap](docs/ROADMAP.md) and implementation can begin

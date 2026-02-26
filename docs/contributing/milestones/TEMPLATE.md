@@ -67,4 +67,4 @@ List any milestones, features, or external services this depends on.
 
 ---
 
-*To propose this milestone: submit it as a Draft PR and reference it in a [GitHub Discussion](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions). See [GOVERNANCE.md](../../../GOVERNANCE.md) for the feature proposal process.*
+*To propose this milestone: submit it as a Draft PR and reference it in a [GitHub Discussion](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions). See [GOVERNANCE.md](../../../GOVERNANCE.md) for the feature proposal process.*

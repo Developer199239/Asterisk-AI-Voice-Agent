@@ -214,7 +214,7 @@ agent check --local
 **5-minute visual setup** with the new web-based Admin UI:
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 
 # Run preflight (REQUIRED - creates .env, generates JWT_SECRET)
@@ -259,7 +259,7 @@ See [Admin UI Setup Guide](../admin_ui/UI_Setup_Guide.md) for detailed instructi
 **Command-line wizard** for terminal-based setup:
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 
 ./install.sh
@@ -277,7 +277,7 @@ agent setup
 **Traditional installer** with manual configuration:
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 ./install.sh
 ```
@@ -409,7 +409,7 @@ The installation is handled by an interactive script that will guide you through
 First, clone the project repository to a directory on your server.
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 ```
 

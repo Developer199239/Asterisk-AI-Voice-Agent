@@ -188,7 +188,7 @@ This is common for production: a small VPS runs Asterisk/ai_engine, and a beefy 
 ### Machine B (GPU Server) — local_ai_server only
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 
 # --local-server skips Asterisk/Admin UI checks (not needed on GPU-only box)
@@ -225,7 +225,7 @@ docker compose -p asterisk-ai-voice-agent \
 ### Machine A (PBX Server) — ai_engine + admin_ui only
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 sudo ./preflight.sh --apply-fixes
 ```

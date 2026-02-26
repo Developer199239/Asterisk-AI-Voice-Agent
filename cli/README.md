@@ -27,7 +27,7 @@ Legacy aliases (hidden from `--help` in v6.3.1):
 
 **Linux/macOS:**
 ```bash
-curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash
+curl -sSL https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/main/scripts/install-cli.sh | bash
 ```
 
 This will:
@@ -39,17 +39,17 @@ This will:
 
 ### Manual Download
 
-Download pre-built binaries from [GitHub Releases](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases):
+Download pre-built binaries from [GitHub Releases](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases):
 
 **Linux:**
 ```bash
 # AMD64 (most Linux servers)
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-amd64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-linux-amd64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 
 # ARM64 (Raspberry Pi, AWS Graviton)
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-arm64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-linux-arm64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 ```
@@ -57,12 +57,12 @@ sudo mv agent /usr/local/bin/
 **macOS:**
 ```bash
 # Intel Macs
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-amd64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-darwin-amd64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 
 # Apple Silicon (M1/M2/M3)
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-arm64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-darwin-arm64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 ```
@@ -272,7 +272,7 @@ agent version
 Asterisk AI Voice Agent CLI
 Version: vX.Y.Z
 Built: YYYY-MM-DDTHH:MM:SSZ
-Repository: https://github.com/hkjarral/Asterisk-AI-Voice-Agent
+Repository: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 ```
 
 ---
@@ -394,8 +394,8 @@ fi
 ## Support
 
 - **Documentation**: [docs/CLI_TOOLS_GUIDE.md](../docs/CLI_TOOLS_GUIDE.md)
-- **Issues**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
-- **Discussions**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions
+- **Issues**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues
+- **Discussions**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions
 
 ## License
 

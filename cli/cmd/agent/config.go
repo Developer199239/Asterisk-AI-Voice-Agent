@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/config"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/config"
 	"github.com/spf13/cobra"
 )
 

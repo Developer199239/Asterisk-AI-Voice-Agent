@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/dialplan"
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/validator"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/dialplan"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/validator"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )

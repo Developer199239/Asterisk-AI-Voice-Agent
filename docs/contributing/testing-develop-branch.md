@@ -100,7 +100,7 @@ If you want to keep both versions available simultaneously:
 
 ```bash
 # Clone to a new directory
-git clone -b develop https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git AVA-develop
+git clone -b develop https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git AVA-develop
 cd AVA-develop
 ```
 

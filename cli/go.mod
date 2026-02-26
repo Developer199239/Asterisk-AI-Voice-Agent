@@ -1,4 +1,4 @@
-module github.com/hkjarral/asterisk-ai-voice-agent/cli
+module github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli
 
 go 1.22
 

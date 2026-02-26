@@ -84,6 +84,7 @@ const Dashboard = () => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [fixingDirectories, setFixingDirectories] = useState(false);
+    const [reconnectingAri, setReconnectingAri] = useState(false);
 
     const [containersError, setContainersError] = useState<ApiErrorInfo | null>(null);
     const [metricsError, setMetricsError] = useState<ApiErrorInfo | null>(null);
@@ -145,6 +146,23 @@ const Dashboard = () => {
 
         setLoading(false);
         setRefreshing(false);
+    };
+
+    const handleReconnectAri = async () => {
+        setReconnectingAri(true);
+        try {
+            const res = await axios.post('/api/system/containers/ai_engine/restart?force=false&recreate=true');
+            if (res.data?.status === 'warning') {
+                toast.warning('Active calls detected', { description: 'Restart AI Engine manually when calls finish.' });
+            } else {
+                toast.success('AI Engine restarted', { description: 'ARI credentials reloaded. Connection will update shortly.' });
+            }
+            setTimeout(fetchData, 3000);
+        } catch (err: any) {
+            toast.error('Failed to restart AI Engine', { description: err?.response?.data?.detail || err?.message || 'Unknown error' });
+        } finally {
+            setReconnectingAri(false);
+        }
     };
 
     const handleFixDirectories = async () => {
@@ -360,24 +378,36 @@ const Dashboard = () => {
                         color="text-orange-500"
                     />
                     {/* Asterisk Connection */}
-                    <div
-                        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-accent/50 transition-colors"
-                        onClick={() => navigate('/asterisk')}
-                        title="View Asterisk Setup"
-                    >
-                        <Phone className={`w-5 h-5 flex-shrink-0 ${
-                            ariConnected === true ? 'text-green-500' :
-                            ariConnected === false ? 'text-red-500' : 'text-muted-foreground'
-                        }`} />
-                        <div className="min-w-0">
-                            <div className="text-xs text-muted-foreground">Asterisk</div>
-                            <div className={`text-sm font-semibold ${
+                    <div className="flex items-center gap-3 px-4 py-3">
+                        <div
+                            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity flex-1 min-w-0"
+                            onClick={() => navigate('/asterisk')}
+                            title="View Asterisk Setup"
+                        >
+                            <Phone className={`w-5 h-5 flex-shrink-0 ${
                                 ariConnected === true ? 'text-green-500' :
                                 ariConnected === false ? 'text-red-500' : 'text-muted-foreground'
-                            }`}>
-                                {ariConnected === true ? 'Connected' : ariConnected === false ? 'Disconnected' : 'Loading...'}
+                            }`} />
+                            <div className="min-w-0">
+                                <div className="text-xs text-muted-foreground">Asterisk</div>
+                                <div className={`text-sm font-semibold ${
+                                    ariConnected === true ? 'text-green-500' :
+                                    ariConnected === false ? 'text-red-500' : 'text-muted-foreground'
+                                }`}>
+                                    {ariConnected === true ? 'Connected' : ariConnected === false ? 'Disconnected' : 'Loading...'}
+                                </div>
                             </div>
                         </div>
+                        {ariConnected === false && (
+                            <button
+                                onClick={handleReconnectAri}
+                                disabled={reconnectingAri}
+                                className="ml-auto p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                                title="Restart AI Engine to reconnect ARI"
+                            >
+                                <Wrench className={`w-3.5 h-3.5 ${reconnectingAri ? 'animate-spin' : ''}`} />
+                            </button>
+                        )}
                     </div>
                     {/* Compact Directory Health */}
                     <div className="flex items-center gap-3 px-4 py-3">

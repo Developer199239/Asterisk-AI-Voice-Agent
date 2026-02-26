@@ -1988,7 +1988,7 @@ def _github_docs_url(path_or_url: Optional[str]) -> Optional[str]:
         return path_or_url
     base = os.getenv(
         "AAVA_DOCS_BASE_URL",
-        "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/",
+        "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/",
     )
     return base.rstrip("/") + "/" + path_or_url.lstrip("/")
 
@@ -2976,27 +2976,29 @@ def _ari_env_settings() -> dict:
     """
     Resolve ARI connection settings.
 
-    Prefer container environment variables (what the container actually runs with),
-    but fall back to `.env` for friendliness in dev setups.
+    Prefer the on-disk `.env` file (always up-to-date after wizard/UI saves)
+    so the admin_ui never needs a container recreate just to pick up new ARI
+    credentials.  Fall back to container environment variables for anything
+    not yet written to `.env`.
     """
-    host = (os.environ.get("ASTERISK_HOST") or _dotenv_value("ASTERISK_HOST") or "127.0.0.1").strip()
-    scheme = (os.environ.get("ASTERISK_ARI_SCHEME") or _dotenv_value("ASTERISK_ARI_SCHEME") or "http").strip()
-    port_raw = (os.environ.get("ASTERISK_ARI_PORT") or _dotenv_value("ASTERISK_ARI_PORT") or "8088").strip()
+    host = (_dotenv_value("ASTERISK_HOST") or os.environ.get("ASTERISK_HOST") or "127.0.0.1").strip()
+    scheme = (_dotenv_value("ASTERISK_ARI_SCHEME") or os.environ.get("ASTERISK_ARI_SCHEME") or "http").strip()
+    port_raw = (_dotenv_value("ASTERISK_ARI_PORT") or os.environ.get("ASTERISK_ARI_PORT") or "8088").strip()
     user = (
-        os.environ.get("ASTERISK_ARI_USERNAME")
-        or os.environ.get("ARI_USERNAME")
-        or _dotenv_value("ASTERISK_ARI_USERNAME")
+        _dotenv_value("ASTERISK_ARI_USERNAME")
         or _dotenv_value("ARI_USERNAME")
+        or os.environ.get("ASTERISK_ARI_USERNAME")
+        or os.environ.get("ARI_USERNAME")
         or ""
     ).strip()
     password = (
-        os.environ.get("ASTERISK_ARI_PASSWORD")
-        or os.environ.get("ARI_PASSWORD")
-        or _dotenv_value("ASTERISK_ARI_PASSWORD")
+        _dotenv_value("ASTERISK_ARI_PASSWORD")
         or _dotenv_value("ARI_PASSWORD")
+        or os.environ.get("ASTERISK_ARI_PASSWORD")
+        or os.environ.get("ARI_PASSWORD")
         or ""
     ).strip()
-    ssl_verify_raw = (os.environ.get("ASTERISK_ARI_SSL_VERIFY") or _dotenv_value("ASTERISK_ARI_SSL_VERIFY") or "true").strip().lower()
+    ssl_verify_raw = (_dotenv_value("ASTERISK_ARI_SSL_VERIFY") or os.environ.get("ASTERISK_ARI_SSL_VERIFY") or "true").strip().lower()
     ssl_verify = ssl_verify_raw not in ("0", "false", "no", "off")
     try:
         port = int(port_raw)
@@ -4567,10 +4569,10 @@ def _resolve_app_name() -> str:
     except Exception:
         pass
     return (
-        os.environ.get("ASTERISK_APP_NAME")
-        or os.environ.get("ASTERISK_ARI_APP")
-        or _dotenv_value("ASTERISK_APP_NAME")
+        _dotenv_value("ASTERISK_APP_NAME")
         or _dotenv_value("ASTERISK_ARI_APP")
+        or os.environ.get("ASTERISK_APP_NAME")
+        or os.environ.get("ASTERISK_ARI_APP")
         or "asterisk-ai-voice-agent"
     )
 

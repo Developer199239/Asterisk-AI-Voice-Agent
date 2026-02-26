@@ -678,7 +678,7 @@ admin_ui/
 
 ### Support Channels
 
-**GitHub Issues**: [Report bugs or request features](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues)
+**GitHub Issues**: [Report bugs or request features](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues)
 - Use label: `admin-ui`
 - Include: Version, deployment method, error logs
 

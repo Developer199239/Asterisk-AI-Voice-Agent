@@ -664,7 +664,7 @@ For additional troubleshooting:
 - Check `docs/Configuration-Reference.md` for tuning parameters
 - Review `docs/Transport-Mode-Compatibility.md` for transport issues
 - Use **Admin UI → Call History** to debug specific calls
-- Report issues: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
+- Report issues: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues
 
 ## 6. Queue Setup for Call Transfers (Optional)
 
@@ -724,4 +724,4 @@ Once your integration is working:
 
 **FreePBX Integration Guide - Complete** ✅
 
-For questions or issues, see the [GitHub repository](https://github.com/hkjarral/Asterisk-AI-Voice-Agent).
+For questions or issues, see the [GitHub repository](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk).

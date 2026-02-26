@@ -24,7 +24,7 @@ func docsURL(pathOrURL string) string {
 	}
 	base := os.Getenv("AAVA_DOCS_BASE_URL")
 	if base == "" {
-		base = "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/"
+		base = "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/"
 	}
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(pathOrURL, "/")
 }

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/demo"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/demo"
 	"github.com/spf13/cobra"
 )
 
