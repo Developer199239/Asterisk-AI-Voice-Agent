@@ -199,6 +199,11 @@ if os.path.exists(static_dir):
         if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
             raise HTTPException(status_code=404, detail="Not found")
             
+        # Check if the file exists in the static root (like mascot_transparent.png or favicon.ico)
+        potential_file = os.path.join(static_dir, full_path)
+        if full_path and os.path.isfile(potential_file):
+            return FileResponse(potential_file)
+            
         # Serve index.html for all other routes (SPA)
         response = FileResponse(os.path.join(static_dir, "index.html"))
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
