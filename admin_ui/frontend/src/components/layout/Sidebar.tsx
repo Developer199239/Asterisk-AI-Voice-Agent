@@ -73,7 +73,7 @@ const Sidebar = () => {
                     />
                     <div className="flex flex-col leading-none">
                         <span>AVA</span>
-                        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mt-1">AI Agent for Asterisk</span>
+                        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mt-1">AI Voice Agent for Asterisk</span>
                     </div>
                 </div>
             </div>
