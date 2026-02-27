@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
@@ -11,6 +11,7 @@ import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
 import PipelineForm from '../components/config/PipelineForm';
 import { ensureModularKey, isFullAgentProvider } from '../utils/providerNaming';
+import { usePendingChanges } from '../hooks/usePendingChanges';
 
 const PipelinesPage = () => {
     const { confirm } = useConfirmDialog();
@@ -21,7 +22,7 @@ const PipelinesPage = () => {
     const [editingPipeline, setEditingPipeline] = useState<string | null>(null);
     const [pipelineForm, setPipelineForm] = useState<any>({});
     const [isNewPipeline, setIsNewPipeline] = useState(false);
-    const [pendingRestart, setPendingRestart] = useState(false);
+    const { pendingRestart, setPendingChanges, clearPendingChanges } = usePendingChanges();
     const [restartingEngine, setRestartingEngine] = useState(false);
     const providers = config?.providers || {};
 
@@ -137,7 +138,7 @@ const PipelinesPage = () => {
             const sanitized = sanitizeConfigForSave(newConfig);
             await axios.post('/api/config/yaml', { content: yaml.dump(sanitized) });
             setConfig(sanitized);
-            setPendingRestart(true);
+            setPendingChanges('restart');
         } catch (err) {
             console.error('Failed to save config', err);
             toast.error('Failed to save configuration');
@@ -170,7 +171,7 @@ const PipelinesPage = () => {
             }
 
             if (response.data.status === 'success') {
-                setPendingRestart(false);
+                clearPendingChanges();
                 toast.success('AI Engine restarted! Changes are now active.');
             }
         } catch (error: any) {
@@ -216,7 +217,7 @@ const PipelinesPage = () => {
         const usingContexts = Object.entries(contexts)
             .filter(([_, ctx]) => (ctx as any).pipeline === name)
             .map(([ctxName]) => ctxName);
-        
+
         let confirmMessage = `Are you sure you want to delete pipeline "${name}"?`;
         if (usingContexts.length > 0) {
             confirmMessage = `Pipeline "${name}" is used by ${usingContexts.length} context(s): ${usingContexts.join(', ')}.\n\nThose contexts will fall back to the default pipeline.\n\nAre you sure you want to delete it?`;
@@ -410,11 +411,10 @@ const PipelinesPage = () => {
                 <button
                     onClick={() => handleReloadAIEngine(false)}
                     disabled={restartingEngine}
-                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
-                        pendingRestart 
-                            ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium' 
-                            : 'bg-yellow-500/20 hover:bg-yellow-500/30'
-                    } disabled:opacity-50`}
+                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${pendingRestart
+                        ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium'
+                        : 'bg-yellow-500/20 hover:bg-yellow-500/30'
+                        } disabled:opacity-50`}
                 >
                     {restartingEngine ? (
                         <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />

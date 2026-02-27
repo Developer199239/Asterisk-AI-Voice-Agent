@@ -10,6 +10,7 @@ import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
 import ContextForm from '../components/config/ContextForm';
+import { usePendingChanges } from '../hooks/usePendingChanges';
 
 const ContextsPage = () => {
     const { confirm } = useConfirmDialog();
@@ -30,8 +31,7 @@ const ContextsPage = () => {
     const [editingContext, setEditingContext] = useState<string | null>(null);
     const [contextForm, setContextForm] = useState<any>({});
     const [isNewContext, setIsNewContext] = useState(false);
-    const [pendingApply, setPendingApply] = useState(false);
-    const [applyMethod, setApplyMethod] = useState<'hot_reload' | 'restart'>('restart');
+    const { pendingRestart: pendingApply, applyMethod, setPendingChanges, clearPendingChanges } = usePendingChanges();
     const [restartingEngine, setRestartingEngine] = useState(false);
 
     useEffect(() => {
@@ -57,7 +57,7 @@ const ContextsPage = () => {
         } catch (err) {
             console.error('Failed to load config', err);
             const status = (err as any)?.response?.status;
-            
+
             if (status === 401) {
                 setError('Not authenticated. Please refresh and log in again.');
                 setYamlError(null);
@@ -176,8 +176,7 @@ const ContextsPage = () => {
             const res = await axios.post('/api/config/yaml', { content: yaml.dump(sanitized) });
             setConfig(sanitized);
             const method = (res.data?.recommended_apply_method || 'restart') as 'hot_reload' | 'restart';
-            setApplyMethod(method);
-            setPendingApply(true);
+            setPendingChanges(method);
         } catch (err) {
             console.error('Failed to save config', err);
             toast.error('Failed to save configuration');
@@ -207,7 +206,7 @@ const ContextsPage = () => {
             }
 
             if (status === 'degraded') {
-                setPendingApply(false);
+                clearPendingChanges();
                 toast.warning('AI Engine restarted but may not be fully healthy', { description: response.data.output || 'Please verify manually' });
                 fetchConfig();
                 return;
@@ -216,14 +215,13 @@ const ContextsPage = () => {
             if (status === 'partial' || response.data?.restart_required === true) {
                 // Hot reload succeeded but indicated some changes require a restart (e.g. providers added/removed,
                 // MCP reload deferred due to active calls).
-                setApplyMethod('restart');
-                setPendingApply(true);
+                setPendingChanges('restart');
                 toast.warning(response.data.message || 'Hot reload applied partially; restart AI Engine to fully apply changes.');
                 return;
             }
 
             if (status === 'success') {
-                setPendingApply(false);
+                clearPendingChanges();
                 toast.success(applyMethod === 'hot_reload'
                     ? 'AI Engine hot reloaded! Changes apply to new calls.'
                     : 'AI Engine restarted! Changes are now active.');
@@ -235,7 +233,7 @@ const ContextsPage = () => {
             // Be conservative: if the apply endpoint returned 200 but an unexpected payload, assume the action
             // completed so the UI doesn't get stuck showing "Apply Changes" forever.
             if (response.status === 200) {
-                setPendingApply(false);
+                clearPendingChanges();
                 toast.success('AI Engine updated. Please verify with a test call and logs.');
                 fetchConfig();
                 return;
@@ -553,7 +551,7 @@ const ContextsPage = () => {
                     toolCatalogByName={toolCatalogByName}
                     availableProfiles={availableProfiles}
                     defaultProfileName={defaultProfileName}
-                    httpTools={{...config.tools, ...config.in_call_tools}}
+                    httpTools={{ ...config.tools, ...config.in_call_tools }}
                     onChange={setContextForm}
                     isNew={isNewContext}
                 />

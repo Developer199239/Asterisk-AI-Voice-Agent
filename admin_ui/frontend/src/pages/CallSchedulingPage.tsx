@@ -23,10 +23,9 @@ import {
 } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
 import { FormLabel } from '../components/ui/FormComponents';
+import { toast } from 'sonner';
 
 type CampaignStatus = 'draft' | 'running' | 'paused' | 'stopped' | 'archived' | 'completed';
-
-type Notice = { type: 'success' | 'error' | 'info'; message: string };
 type LeadImportIssueRow = { row_number: number; phone_number: string; error_reason?: string; warning_reason?: string };
 type LeadImportResult = {
     accepted: number;
@@ -307,7 +306,12 @@ const CallSchedulingPage = () => {
     const [showArchived, setShowArchived] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [notice, setNotice] = useState<Notice | null>(null);
+    const setNotice = (n: { type: 'success' | 'error' | 'info'; message: string } | null) => {
+        if (!n) return;
+        if (n.type === 'success') toast.success(n.message);
+        else if (n.type === 'error') toast.error(n.message);
+        else toast.info(n.message);
+    };
     const [lastLeadImport, setLastLeadImport] = useState<LeadImportResult | null>(null);
     const [recordingsLibrary, setRecordingsLibrary] = useState<RecordingRow[]>([]);
     const [audioPreview, setAudioPreview] = useState<AudioPreviewState | null>(null);
@@ -794,32 +798,7 @@ const CallSchedulingPage = () => {
         URL.revokeObjectURL(url);
     };
 
-    const uploadMedia = async (campaignId: string, kind: 'voicemail' | 'consent', file: File) => {
-        const formData = new FormData();
-        formData.append('file', file);
-        try {
-            await axios.post(`/api/outbound/campaigns/${campaignId}/${kind}/upload`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
-            await refreshCampaigns();
-            await refreshCampaignDetails(campaignId);
-            setNotice({ type: 'success', message: `${kind === 'voicemail' ? 'Voicemail' : 'Consent'} recording uploaded` });
-        } catch (e: any) {
-            setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || `Failed to upload ${kind} recording` });
-        }
-    };
-
-    const previewMedia = async (campaignId: string, kind: 'voicemail' | 'consent') => {
-        try {
-            const res = await axios.get(`/api/outbound/campaigns/${campaignId}/${kind}/preview.wav`, { responseType: 'blob' });
-            const url = URL.createObjectURL(res.data);
-            const audio = new Audio(url);
-            audio.onended = () => URL.revokeObjectURL(url);
-            await audio.play();
-        } catch (e: any) {
-            setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || `Failed to preview ${kind}` });
-        }
-    };
+    // Unused media upload/preview functions removed
 
     const previewRecordingByUri = async (mediaUri: string) => {
         const uri = (mediaUri || '').trim();
@@ -1092,25 +1071,6 @@ const CallSchedulingPage = () => {
                 </div>
             </div>
 
-            {notice && (
-                <div
-                    className={`rounded-lg border p-3 text-sm ${
-                        notice.type === 'error'
-                            ? 'border-red-500/30 bg-red-500/10 text-red-600'
-                            : notice.type === 'success'
-                              ? 'border-green-500/30 bg-green-500/10 text-green-700'
-                              : 'border-border bg-muted/30 text-foreground'
-                    }`}
-                >
-                    <div className="flex items-center justify-between gap-3">
-                        <span>{notice.message}</span>
-                        <button className="text-muted-foreground hover:text-foreground" onClick={() => setNotice(null)}>
-                            ×
-                        </button>
-                    </div>
-                </div>
-            )}
-
             {lastLeadImport && ((lastLeadImport.rejected || 0) > 0 || (lastLeadImport.warnings?.length || 0) > 0) && (
                 <div className="rounded-lg border border-border bg-card p-3 text-sm">
                     <div className="flex items-center justify-between gap-3">
@@ -1192,7 +1152,8 @@ const CallSchedulingPage = () => {
                         </div>
                     )}
                 </div>
-            )}
+            )
+            }
 
             {error && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600">{error}</div>}
 
@@ -1217,9 +1178,8 @@ const CallSchedulingPage = () => {
                                             setSelectedCampaignId(c.id);
                                             setLeadPage(1);
                                         }}
-                                        className={`w-full text-left rounded-lg border p-3 hover:bg-muted/40 transition-colors ${
-                                            selectedCampaignId === c.id ? 'border-primary/40 bg-primary/5' : 'border-border'
-                                        }`}
+                                        className={`w-full text-left rounded-lg border p-3 hover:bg-muted/40 transition-colors ${selectedCampaignId === c.id ? 'border-primary/40 bg-primary/5' : 'border-border'
+                                            }`}
                                     >
                                         <div className="flex items-center justify-between gap-2">
                                             <div className="font-medium truncate">{c.name}</div>
@@ -1562,467 +1522,462 @@ const CallSchedulingPage = () => {
             </div>
 
             {/* Campaign modal */}
-            {showCampaignModal && (
-                <Modal
-                    isOpen={true}
-                    title={campaignModalMode === 'create' ? 'Create Campaign' : 'Campaign Setup'}
-                    onClose={() => {
-                        setShowCampaignModal(false);
-                        setCampaignModalStep('settings');
-                        setDialplanNeedsReview(false);
-                        setPendingImportFile(null);
-                        setPendingVoicemailFile(null);
-                        setPendingConsentFile(null);
-                    }}
-                    footer={
-                        <>
-                            <button
-                                className="px-3 py-2 rounded-lg border hover:bg-muted text-sm"
-                                onClick={() => {
-                                    setShowCampaignModal(false);
-                                    setCampaignModalStep('settings');
-                                    setDialplanNeedsReview(false);
-                                    setPendingImportFile(null);
-                                    setPendingVoicemailFile(null);
-                                    setPendingConsentFile(null);
-                                }}
-                            >
-                                Close
-                            </button>
-                            {campaignModalMode === 'create' ? (
+            {
+                showCampaignModal && (
+                    <Modal
+                        isOpen={true}
+                        title={campaignModalMode === 'create' ? 'Create Campaign' : 'Campaign Setup'}
+                        onClose={() => {
+                            setShowCampaignModal(false);
+                            setCampaignModalStep('settings');
+                            setDialplanNeedsReview(false);
+                            setPendingImportFile(null);
+                            setPendingVoicemailFile(null);
+                            setPendingConsentFile(null);
+                        }}
+                        footer={
+                            <>
                                 <button
-                                    className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm disabled:opacity-50"
-                                    onClick={createCampaign}
-                                    disabled={!createForm.name.trim() || !modalTimezoneValid}
+                                    className="px-3 py-2 rounded-lg border hover:bg-muted text-sm"
+                                    onClick={() => {
+                                        setShowCampaignModal(false);
+                                        setCampaignModalStep('settings');
+                                        setDialplanNeedsReview(false);
+                                        setPendingImportFile(null);
+                                        setPendingVoicemailFile(null);
+                                        setPendingConsentFile(null);
+                                    }}
                                 >
-                                    Create
+                                    Close
                                 </button>
-                            ) : (
-                                <button
-                                    className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm disabled:opacity-50"
-                                    onClick={saveEdit}
-                                    disabled={!modalTimezoneValid}
-                                >
-                                    Save
-                                </button>
-                            )}
-                        </>
-                    }
-                    size="xl"
-                >
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                            <span className="inline-flex items-center gap-1">
-                                <Clock className="w-3 h-3" /> Server now:{' '}
-                                <span className="font-mono text-foreground">{formatClock(serverNow, serverTz)}</span> <span className="font-mono">{serverTz}</span>
-                            </span>
-                            <span className="inline-flex items-center gap-1">
-                                <Clock className="w-3 h-3" /> Campaign now:{' '}
-                                <span className="font-mono text-foreground">
-                                    {formatClock(serverNow, (campaignModalMode === 'create' ? createForm.timezone : editForm.timezone) || 'UTC')}
-                                </span>{' '}
-                                <span className="font-mono">{(campaignModalMode === 'create' ? createForm.timezone : editForm.timezone) || 'UTC'}</span>
-                            </span>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                            <button
-                                className={`px-3 py-1 rounded border text-sm ${
-                                    campaignModalStep === 'settings' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                                }`}
-                                onClick={() => setCampaignModalStep('settings')}
-                            >
-                                Settings
-                            </button>
-                            <button
-                                className={`px-3 py-1 rounded border text-sm ${
-                                    campaignModalStep === 'leads' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                                }`}
-                                onClick={() => setCampaignModalStep('leads')}
-                            >
-                                Leads
-                            </button>
-                            <button
-                                className={`px-3 py-1 rounded border text-sm ${
-                                    campaignModalStep === 'recordings' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                                }`}
-                                onClick={() => setCampaignModalStep('recordings')}
-                            >
-                                Recordings
-                            </button>
-                            <button
-                                className={`px-3 py-1 rounded border text-sm ${
-                                    campaignModalStep === 'setup' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                                }`}
-                                onClick={() => setCampaignModalStep('setup')}
-                            >
-                                Setup Guide
-                            </button>
-                            <button
-                                className={`px-3 py-1 rounded border text-sm ${
-                                    campaignModalStep === 'advanced' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                                }`}
-                                onClick={() => setCampaignModalStep('advanced')}
-                            >
-                                Advanced (AMD)
-                            </button>
-                        </div>
-
-                        {dialplanNeedsReview && (
-                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                                Consent/voicemail settings changed in this modal. Review the updated dialplan in the “Setup Guide” tab and reload Asterisk dialplan if needed.
+                                {campaignModalMode === 'create' ? (
+                                    <button
+                                        className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm disabled:opacity-50"
+                                        onClick={createCampaign}
+                                        disabled={!createForm.name.trim() || !modalTimezoneValid}
+                                    >
+                                        Create
+                                    </button>
+                                ) : (
+                                    <button
+                                        className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm disabled:opacity-50"
+                                        onClick={saveEdit}
+                                        disabled={!modalTimezoneValid}
+                                    >
+                                        Save
+                                    </button>
+                                )}
+                            </>
+                        }
+                        size="xl"
+                    >
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <span className="inline-flex items-center gap-1">
+                                    <Clock className="w-3 h-3" /> Server now:{' '}
+                                    <span className="font-mono text-foreground">{formatClock(serverNow, serverTz)}</span> <span className="font-mono">{serverTz}</span>
+                                </span>
+                                <span className="inline-flex items-center gap-1">
+                                    <Clock className="w-3 h-3" /> Campaign now:{' '}
+                                    <span className="font-mono text-foreground">
+                                        {formatClock(serverNow, (campaignModalMode === 'create' ? createForm.timezone : editForm.timezone) || 'UTC')}
+                                    </span>{' '}
+                                    <span className="font-mono">{(campaignModalMode === 'create' ? createForm.timezone : editForm.timezone) || 'UTC'}</span>
+                                </span>
                             </div>
-                        )}
 
-                        {campaignModalStep === 'settings' ? (
-                            <div className="space-y-3">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <div>
-                                        <FormLabel tooltip="Friendly name shown in the scheduling UI.">Name</FormLabel>
-                                        <input
-                                            value={campaignModalMode === 'create' ? createForm.name : editForm.name}
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => ({ ...p, name: e.target.value }))
-                                                    : setEditForm(p => ({ ...p, name: e.target.value }))
-                                            }
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
-                                        />
-                                    </div>
-                                    <div>
-                                        <FormLabel tooltip="IANA timezone used for daily window scheduling and campaign-local timestamps (e.g., America/Phoenix).">Timezone</FormLabel>
-                                        <input
-                                            list="aava-iana-timezones"
-                                            value={campaignModalMode === 'create' ? createForm.timezone : editForm.timezone}
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => ({ ...p, timezone: e.target.value }))
-                                                    : setEditForm(p => ({ ...p, timezone: e.target.value }))
-                                            }
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background font-mono"
-                                        />
-                                        {!modalTimezoneValid && (
-                                            <div className="mt-1 text-xs text-yellow-700 flex items-center gap-1">
-                                                <AlertTriangle className="w-3 h-3" /> Invalid timezone; use an IANA timezone (e.g., America/Phoenix).
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div>
-                                        <FormLabel tooltip="Daily start time in the campaign timezone. If end is earlier than start, the window crosses midnight.">Daily Window Start (local)</FormLabel>
-                                        <input
-                                            type="time"
-                                            value={campaignModalMode === 'create' ? createForm.daily_window_start_local : editForm.daily_window_start_local}
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => ({ ...p, daily_window_start_local: e.target.value }))
-                                                    : setEditForm(p => ({ ...p, daily_window_start_local: e.target.value }))
-                                            }
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
-                                        />
-                                    </div>
-                                    <div>
-                                        <FormLabel tooltip="Daily end time in the campaign timezone. If end is earlier than start, the window crosses midnight.">Daily Window End (local)</FormLabel>
-                                        <input
-                                            type="time"
-                                            value={campaignModalMode === 'create' ? createForm.daily_window_end_local : editForm.daily_window_end_local}
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => ({ ...p, daily_window_end_local: e.target.value }))
-                                                    : setEditForm(p => ({ ...p, daily_window_end_local: e.target.value }))
-                                            }
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
-                                        />
-                                        {(() => {
-                                            const s = campaignModalMode === 'create' ? createForm.daily_window_start_local : editForm.daily_window_start_local;
-                                            const e = campaignModalMode === 'create' ? createForm.daily_window_end_local : editForm.daily_window_end_local;
-                                            const crosses = Boolean(s && e && e < s);
-                                            return crosses ? (
-                                                <div className="mt-1 text-xs text-yellow-700 flex items-center gap-1">
-                                                    <AlertTriangle className="w-3 h-3" /> Crosses midnight
-                                                </div>
-                                            ) : null;
-                                        })()}
-                                    </div>
-                                    <div>
-                                        <FormLabel tooltip="Maximum simultaneous outbound calls for this campaign (MVP supports 1–5).">Max Concurrent</FormLabel>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            max={5}
-                                            value={campaignModalMode === 'create' ? createForm.max_concurrent : editForm.max_concurrent}
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => ({ ...p, max_concurrent: Number(e.target.value) || 1 }))
-                                                    : setEditForm(p => ({ ...p, max_concurrent: Number(e.target.value) || 1 }))
-                                            }
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
-                                        />
-                                    </div>
-                                    <div>
-                                        <FormLabel tooltip="Minimum delay between starting new calls (helps rate-limit trunk load).">Min Interval Between Calls (sec)</FormLabel>
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            value={
-                                                campaignModalMode === 'create'
-                                                    ? createForm.min_interval_seconds_between_calls
-                                                    : editForm.min_interval_seconds_between_calls
-                                            }
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => ({ ...p, min_interval_seconds_between_calls: Number(e.target.value) || 0 }))
-                                                    : setEditForm(p => ({ ...p, min_interval_seconds_between_calls: Number(e.target.value) || 0 }))
-                                            }
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
-                                        />
-                                    </div>
-                                    <div className="md:col-span-2">
-                                        <FormLabel tooltip="Default AI context for leads that don’t provide a context override.">Default Context</FormLabel>
-                                        <input
-                                            value={campaignModalMode === 'create' ? createForm.default_context : editForm.default_context}
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => ({ ...p, default_context: e.target.value }))
-                                                    : setEditForm(p => ({ ...p, default_context: e.target.value }))
-                                            }
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background font-mono"
-                                        />
-                                    </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    className={`px-3 py-1 rounded border text-sm ${campaignModalStep === 'settings' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                                        }`}
+                                    onClick={() => setCampaignModalStep('settings')}
+                                >
+                                    Settings
+                                </button>
+                                <button
+                                    className={`px-3 py-1 rounded border text-sm ${campaignModalStep === 'leads' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                                        }`}
+                                    onClick={() => setCampaignModalStep('leads')}
+                                >
+                                    Leads
+                                </button>
+                                <button
+                                    className={`px-3 py-1 rounded border text-sm ${campaignModalStep === 'recordings' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                                        }`}
+                                    onClick={() => setCampaignModalStep('recordings')}
+                                >
+                                    Recordings
+                                </button>
+                                <button
+                                    className={`px-3 py-1 rounded border text-sm ${campaignModalStep === 'setup' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                                        }`}
+                                    onClick={() => setCampaignModalStep('setup')}
+                                >
+                                    Setup Guide
+                                </button>
+                                <button
+                                    className={`px-3 py-1 rounded border text-sm ${campaignModalStep === 'advanced' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                                        }`}
+                                    onClick={() => setCampaignModalStep('advanced')}
+                                >
+                                    Advanced (AMD)
+                                </button>
+                            </div>
+
+                            {dialplanNeedsReview && (
+                                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                    Consent/voicemail settings changed in this modal. Review the updated dialplan in the “Setup Guide” tab and reload Asterisk dialplan if needed.
                                 </div>
+                            )}
 
-                                <div className="border rounded-lg p-3 space-y-2">
-                                    <div className="font-medium text-sm">Features</div>
-                                    <FormLabel
-                                        tooltip="When enabled, MACHINE/NOTSURE results play the campaign voicemail recording (if set)."
-                                        className="mb-0"
-                                    >
-                                        <span className="flex items-center gap-2 text-sm">
-                                            <input
-                                            type="checkbox"
-                                            checked={
-                                                Boolean(
-                                                    campaignModalMode === 'create' ? createForm.voicemail_drop_enabled : editForm.voicemail_drop_enabled
-                                                )
-                                            }
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => {
-                                                          setDialplanNeedsReview(true);
-                                                          const enabled = e.target.checked;
-                                                          const next: any = { ...p, voicemail_drop_enabled: enabled };
-                                                          if (enabled && !(String(next.voicemail_drop_media_uri || '').trim())) {
-                                                              next.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
-                                                          }
-                                                          return next;
-                                                      })
-                                                    : setEditForm(p => {
-                                                          setDialplanNeedsReview(true);
-                                                          const enabled = e.target.checked;
-                                                          const next: any = { ...p, voicemail_drop_enabled: enabled };
-                                                          if (enabled && !(String(next.voicemail_drop_media_uri || '').trim())) {
-                                                              next.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
-                                                          }
-                                                          return next;
-                                                      })
-                                            }
-                                        />
-                                        Voicemail drop (AMD MACHINE/NOTSURE → leave voicemail recording)
-                                        </span>
-                                    </FormLabel>
-                                    <FormLabel
-                                        tooltip="When enabled, HUMAN results play a consent prompt and collect DTMF (1 accept / 2 deny) before connecting to AI."
-                                        className="mb-0"
-                                    >
-                                        <span className="flex items-center gap-2 text-sm">
-                                            <input
-                                            type="checkbox"
-                                            checked={Boolean(campaignModalMode === 'create' ? createForm.consent_enabled : editForm.consent_enabled)}
-                                            onChange={e =>
-                                                campaignModalMode === 'create'
-                                                    ? setCreateForm(p => {
-                                                          setDialplanNeedsReview(true);
-                                                          const enabled = e.target.checked;
-                                                          const next: any = { ...p, consent_enabled: enabled };
-                                                          if (enabled && !(String(next.consent_media_uri || '').trim())) {
-                                                              next.consent_media_uri = DEFAULT_CONSENT_MEDIA_URI;
-                                                          }
-                                                          return next;
-                                                      })
-                                                    : setEditForm(p => {
-                                                          setDialplanNeedsReview(true);
-                                                          const enabled = e.target.checked;
-                                                          const next: any = { ...p, consent_enabled: enabled };
-                                                          if (enabled && !(String(next.consent_media_uri || '').trim())) {
-                                                              next.consent_media_uri = DEFAULT_CONSENT_MEDIA_URI;
-                                                          }
-                                                          return next;
-                                                      })
-                                            }
-                                        />
-                                        Consent gate (HUMAN → play consent prompt, DTMF 1 accept / 2 deny)
-                                        </span>
-                                    </FormLabel>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                            {campaignModalStep === 'settings' ? (
+                                <div className="space-y-3">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                         <div>
-                                            <FormLabel tooltip="How long to wait for DTMF after playing the consent prompt.">Consent timeout (sec)</FormLabel>
+                                            <FormLabel tooltip="Friendly name shown in the scheduling UI.">Name</FormLabel>
                                             <input
-                                                type="number"
-                                                min={1}
-                                                max={30}
-                                                value={Number((campaignModalMode === 'create' ? createForm.consent_timeout_seconds : editForm.consent_timeout_seconds) || 5)}
+                                                value={campaignModalMode === 'create' ? createForm.name : editForm.name}
                                                 onChange={e =>
                                                     campaignModalMode === 'create'
-                                                        ? setCreateForm(p => ({ ...p, consent_timeout_seconds: Number(e.target.value) || 5 }))
-                                                        : setEditForm(p => ({ ...p, consent_timeout_seconds: Number(e.target.value) || 5 }))
+                                                        ? setCreateForm(p => ({ ...p, name: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, name: e.target.value }))
                                                 }
                                                 className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
                                             />
                                         </div>
-                                    </div>
-                                </div>
-
-                            </div>
-                        ) : campaignModalStep === 'leads' ? (
-                            <div className="space-y-4">
-                                <div className="border rounded-lg p-3 space-y-2">
-                                    <FormLabel
-                                        tooltip="Import leads for this campaign. Columns: name, phone_number (required), context, timezone, caller_id, custom_vars (JSON)."
-                                        className="mb-0"
-                                    >
-                                        Leads (CSV)
-                                    </FormLabel>
-                                    <div className="text-xs text-muted-foreground">
-                                        Import leads from CSV. Default behavior is <span className="font-mono">skip_existing</span>.
-                                        {campaignModalMode === 'create' ? ' Choose a CSV now; it will import after Create.' : ''}
-                                    </div>
-                                    <div className="text-xs text-muted-foreground">
-                                        Note: If a CSV row is missing/blank (or invalid) for <span className="font-mono">context</span> or{' '}
-                                        <span className="font-mono">timezone</span>, the campaign defaults will be used and a warning will be shown.
-                                    </div>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <button
-                                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm"
-                                            onClick={downloadSampleCsv}
-                                        >
-                                            <FileDown className="w-4 h-4" /> Sample CSV
-                                        </button>
-                                        <input type="file" accept=".csv,text/csv" onChange={e => setPendingImportFile(e.target.files?.[0] || null)} />
-                                        <button
-                                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm disabled:opacity-50"
-                                            disabled={!pendingImportFile || (campaignModalMode === 'edit' && !selectedCampaign)}
-                                            onClick={async () => {
-                                                if (!pendingImportFile) return;
-                                                if (campaignModalMode === 'create') {
-                                                    setNotice({ type: 'info', message: 'CSV selected. It will import after campaign creation.' });
-                                                    return;
+                                        <div>
+                                            <FormLabel tooltip="IANA timezone used for daily window scheduling and campaign-local timestamps (e.g., America/Phoenix).">Timezone</FormLabel>
+                                            <input
+                                                list="aava-iana-timezones"
+                                                value={campaignModalMode === 'create' ? createForm.timezone : editForm.timezone}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, timezone: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, timezone: e.target.value }))
                                                 }
-                                                if (!selectedCampaign) return;
-                                                await importLeads(selectedCampaign.id, pendingImportFile);
-                                                setPendingImportFile(null);
-                                            }}
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background font-mono"
+                                            />
+                                            {!modalTimezoneValid && (
+                                                <div className="mt-1 text-xs text-yellow-700 flex items-center gap-1">
+                                                    <AlertTriangle className="w-3 h-3" /> Invalid timezone; use an IANA timezone (e.g., America/Phoenix).
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div>
+                                            <FormLabel tooltip="Daily start time in the campaign timezone. If end is earlier than start, the window crosses midnight.">Daily Window Start (local)</FormLabel>
+                                            <input
+                                                type="time"
+                                                value={campaignModalMode === 'create' ? createForm.daily_window_start_local : editForm.daily_window_start_local}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, daily_window_start_local: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, daily_window_start_local: e.target.value }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
+                                            />
+                                        </div>
+                                        <div>
+                                            <FormLabel tooltip="Daily end time in the campaign timezone. If end is earlier than start, the window crosses midnight.">Daily Window End (local)</FormLabel>
+                                            <input
+                                                type="time"
+                                                value={campaignModalMode === 'create' ? createForm.daily_window_end_local : editForm.daily_window_end_local}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, daily_window_end_local: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, daily_window_end_local: e.target.value }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
+                                            />
+                                            {(() => {
+                                                const s = campaignModalMode === 'create' ? createForm.daily_window_start_local : editForm.daily_window_start_local;
+                                                const e = campaignModalMode === 'create' ? createForm.daily_window_end_local : editForm.daily_window_end_local;
+                                                const crosses = Boolean(s && e && e < s);
+                                                return crosses ? (
+                                                    <div className="mt-1 text-xs text-yellow-700 flex items-center gap-1">
+                                                        <AlertTriangle className="w-3 h-3" /> Crosses midnight
+                                                    </div>
+                                                ) : null;
+                                            })()}
+                                        </div>
+                                        <div>
+                                            <FormLabel tooltip="Maximum simultaneous outbound calls for this campaign (MVP supports 1–5).">Max Concurrent</FormLabel>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={5}
+                                                value={campaignModalMode === 'create' ? createForm.max_concurrent : editForm.max_concurrent}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, max_concurrent: Number(e.target.value) || 1 }))
+                                                        : setEditForm(p => ({ ...p, max_concurrent: Number(e.target.value) || 1 }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
+                                            />
+                                        </div>
+                                        <div>
+                                            <FormLabel tooltip="Minimum delay between starting new calls (helps rate-limit trunk load).">Min Interval Between Calls (sec)</FormLabel>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                value={
+                                                    campaignModalMode === 'create'
+                                                        ? createForm.min_interval_seconds_between_calls
+                                                        : editForm.min_interval_seconds_between_calls
+                                                }
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, min_interval_seconds_between_calls: Number(e.target.value) || 0 }))
+                                                        : setEditForm(p => ({ ...p, min_interval_seconds_between_calls: Number(e.target.value) || 0 }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
+                                            />
+                                        </div>
+                                        <div className="md:col-span-2">
+                                            <FormLabel tooltip="Default AI context for leads that don’t provide a context override.">Default Context</FormLabel>
+                                            <input
+                                                value={campaignModalMode === 'create' ? createForm.default_context : editForm.default_context}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, default_context: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, default_context: e.target.value }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background font-mono"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="border rounded-lg p-3 space-y-2">
+                                        <div className="font-medium text-sm">Features</div>
+                                        <FormLabel
+                                            tooltip="When enabled, MACHINE/NOTSURE results play the campaign voicemail recording (if set)."
+                                            className="mb-0"
                                         >
-                                            <Upload className="w-4 h-4" /> Import CSV (skip existing)
-                                        </button>
-                                    </div>
-                                    {campaignModalMode === 'create' && pendingImportFile && (
-                                        <div className="text-xs text-muted-foreground">
-                                            Queued: <span className="font-mono">{pendingImportFile.name}</span>
+                                            <span className="flex items-center gap-2 text-sm">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={
+                                                        Boolean(
+                                                            campaignModalMode === 'create' ? createForm.voicemail_drop_enabled : editForm.voicemail_drop_enabled
+                                                        )
+                                                    }
+                                                    onChange={e =>
+                                                        campaignModalMode === 'create'
+                                                            ? setCreateForm(p => {
+                                                                setDialplanNeedsReview(true);
+                                                                const enabled = e.target.checked;
+                                                                const next: any = { ...p, voicemail_drop_enabled: enabled };
+                                                                if (enabled && !(String(next.voicemail_drop_media_uri || '').trim())) {
+                                                                    next.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
+                                                                }
+                                                                return next;
+                                                            })
+                                                            : setEditForm(p => {
+                                                                setDialplanNeedsReview(true);
+                                                                const enabled = e.target.checked;
+                                                                const next: any = { ...p, voicemail_drop_enabled: enabled };
+                                                                if (enabled && !(String(next.voicemail_drop_media_uri || '').trim())) {
+                                                                    next.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
+                                                                }
+                                                                return next;
+                                                            })
+                                                    }
+                                                />
+                                                Voicemail drop (AMD MACHINE/NOTSURE → leave voicemail recording)
+                                            </span>
+                                        </FormLabel>
+                                        <FormLabel
+                                            tooltip="When enabled, HUMAN results play a consent prompt and collect DTMF (1 accept / 2 deny) before connecting to AI."
+                                            className="mb-0"
+                                        >
+                                            <span className="flex items-center gap-2 text-sm">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={Boolean(campaignModalMode === 'create' ? createForm.consent_enabled : editForm.consent_enabled)}
+                                                    onChange={e =>
+                                                        campaignModalMode === 'create'
+                                                            ? setCreateForm(p => {
+                                                                setDialplanNeedsReview(true);
+                                                                const enabled = e.target.checked;
+                                                                const next: any = { ...p, consent_enabled: enabled };
+                                                                if (enabled && !(String(next.consent_media_uri || '').trim())) {
+                                                                    next.consent_media_uri = DEFAULT_CONSENT_MEDIA_URI;
+                                                                }
+                                                                return next;
+                                                            })
+                                                            : setEditForm(p => {
+                                                                setDialplanNeedsReview(true);
+                                                                const enabled = e.target.checked;
+                                                                const next: any = { ...p, consent_enabled: enabled };
+                                                                if (enabled && !(String(next.consent_media_uri || '').trim())) {
+                                                                    next.consent_media_uri = DEFAULT_CONSENT_MEDIA_URI;
+                                                                }
+                                                                return next;
+                                                            })
+                                                    }
+                                                />
+                                                Consent gate (HUMAN → play consent prompt, DTMF 1 accept / 2 deny)
+                                            </span>
+                                        </FormLabel>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                                            <div>
+                                                <FormLabel tooltip="How long to wait for DTMF after playing the consent prompt.">Consent timeout (sec)</FormLabel>
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    max={30}
+                                                    value={Number((campaignModalMode === 'create' ? createForm.consent_timeout_seconds : editForm.consent_timeout_seconds) || 5)}
+                                                    onChange={e =>
+                                                        campaignModalMode === 'create'
+                                                            ? setCreateForm(p => ({ ...p, consent_timeout_seconds: Number(e.target.value) || 5 }))
+                                                            : setEditForm(p => ({ ...p, consent_timeout_seconds: Number(e.target.value) || 5 }))
+                                                    }
+                                                    className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
+                                                />
+                                            </div>
                                         </div>
-                                    )}
-                                    {campaignModalMode === 'edit' && !selectedCampaign && (
-                                        <div className="text-xs text-muted-foreground">Select a campaign to import leads.</div>
-                                    )}
+                                    </div>
+
                                 </div>
-                            </div>
-                        ) : campaignModalStep === 'recordings' ? (
-                            <div className="space-y-4">
-                                <div className="border rounded-lg p-3 space-y-3">
-                                    <FormLabel
-                                        tooltip="Recording used by the consent gate (played after HUMAN detection)."
-                                        className="mb-0"
-                                    >
-                                        Consent prompt
-                                    </FormLabel>
-                                    <div className="text-xs text-muted-foreground">
-                                        Used only when “Consent gate” is enabled (DTMF 1 accept / 2 deny).
-                                    </div>
-                                    {!modalConsentEnabled && (
+                            ) : campaignModalStep === 'leads' ? (
+                                <div className="space-y-4">
+                                    <div className="border rounded-lg p-3 space-y-2">
+                                        <FormLabel
+                                            tooltip="Import leads for this campaign. Columns: name, phone_number (required), context, timezone, caller_id, custom_vars (JSON)."
+                                            className="mb-0"
+                                        >
+                                            Leads (CSV)
+                                        </FormLabel>
                                         <div className="text-xs text-muted-foreground">
-                                            Enable “Consent gate” in <span className="font-medium text-foreground">Settings</span> to select a consent prompt recording.
+                                            Import leads from CSV. Default behavior is <span className="font-mono">skip_existing</span>.
+                                            {campaignModalMode === 'create' ? ' Choose a CSV now; it will import after Create.' : ''}
                                         </div>
-                                    )}
-                                    <div className="text-xs text-muted-foreground">
-                                        Current:{' '}
-                                        <span className="font-mono">
-                                            {modalConsentEnabled
-                                                ? String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '(not set)')
-                                                : '(disabled)'}
-                                        </span>
-                                        {pendingConsentFile && (
-                                            <>
-                                                {' '}
-                                                · Queued: <span className="font-mono">{pendingConsentFile.name}</span>
-                                            </>
+                                        <div className="text-xs text-muted-foreground">
+                                            Note: If a CSV row is missing/blank (or invalid) for <span className="font-mono">context</span> or{' '}
+                                            <span className="font-mono">timezone</span>, the campaign defaults will be used and a warning will be shown.
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <button
+                                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm"
+                                                onClick={downloadSampleCsv}
+                                            >
+                                                <FileDown className="w-4 h-4" /> Sample CSV
+                                            </button>
+                                            <input type="file" accept=".csv,text/csv" onChange={e => setPendingImportFile(e.target.files?.[0] || null)} />
+                                            <button
+                                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm disabled:opacity-50"
+                                                disabled={!pendingImportFile || (campaignModalMode === 'edit' && !selectedCampaign)}
+                                                onClick={async () => {
+                                                    if (!pendingImportFile) return;
+                                                    if (campaignModalMode === 'create') {
+                                                        setNotice({ type: 'info', message: 'CSV selected. It will import after campaign creation.' });
+                                                        return;
+                                                    }
+                                                    if (!selectedCampaign) return;
+                                                    await importLeads(selectedCampaign.id, pendingImportFile);
+                                                    setPendingImportFile(null);
+                                                }}
+                                            >
+                                                <Upload className="w-4 h-4" /> Import CSV (skip existing)
+                                            </button>
+                                        </div>
+                                        {campaignModalMode === 'create' && pendingImportFile && (
+                                            <div className="text-xs text-muted-foreground">
+                                                Queued: <span className="font-mono">{pendingImportFile.name}</span>
+                                            </div>
+                                        )}
+                                        {campaignModalMode === 'edit' && !selectedCampaign && (
+                                            <div className="text-xs text-muted-foreground">Select a campaign to import leads.</div>
                                         )}
                                     </div>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        {(() => {
-                                            const currentUri = String(
-                                                (campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || ''
-                                            ).trim();
-                                            const hasCurrent = Boolean(currentUri);
-                                            const inLibrary = hasCurrent && recordingsLibrary.some(r => r.media_uri === currentUri);
-                                            return (
-                                        <select
-                                            className="px-3 py-2 rounded-lg border bg-background text-sm min-w-[320px] disabled:opacity-50"
-                                            disabled={!modalConsentEnabled}
-                                            value={currentUri}
-                                            onChange={e => setRecordingUri('consent', e.target.value)}
+                                </div>
+                            ) : campaignModalStep === 'recordings' ? (
+                                <div className="space-y-4">
+                                    <div className="border rounded-lg p-3 space-y-3">
+                                        <FormLabel
+                                            tooltip="Recording used by the consent gate (played after HUMAN detection)."
+                                            className="mb-0"
                                         >
-                                            <option value="">Select a recording…</option>
-                                            {hasCurrent && !inLibrary && (
-                                                <option value={currentUri}>{currentUri}</option>
+                                            Consent prompt
+                                        </FormLabel>
+                                        <div className="text-xs text-muted-foreground">
+                                            Used only when “Consent gate” is enabled (DTMF 1 accept / 2 deny).
+                                        </div>
+                                        {!modalConsentEnabled && (
+                                            <div className="text-xs text-muted-foreground">
+                                                Enable “Consent gate” in <span className="font-medium text-foreground">Settings</span> to select a consent prompt recording.
+                                            </div>
+                                        )}
+                                        <div className="text-xs text-muted-foreground">
+                                            Current:{' '}
+                                            <span className="font-mono">
+                                                {modalConsentEnabled
+                                                    ? String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '(not set)')
+                                                    : '(disabled)'}
+                                            </span>
+                                            {pendingConsentFile && (
+                                                <>
+                                                    {' '}
+                                                    · Queued: <span className="font-mono">{pendingConsentFile.name}</span>
+                                                </>
                                             )}
-                                            {recordingsLibrary.map(r => (
-                                                <option key={r.media_uri} value={r.media_uri}>
-                                                    {r.filename}
-                                                </option>
-                                            ))}
-                                        </select>
-                                            );
-                                        })()}
-                                    </div>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <input
-                                            type="file"
-                                            accept=".wav,.ulaw,audio/wav"
-                                            onChange={e => {
-                                                setPendingConsentFile(e.target.files?.[0] || null);
-                                            }}
-                                        />
-                                        <button
-                                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
-                                            disabled={!modalConsentEnabled || !pendingConsentFile}
-                                            onClick={async () => {
-                                                if (!pendingConsentFile) return;
-                                                try {
-                                                    const uri = await uploadRecordingToLibrary('consent', pendingConsentFile);
-                                                    await setRecordingUri('consent', uri);
-                                                    setPendingConsentFile(null);
-                                                } catch (e: any) {
-                                                    setNotice({
-                                                        type: 'error',
-                                                        message: e?.response?.data?.detail || e?.message || 'Failed to upload consent recording'
-                                                    });
-                                                }
-                                            }}
-                                        >
-                                            <Upload className="w-4 h-4" /> Upload
-                                        </button>
-                                        <button
-                                            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm disabled:opacity-50 ${
-                                                audioPreview?.playing &&
-                                                audioPreview?.mediaUri ===
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            {(() => {
+                                                const currentUri = String(
+                                                    (campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || ''
+                                                ).trim();
+                                                const hasCurrent = Boolean(currentUri);
+                                                const inLibrary = hasCurrent && recordingsLibrary.some(r => r.media_uri === currentUri);
+                                                return (
+                                                    <select
+                                                        className="px-3 py-2 rounded-lg border bg-background text-sm min-w-[320px] disabled:opacity-50"
+                                                        disabled={!modalConsentEnabled}
+                                                        value={currentUri}
+                                                        onChange={e => setRecordingUri('consent', e.target.value)}
+                                                    >
+                                                        <option value="">Select a recording…</option>
+                                                        {hasCurrent && !inLibrary && (
+                                                            <option value={currentUri}>{currentUri}</option>
+                                                        )}
+                                                        {recordingsLibrary.map(r => (
+                                                            <option key={r.media_uri} value={r.media_uri}>
+                                                                {r.filename}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                );
+                                            })()}
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <input
+                                                type="file"
+                                                accept=".wav,.ulaw,audio/wav"
+                                                onChange={e => {
+                                                    setPendingConsentFile(e.target.files?.[0] || null);
+                                                }}
+                                            />
+                                            <button
+                                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
+                                                disabled={!modalConsentEnabled || !pendingConsentFile}
+                                                onClick={async () => {
+                                                    if (!pendingConsentFile) return;
+                                                    try {
+                                                        const uri = await uploadRecordingToLibrary('consent', pendingConsentFile);
+                                                        await setRecordingUri('consent', uri);
+                                                        setPendingConsentFile(null);
+                                                    } catch (e: any) {
+                                                        setNotice({
+                                                            type: 'error',
+                                                            message: e?.response?.data?.detail || e?.message || 'Failed to upload consent recording'
+                                                        });
+                                                    }
+                                                }}
+                                            >
+                                                <Upload className="w-4 h-4" /> Upload
+                                            </button>
+                                            <button
+                                                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm disabled:opacity-50 ${audioPreview?.playing &&
+                                                    audioPreview?.mediaUri ===
                                                     String(
                                                         (campaignModalMode === 'create'
                                                             ? (createForm as any).consent_media_uri
@@ -2030,119 +1985,118 @@ const CallSchedulingPage = () => {
                                                     ).trim()
                                                     ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-600'
                                                     : 'hover:bg-muted'
-                                            }`}
-                                            disabled={!modalConsentEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim())}
-                                            onClick={() => {
-                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim();
-                                                if (uri) previewRecordingByUri(uri);
-                                            }}
+                                                    }`}
+                                                disabled={!modalConsentEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim())}
+                                                onClick={() => {
+                                                    const uri = String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim();
+                                                    if (uri) previewRecordingByUri(uri);
+                                                }}
+                                            >
+                                                {(() => {
+                                                    const uri = String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim();
+                                                    const playing = Boolean(audioPreview?.playing && audioPreview?.mediaUri === uri);
+                                                    if (!playing) return <>Preview</>;
+                                                    const ct = audioPreview?.currentTime || 0;
+                                                    const dur = audioPreview?.duration || 0;
+                                                    const pct = dur > 0 ? Math.min(100, Math.round((ct / dur) * 100)) : 0;
+                                                    return (
+                                                        <>
+                                                            <Play className="w-4 h-4" /> {formatSeconds(ct)} / {dur ? formatSeconds(dur) : '--:--'} ({pct}%)
+                                                        </>
+                                                    );
+                                                })()}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="border rounded-lg p-3 space-y-3">
+                                        <FormLabel
+                                            tooltip="Recording left when AMD indicates MACHINE/NOTSURE and voicemail drop is enabled."
+                                            className="mb-0"
                                         >
+                                            Voicemail drop
+                                        </FormLabel>
+                                        <div className="text-xs text-muted-foreground">
+                                            Used only when “Voicemail drop” is enabled and AMD indicates MACHINE/NOTSURE.
+                                        </div>
+                                        {!modalVoicemailEnabled && (
+                                            <div className="text-xs text-muted-foreground">
+                                                Enable “Voicemail drop” in <span className="font-medium text-foreground">Settings</span> to select a voicemail recording.
+                                            </div>
+                                        )}
+                                        <div className="text-xs text-muted-foreground">
+                                            Current:{' '}
+                                            <span className="font-mono">
+                                                {modalVoicemailEnabled
+                                                    ? String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '(not set)')
+                                                    : '(disabled)'}
+                                            </span>
+                                            {pendingVoicemailFile && (
+                                                <>
+                                                    {' '}
+                                                    · Queued: <span className="font-mono">{pendingVoicemailFile.name}</span>
+                                                </>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap">
                                             {(() => {
-                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim();
-                                                const playing = Boolean(audioPreview?.playing && audioPreview?.mediaUri === uri);
-                                                if (!playing) return <>Preview</>;
-                                                const ct = audioPreview?.currentTime || 0;
-                                                const dur = audioPreview?.duration || 0;
-                                                const pct = dur > 0 ? Math.min(100, Math.round((ct / dur) * 100)) : 0;
+                                                const currentUri = String(
+                                                    (campaignModalMode === 'create'
+                                                        ? (createForm as any).voicemail_drop_media_uri
+                                                        : (editForm as any).voicemail_drop_media_uri) || ''
+                                                ).trim();
+                                                const hasCurrent = Boolean(currentUri);
+                                                const inLibrary = hasCurrent && recordingsLibrary.some(r => r.media_uri === currentUri);
                                                 return (
-                                                    <>
-                                                        <Play className="w-4 h-4" /> {formatSeconds(ct)} / {dur ? formatSeconds(dur) : '--:--'} ({pct}%)
-                                                    </>
+                                                    <select
+                                                        className="px-3 py-2 rounded-lg border bg-background text-sm min-w-[320px] disabled:opacity-50"
+                                                        disabled={!modalVoicemailEnabled}
+                                                        value={currentUri}
+                                                        onChange={e => setRecordingUri('voicemail', e.target.value)}
+                                                    >
+                                                        <option value="">Select a recording…</option>
+                                                        {hasCurrent && !inLibrary && (
+                                                            <option value={currentUri}>{currentUri}</option>
+                                                        )}
+                                                        {recordingsLibrary.map(r => (
+                                                            <option key={r.media_uri} value={r.media_uri}>
+                                                                {r.filename}
+                                                            </option>
+                                                        ))}
+                                                    </select>
                                                 );
                                             })()}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="border rounded-lg p-3 space-y-3">
-                                    <FormLabel
-                                        tooltip="Recording left when AMD indicates MACHINE/NOTSURE and voicemail drop is enabled."
-                                        className="mb-0"
-                                    >
-                                        Voicemail drop
-                                    </FormLabel>
-                                    <div className="text-xs text-muted-foreground">
-                                        Used only when “Voicemail drop” is enabled and AMD indicates MACHINE/NOTSURE.
-                                    </div>
-                                    {!modalVoicemailEnabled && (
-                                        <div className="text-xs text-muted-foreground">
-                                            Enable “Voicemail drop” in <span className="font-medium text-foreground">Settings</span> to select a voicemail recording.
                                         </div>
-                                    )}
-                                    <div className="text-xs text-muted-foreground">
-                                        Current:{' '}
-                                        <span className="font-mono">
-                                            {modalVoicemailEnabled
-                                                ? String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '(not set)')
-                                                : '(disabled)'}
-                                        </span>
-                                        {pendingVoicemailFile && (
-                                            <>
-                                                {' '}
-                                                · Queued: <span className="font-mono">{pendingVoicemailFile.name}</span>
-                                            </>
-                                        )}
-                                    </div>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        {(() => {
-                                            const currentUri = String(
-                                                (campaignModalMode === 'create'
-                                                    ? (createForm as any).voicemail_drop_media_uri
-                                                    : (editForm as any).voicemail_drop_media_uri) || ''
-                                            ).trim();
-                                            const hasCurrent = Boolean(currentUri);
-                                            const inLibrary = hasCurrent && recordingsLibrary.some(r => r.media_uri === currentUri);
-                                            return (
-                                        <select
-                                            className="px-3 py-2 rounded-lg border bg-background text-sm min-w-[320px] disabled:opacity-50"
-                                            disabled={!modalVoicemailEnabled}
-                                            value={currentUri}
-                                            onChange={e => setRecordingUri('voicemail', e.target.value)}
-                                        >
-                                            <option value="">Select a recording…</option>
-                                            {hasCurrent && !inLibrary && (
-                                                <option value={currentUri}>{currentUri}</option>
-                                            )}
-                                            {recordingsLibrary.map(r => (
-                                                <option key={r.media_uri} value={r.media_uri}>
-                                                    {r.filename}
-                                                </option>
-                                            ))}
-                                        </select>
-                                            );
-                                        })()}
-                                    </div>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <input
-                                            type="file"
-                                            accept=".wav,.ulaw,audio/wav"
-                                            onChange={e => {
-                                                setPendingVoicemailFile(e.target.files?.[0] || null);
-                                            }}
-                                        />
-                                        <button
-                                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
-                                            disabled={!modalVoicemailEnabled || !pendingVoicemailFile}
-                                            onClick={async () => {
-                                                if (!pendingVoicemailFile) return;
-                                                try {
-                                                    const uri = await uploadRecordingToLibrary('voicemail', pendingVoicemailFile);
-                                                    await setRecordingUri('voicemail', uri);
-                                                    setPendingVoicemailFile(null);
-                                                } catch (e: any) {
-                                                    setNotice({
-                                                        type: 'error',
-                                                        message: e?.response?.data?.detail || e?.message || 'Failed to upload voicemail recording'
-                                                    });
-                                                }
-                                            }}
-                                        >
-                                            <Upload className="w-4 h-4" /> Upload
-                                        </button>
-                                        <button
-                                            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm disabled:opacity-50 ${
-                                                audioPreview?.playing &&
-                                                audioPreview?.mediaUri ===
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <input
+                                                type="file"
+                                                accept=".wav,.ulaw,audio/wav"
+                                                onChange={e => {
+                                                    setPendingVoicemailFile(e.target.files?.[0] || null);
+                                                }}
+                                            />
+                                            <button
+                                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
+                                                disabled={!modalVoicemailEnabled || !pendingVoicemailFile}
+                                                onClick={async () => {
+                                                    if (!pendingVoicemailFile) return;
+                                                    try {
+                                                        const uri = await uploadRecordingToLibrary('voicemail', pendingVoicemailFile);
+                                                        await setRecordingUri('voicemail', uri);
+                                                        setPendingVoicemailFile(null);
+                                                    } catch (e: any) {
+                                                        setNotice({
+                                                            type: 'error',
+                                                            message: e?.response?.data?.detail || e?.message || 'Failed to upload voicemail recording'
+                                                        });
+                                                    }
+                                                }}
+                                            >
+                                                <Upload className="w-4 h-4" /> Upload
+                                            </button>
+                                            <button
+                                                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm disabled:opacity-50 ${audioPreview?.playing &&
+                                                    audioPreview?.mediaUri ===
                                                     String(
                                                         (campaignModalMode === 'create'
                                                             ? (createForm as any).voicemail_drop_media_uri
@@ -2150,250 +2104,255 @@ const CallSchedulingPage = () => {
                                                     ).trim()
                                                     ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-600'
                                                     : 'hover:bg-muted'
-                                            }`}
-                                            disabled={!modalVoicemailEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim())}
-                                            onClick={() => {
-                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim();
-                                                if (uri) previewRecordingByUri(uri);
-                                            }}
-                                        >
-                                            {(() => {
-                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim();
-                                                const playing = Boolean(audioPreview?.playing && audioPreview?.mediaUri === uri);
-                                                if (!playing) return <>Preview</>;
-                                                const ct = audioPreview?.currentTime || 0;
-                                                const dur = audioPreview?.duration || 0;
-                                                const pct = dur > 0 ? Math.min(100, Math.round((ct / dur) * 100)) : 0;
-                                                return (
-                                                    <>
-                                                        <Play className="w-4 h-4" /> {formatSeconds(ct)} / {dur ? formatSeconds(dur) : '--:--'} ({pct}%)
-                                                    </>
-                                                );
-                                            })()}
-                                        </button>
+                                                    }`}
+                                                disabled={!modalVoicemailEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim())}
+                                                onClick={() => {
+                                                    const uri = String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim();
+                                                    if (uri) previewRecordingByUri(uri);
+                                                }}
+                                            >
+                                                {(() => {
+                                                    const uri = String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim();
+                                                    const playing = Boolean(audioPreview?.playing && audioPreview?.mediaUri === uri);
+                                                    if (!playing) return <>Preview</>;
+                                                    const ct = audioPreview?.currentTime || 0;
+                                                    const dur = audioPreview?.duration || 0;
+                                                    const pct = dur > 0 ? Math.min(100, Math.round((ct / dur) * 100)) : 0;
+                                                    return (
+                                                        <>
+                                                            <Play className="w-4 h-4" /> {formatSeconds(ct)} / {dur ? formatSeconds(dur) : '--:--'} ({pct}%)
+                                                        </>
+                                                    );
+                                                })()}
+                                            </button>
+                                        </div>
                                     </div>
-                                </div>
 
-                                {campaignModalMode === 'create' && (
-                                    <div className="text-xs text-muted-foreground">
-                                        If you queue new files and don’t click Upload, they will upload to the shared recording library during campaign creation.
-                                    </div>
-                                )}
-                            </div>
-                        ) : campaignModalStep === 'setup' ? (
-                            <div className="space-y-3">
-                                <div className="text-sm text-muted-foreground">
-                                    Add this to <span className="font-mono">/etc/asterisk/extensions_custom.conf</span> and reload the dialplan.
-                                </div>
-                                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
-                                    <div className="font-medium">Generated from current campaign settings</div>
-                                    <div className="text-xs text-muted-foreground mt-1">
-                                        Consent enabled: <span className="font-mono">{String(modalConsentEnabled)}</span>
-                                        {' · '}
-                                        Voicemail drop enabled: <span className="font-mono">{String(modalVoicemailEnabled)}</span>
-                                    </div>
-                                    <div className="text-xs text-muted-foreground mt-1">
-                                        Replace <span className="font-mono">asterisk-ai-voice-agent</span> with your configured ARI app name if different.
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border bg-muted/10 p-3 text-xs text-muted-foreground">
-                                    <div className="font-medium text-foreground">Legend</div>
-                                    <div className="mt-1">
-                                        <span className="text-red-700 font-medium">Red</span> lines are commented out (prefixed with <span className="font-mono">;</span>) to match the current campaign settings.
-                                    </div>
-                                    <div className="mt-1">
-                                        If you later enable the feature again, re-copy this snippet so those lines are uncommented.
-                                    </div>
-                                </div>
-                                <pre className="bg-muted/30 rounded-lg p-3 overflow-x-auto text-xs">
-                                    {modalDialplanSnippetForDisplayAndCopy.split('\n').map((line, idx) => {
-                                        const group = classifyDialplanLine(line);
-                                        const isInactive =
-                                            (group === 'consent' && !modalConsentEnabled) ||
-                                            (group === 'voicemail' && !modalVoicemailEnabled);
-                                        const cls = isInactive && _isCommented(line) ? 'text-red-700' : 'text-foreground';
-                                        return (
-                                            <span key={idx} className={cls}>
-                                                {line}
-                                                {'\n'}
-                                            </span>
-                                        );
-                                    })}
-                                </pre>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm"
-                                        onClick={async () => {
-                                            const ok = await copyTextToClipboard(modalDialplanSnippetForDisplayAndCopy);
-                                            if (ok) setNotice({ type: 'success', message: 'Dialplan copied to clipboard' });
-                                            else setNotice({ type: 'error', message: 'Clipboard copy failed (try selecting the text manually)' });
-                                        }}
-                                    >
-                                        <Copy className="w-4 h-4" /> Copy
-                                    </button>
-                                </div>
-                                {(modalConsentEnabled || modalVoicemailEnabled) && (
-                                    <div className="text-xs text-muted-foreground">
-                                        If you change consent/voicemail settings later, re-check this tab and update the dialplan if needed.
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="space-y-4">
-                                <div className="border rounded-lg p-3">
-                                    <div className="font-medium text-sm">Advanced AMD settings</div>
-                                    <div className="text-xs text-muted-foreground mt-1">
-                                        AMD() positional args. Leave blank to use defaults.
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                                        {([
-                                            ['initial_silence_ms', 'Initial silence (ms)'],
-                                            ['greeting_ms', 'Greeting (ms)'],
-                                            ['after_greeting_silence_ms', 'After greeting silence (ms)'],
-                                            ['total_analysis_time_ms', 'Total analysis time (ms)'],
-                                            ['minimum_word_length_ms', 'Min word length (ms)'],
-                                            ['between_words_silence_ms', 'Between words silence (ms)'],
-                                            ['maximum_number_of_words', 'Max number of words'],
-                                            ['silence_threshold', 'Silence threshold'],
-                                            ['maximum_word_length_ms', 'Max word length (ms)']
-                                        ] as Array<[string, string]>).map(([key, label]) => {
-                                            const form = campaignModalMode === 'create' ? createForm : editForm;
-                                            const value = (form.amd_options || {})[key] ?? '';
-                                            return (
-                                                <div key={key}>
-                                                    <FormLabel tooltip={amdTooltipForKey(key)}>{label}</FormLabel>
-                                                    <input
-                                                        value={value}
-                                                        onChange={e => {
-                                                            const v = e.target.value;
-                                                            const next = { ...(form.amd_options || {}) };
-                                                            if (v === '' || v == null) delete next[key];
-                                                            else next[key] = Number(v);
-                                                            campaignModalMode === 'create'
-                                                                ? setCreateForm(p => ({ ...p, amd_options: next }))
-                                                                : setEditForm(p => ({ ...p, amd_options: next }));
-                                                        }}
-                                                        className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
-                                                        placeholder="(blank)"
-                                                    />
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                    </div>
-                </Modal>
-            )}
-
-            {/* Recycle modal */}
-            {recycleLeadRow && (
-                <Modal isOpen={true} title="Recycle Lead" onClose={() => setRecycleLeadRow(null)}>
-                    <div className="space-y-3">
-                        <div className="text-sm">
-                            Lead: <span className="font-mono">{recycleLeadRow.phone_number}</span>
-                        </div>
-                        <label className="flex items-start gap-2 text-sm">
-                            <input type="radio" checked={recycleMode === 'redial'} onChange={() => setRecycleMode('redial')} />
-                            <span>
-                                <span className="font-medium">Re-dial</span>
-                                <div className="text-xs text-muted-foreground">Keep attempt history; set lead back to pending.</div>
-                            </span>
-                        </label>
-                        <label className="flex items-start gap-2 text-sm">
-                            <input type="radio" checked={recycleMode === 'reset'} onChange={() => setRecycleMode('reset')} />
-                            <span>
-                                <span className="font-medium">Reset completely</span>
-                                <div className="text-xs text-muted-foreground">Delete attempts for this lead and reset counters; then re-queue.</div>
-                            </span>
-                        </label>
-                        <div className="flex justify-end gap-2">
-                            <button className="px-3 py-2 rounded-lg border hover:bg-muted text-sm" onClick={() => setRecycleLeadRow(null)}>
-                                Cancel
-                            </button>
-                            <button
-                                className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm"
-                                onClick={async () => {
-                                    const leadId = recycleLeadRow.id;
-                                    setRecycleLeadRow(null);
-                                    await recycleLead(leadId, recycleMode);
-                                }}
-                            >
-                                Confirm
-                            </button>
-                        </div>
-                    </div>
-                </Modal>
-            )}
-
-            {/* Call history inline modal */}
-            {callHistoryModalId && (
-                <Modal
-                    isOpen={true}
-                    title="Call History"
-                    onClose={() => {
-                        setCallHistoryModalId(null);
-                        setCallHistoryRecord(null);
-                        setCallHistoryError(null);
-                    }}
-                >
-                    {callHistoryLoading ? (
-                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                            <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
-                        </div>
-                    ) : callHistoryError ? (
-                        <div className="text-sm text-red-600">{callHistoryError}</div>
-                    ) : callHistoryRecord ? (
-                        <div className="space-y-3">
-                            <div className="text-sm">
-                                <div className="text-xs text-muted-foreground">Call ID</div>
-                                <div className="font-mono">{callHistoryRecord.call_id}</div>
-                            </div>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Number</div>
-                                    <div className="font-mono">{callHistoryRecord.caller_number || '-'}</div>
-                                </div>
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Name</div>
-                                    <div>{callHistoryRecord.caller_name || '-'}</div>
-                                </div>
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Outcome</div>
-                                    <div className="font-medium">{callHistoryRecord.outcome || '-'}</div>
-                                </div>
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Duration</div>
-                                    <div className="font-medium">{Math.round(callHistoryRecord.duration_seconds || 0)}s</div>
-                                </div>
-                            </div>
-                            {callHistoryRecord.error_message && (
-                                <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700">{callHistoryRecord.error_message}</div>
-                            )}
-                            <div>
-                                <div className="font-medium text-sm mb-1">Transcript</div>
-                                <div className="bg-muted/30 rounded-lg p-3 max-h-64 overflow-y-auto text-sm space-y-2">
-                                    {(callHistoryRecord.conversation_history || []).length ? (
-                                        callHistoryRecord.conversation_history.map((m: any, idx: number) => (
-                                            <div key={idx}>
-                                                <div className="text-xs text-muted-foreground">{m.role}</div>
-                                                <div>{m.content}</div>
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <div className="text-muted-foreground">No transcript available.</div>
+                                    {campaignModalMode === 'create' && (
+                                        <div className="text-xs text-muted-foreground">
+                                            If you queue new files and don’t click Upload, they will upload to the shared recording library during campaign creation.
+                                        </div>
                                     )}
                                 </div>
+                            ) : campaignModalStep === 'setup' ? (
+                                <div className="space-y-3">
+                                    <div className="text-sm text-muted-foreground">
+                                        Add this to <span className="font-mono">/etc/asterisk/extensions_custom.conf</span> and reload the dialplan.
+                                    </div>
+                                    <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                                        <div className="font-medium">Generated from current campaign settings</div>
+                                        <div className="text-xs text-muted-foreground mt-1">
+                                            Consent enabled: <span className="font-mono">{String(modalConsentEnabled)}</span>
+                                            {' · '}
+                                            Voicemail drop enabled: <span className="font-mono">{String(modalVoicemailEnabled)}</span>
+                                        </div>
+                                        <div className="text-xs text-muted-foreground mt-1">
+                                            Replace <span className="font-mono">asterisk-ai-voice-agent</span> with your configured ARI app name if different.
+                                        </div>
+                                    </div>
+                                    <div className="rounded-lg border bg-muted/10 p-3 text-xs text-muted-foreground">
+                                        <div className="font-medium text-foreground">Legend</div>
+                                        <div className="mt-1">
+                                            <span className="text-red-700 font-medium">Red</span> lines are commented out (prefixed with <span className="font-mono">;</span>) to match the current campaign settings.
+                                        </div>
+                                        <div className="mt-1">
+                                            If you later enable the feature again, re-copy this snippet so those lines are uncommented.
+                                        </div>
+                                    </div>
+                                    <pre className="bg-muted/30 rounded-lg p-3 overflow-x-auto text-xs">
+                                        {modalDialplanSnippetForDisplayAndCopy.split('\n').map((line, idx) => {
+                                            const group = classifyDialplanLine(line);
+                                            const isInactive =
+                                                (group === 'consent' && !modalConsentEnabled) ||
+                                                (group === 'voicemail' && !modalVoicemailEnabled);
+                                            const cls = isInactive && _isCommented(line) ? 'text-red-700' : 'text-foreground';
+                                            return (
+                                                <span key={idx} className={cls}>
+                                                    {line}
+                                                    {'\n'}
+                                                </span>
+                                            );
+                                        })}
+                                    </pre>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm"
+                                            onClick={async () => {
+                                                const ok = await copyTextToClipboard(modalDialplanSnippetForDisplayAndCopy);
+                                                if (ok) setNotice({ type: 'success', message: 'Dialplan copied to clipboard' });
+                                                else setNotice({ type: 'error', message: 'Clipboard copy failed (try selecting the text manually)' });
+                                            }}
+                                        >
+                                            <Copy className="w-4 h-4" /> Copy
+                                        </button>
+                                    </div>
+                                    {(modalConsentEnabled || modalVoicemailEnabled) && (
+                                        <div className="text-xs text-muted-foreground">
+                                            If you change consent/voicemail settings later, re-check this tab and update the dialplan if needed.
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    <div className="border rounded-lg p-3">
+                                        <div className="font-medium text-sm">Advanced AMD settings</div>
+                                        <div className="text-xs text-muted-foreground mt-1">
+                                            AMD() positional args. Leave blank to use defaults.
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                                            {([
+                                                ['initial_silence_ms', 'Initial silence (ms)'],
+                                                ['greeting_ms', 'Greeting (ms)'],
+                                                ['after_greeting_silence_ms', 'After greeting silence (ms)'],
+                                                ['total_analysis_time_ms', 'Total analysis time (ms)'],
+                                                ['minimum_word_length_ms', 'Min word length (ms)'],
+                                                ['between_words_silence_ms', 'Between words silence (ms)'],
+                                                ['maximum_number_of_words', 'Max number of words'],
+                                                ['silence_threshold', 'Silence threshold'],
+                                                ['maximum_word_length_ms', 'Max word length (ms)']
+                                            ] as Array<[string, string]>).map(([key, label]) => {
+                                                const form = campaignModalMode === 'create' ? createForm : editForm;
+                                                const value = (form.amd_options || {})[key] ?? '';
+                                                return (
+                                                    <div key={key}>
+                                                        <FormLabel tooltip={amdTooltipForKey(key)}>{label}</FormLabel>
+                                                        <input
+                                                            value={value}
+                                                            onChange={e => {
+                                                                const v = e.target.value;
+                                                                const next = { ...(form.amd_options || {}) };
+                                                                if (v === '' || v == null) delete next[key];
+                                                                else next[key] = Number(v);
+                                                                campaignModalMode === 'create'
+                                                                    ? setCreateForm(p => ({ ...p, amd_options: next }))
+                                                                    : setEditForm(p => ({ ...p, amd_options: next }));
+                                                            }}
+                                                            className="mt-1 w-full px-3 py-2 rounded-lg border bg-background"
+                                                            placeholder="(blank)"
+                                                        />
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                        </div>
+                    </Modal>
+                )
+            }
+
+            {/* Recycle modal */}
+            {
+                recycleLeadRow && (
+                    <Modal isOpen={true} title="Recycle Lead" onClose={() => setRecycleLeadRow(null)}>
+                        <div className="space-y-3">
+                            <div className="text-sm">
+                                Lead: <span className="font-mono">{recycleLeadRow.phone_number}</span>
+                            </div>
+                            <label className="flex items-start gap-2 text-sm">
+                                <input type="radio" checked={recycleMode === 'redial'} onChange={() => setRecycleMode('redial')} />
+                                <span>
+                                    <span className="font-medium">Re-dial</span>
+                                    <div className="text-xs text-muted-foreground">Keep attempt history; set lead back to pending.</div>
+                                </span>
+                            </label>
+                            <label className="flex items-start gap-2 text-sm">
+                                <input type="radio" checked={recycleMode === 'reset'} onChange={() => setRecycleMode('reset')} />
+                                <span>
+                                    <span className="font-medium">Reset completely</span>
+                                    <div className="text-xs text-muted-foreground">Delete attempts for this lead and reset counters; then re-queue.</div>
+                                </span>
+                            </label>
+                            <div className="flex justify-end gap-2">
+                                <button className="px-3 py-2 rounded-lg border hover:bg-muted text-sm" onClick={() => setRecycleLeadRow(null)}>
+                                    Cancel
+                                </button>
+                                <button
+                                    className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm"
+                                    onClick={async () => {
+                                        const leadId = recycleLeadRow.id;
+                                        setRecycleLeadRow(null);
+                                        await recycleLead(leadId, recycleMode);
+                                    }}
+                                >
+                                    Confirm
+                                </button>
                             </div>
                         </div>
-                    ) : (
-                        <div className="text-sm text-muted-foreground">No record loaded.</div>
-                    )}
-                </Modal>
-            )}
-        </div>
+                    </Modal>
+                )
+            }
+
+            {/* Call history inline modal */}
+            {
+                callHistoryModalId && (
+                    <Modal
+                        isOpen={true}
+                        title="Call History"
+                        onClose={() => {
+                            setCallHistoryModalId(null);
+                            setCallHistoryRecord(null);
+                            setCallHistoryError(null);
+                        }}
+                    >
+                        {callHistoryLoading ? (
+                            <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                                <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
+                            </div>
+                        ) : callHistoryError ? (
+                            <div className="text-sm text-red-600">{callHistoryError}</div>
+                        ) : callHistoryRecord ? (
+                            <div className="space-y-3">
+                                <div className="text-sm">
+                                    <div className="text-xs text-muted-foreground">Call ID</div>
+                                    <div className="font-mono">{callHistoryRecord.call_id}</div>
+                                </div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Number</div>
+                                        <div className="font-mono">{callHistoryRecord.caller_number || '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Name</div>
+                                        <div>{callHistoryRecord.caller_name || '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Outcome</div>
+                                        <div className="font-medium">{callHistoryRecord.outcome || '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Duration</div>
+                                        <div className="font-medium">{Math.round(callHistoryRecord.duration_seconds || 0)}s</div>
+                                    </div>
+                                </div>
+                                {callHistoryRecord.error_message && (
+                                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700">{callHistoryRecord.error_message}</div>
+                                )}
+                                <div>
+                                    <div className="font-medium text-sm mb-1">Transcript</div>
+                                    <div className="bg-muted/30 rounded-lg p-3 max-h-64 overflow-y-auto text-sm space-y-2">
+                                        {(callHistoryRecord.conversation_history || []).length ? (
+                                            callHistoryRecord.conversation_history.map((m: any, idx: number) => (
+                                                <div key={idx}>
+                                                    <div className="text-xs text-muted-foreground">{m.role}</div>
+                                                    <div>{m.content}</div>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="text-muted-foreground">No transcript available.</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-sm text-muted-foreground">No record loaded.</div>
+                        )}
+                    </Modal>
+                )
+            }
+        </div >
     );
 };
 

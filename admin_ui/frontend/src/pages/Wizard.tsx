@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play, RefreshCw, Info, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 interface SetupConfig {
@@ -107,7 +108,6 @@ const Wizard = () => {
 
 
     const [showSkipConfirm, setShowSkipConfirm] = useState(false);
-    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
 
     // Helper to detect if asterisk_host is an IP address or hostname
     const isIPAddress = (host: string): boolean => {
@@ -144,8 +144,9 @@ exten => s,1,NoOp(AI Agent Call)
  same => n,Hangup()`;
 
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
-        setToast({ message, type });
-        setTimeout(() => setToast(null), 4000);
+        if (type === 'success') toast.success(message);
+        else if (type === 'warning') toast.warning(message);
+        else toast.error(message);
     };
     const [engineStatus, setEngineStatus] = useState<{
         running: boolean;
@@ -276,6 +277,69 @@ exten => s,1,NoOp(AI Agent Call)
         }
     }, []);
 
+    // Resume download on mount if active
+    useEffect(() => {
+        let mounted = true;
+        const checkActiveDownload = async () => {
+            try {
+                const res = await axios.get('/api/wizard/local/download-progress');
+                if (res.data && res.data.running && mounted) {
+                    setLocalAIStatus(prev => ({
+                        ...prev,
+                        downloading: true,
+                        downloadOutput: res.data.output || []
+                    }));
+
+                    const pollProgress = async () => {
+                        if (!mounted) return;
+                        try {
+                            const pRes = await axios.get('/api/wizard/local/download-progress');
+                            setLocalAIStatus(prev => ({
+                                ...prev,
+                                downloadOutput: pRes.data.output || [],
+                                downloadProgress: pRes.data.running
+                                    ? {
+                                        bytes_downloaded: pRes.data.bytes_downloaded || 0,
+                                        total_bytes: pRes.data.total_bytes || 0,
+                                        percent: pRes.data.percent || 0,
+                                        speed_bps: pRes.data.speed_bps || 0,
+                                        eta_seconds: pRes.data.eta_seconds,
+                                        current_file: pRes.data.current_file || ''
+                                    }
+                                    : null
+                            }));
+
+                            if (pRes.data.completed) {
+                                setLocalAIStatus(prev => ({
+                                    ...prev,
+                                    downloading: false,
+                                    downloadProgress: null
+                                }));
+                                refreshModelsStatus();
+                                return;
+                            }
+                            if (pRes.data.error) {
+                                setError('Download failed: ' + pRes.data.error);
+                                setLocalAIStatus(prev => ({ ...prev, downloading: false, downloadProgress: null }));
+                                return;
+                            }
+                            if (pRes.data.running) {
+                                window.setTimeout(pollProgress, 1000);
+                            }
+                        } catch {
+                            window.setTimeout(pollProgress, 2000);
+                        }
+                    };
+                    pollProgress();
+                }
+            } catch {
+                // Ignore errors on mount check
+            }
+        };
+        checkActiveDownload();
+        return () => { mounted = false; };
+    }, [refreshModelsStatus]);
+
     const refreshBackendCaps = useCallback(async () => {
         try {
             const res = await axios.get('/api/local-ai/capabilities');
@@ -295,13 +359,13 @@ exten => s,1,NoOp(AI Agent Call)
     // Auto-select first available model when language changes
     useEffect(() => {
         if (modelCatalog?.stt?.length > 0) {
-            const sttModels = modelCatalog.stt.filter((m: any) => 
+            const sttModels = modelCatalog.stt.filter((m: any) =>
                 m.language === selectedLanguage || m.language === 'multi'
             );
-            const ttsModels = modelCatalog.tts.filter((m: any) => 
+            const ttsModels = modelCatalog.tts.filter((m: any) =>
                 m.language === selectedLanguage || m.language === 'multi'
             );
-            
+
             // Auto-select first STT model for the language
             if (sttModels.length > 0 && !sttModels.find((m: any) => m.id === config.local_stt_model)) {
                 setConfig(prev => ({
@@ -310,7 +374,7 @@ exten => s,1,NoOp(AI Agent Call)
                     local_stt_backend: sttModels[0].backend
                 }));
             }
-            
+
             // Auto-select first TTS model for the language
             if (ttsModels.length > 0 && !ttsModels.find((m: any) => m.id === config.local_tts_model)) {
                 setConfig(prev => ({
@@ -584,13 +648,13 @@ exten => s,1,NoOp(AI Agent Call)
                         downloadOutput: res.data.output || [],
                         downloadProgress: res.data.running
                             ? {
-                                  bytes_downloaded: res.data.bytes_downloaded || 0,
-                                  total_bytes: res.data.total_bytes || 0,
-                                  percent: res.data.percent || 0,
-                                  speed_bps: res.data.speed_bps || 0,
-                                  eta_seconds: res.data.eta_seconds,
-                                  current_file: res.data.current_file || ''
-                              }
+                                bytes_downloaded: res.data.bytes_downloaded || 0,
+                                total_bytes: res.data.total_bytes || 0,
+                                percent: res.data.percent || 0,
+                                speed_bps: res.data.speed_bps || 0,
+                                eta_seconds: res.data.eta_seconds,
+                                current_file: res.data.current_file || ''
+                            }
                             : null
                     }));
 
@@ -1081,60 +1145,60 @@ exten => s,1,NoOp(AI Agent Call)
 
                         {config.provider === 'local_hybrid' && (
                             <div className="space-y-4">
-	                                <div className="space-y-6 border-b pb-6 mb-6">
-	                                    <h3 className="font-medium text-lg">Local AI Configuration</h3>
+                                <div className="space-y-6 border-b pb-6 mb-6">
+                                    <h3 className="font-medium text-lg">Local AI Configuration</h3>
 
-	                                    <div className="space-y-2">
-	                                        <label className="text-sm font-medium">Language</label>
-	                                        <select
-	                                            className="w-full p-2 rounded-md border border-input bg-background"
-	                                            value={selectedLanguage}
-	                                            onChange={e => setSelectedLanguage(e.target.value)}
-	                                        >
-	                                            {Object.keys(availableLanguages.languages || {}).length === 0 && (
-	                                                <option value="en-US">en-US</option>
-	                                            )}
-	                                            {Object.keys(availableLanguages.languages || {})
-	                                                .sort()
-	                                                .map((lang) => (
-	                                                    <option key={lang} value={lang}>
-	                                                        {availableLanguages.language_names?.[lang] || lang}
-	                                                    </option>
-	                                                ))}
-	                                        </select>
-	                                        <p className="text-xs text-muted-foreground">
-	                                            Used to filter available local STT/TTS models.
-	                                        </p>
-	                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Language</label>
+                                        <select
+                                            className="w-full p-2 rounded-md border border-input bg-background"
+                                            value={selectedLanguage}
+                                            onChange={e => setSelectedLanguage(e.target.value)}
+                                        >
+                                            {Object.keys(availableLanguages.languages || {}).length === 0 && (
+                                                <option value="en-US">en-US</option>
+                                            )}
+                                            {Object.keys(availableLanguages.languages || {})
+                                                .sort()
+                                                .map((lang) => (
+                                                    <option key={lang} value={lang}>
+                                                        {availableLanguages.language_names?.[lang] || lang}
+                                                    </option>
+                                                ))}
+                                        </select>
+                                        <p className="text-xs text-muted-foreground">
+                                            Used to filter available local STT/TTS models.
+                                        </p>
+                                    </div>
 
-	                                    {/* STT Config */}
+                                    {/* STT Config */}
                                     <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
                                         <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Speech-to-Text (STT)</h4>
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
                                                 <label className="text-sm font-medium">Backend</label>
-	                                                <select
-	                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                    value={config.local_stt_backend}
-	                                                    onChange={e => {
-	                                                        const backend = e.target.value;
-                                                            const krokoEmbeddedAvailable = !!backendCaps?.stt?.kroko_embedded?.available;
-	                                                        const candidates = (modelCatalog.stt || []).filter((m: any) => {
-	                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
-	                                                            return langOk && (m.backend || '').toLowerCase() === backend.toLowerCase();
-	                                                        });
-	                                                        setConfig({
-	                                                            ...config,
-	                                                            local_stt_backend: backend,
-                                                                // Only meaningful for Kroko; keep it off unless explicitly supported/enabled.
-                                                                kroko_embedded:
-                                                                    backend.toLowerCase() === 'kroko'
-                                                                        ? (krokoEmbeddedAvailable ? !!config.kroko_embedded : false)
-                                                                        : config.kroko_embedded,
-	                                                            local_stt_model: candidates[0]?.id || ''
-	                                                        });
-	                                                    }}
-	                                                >
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.local_stt_backend}
+                                                    onChange={e => {
+                                                        const backend = e.target.value;
+                                                        const krokoEmbeddedAvailable = !!backendCaps?.stt?.kroko_embedded?.available;
+                                                        const candidates = (modelCatalog.stt || []).filter((m: any) => {
+                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
+                                                            return langOk && (m.backend || '').toLowerCase() === backend.toLowerCase();
+                                                        });
+                                                        setConfig({
+                                                            ...config,
+                                                            local_stt_backend: backend,
+                                                            // Only meaningful for Kroko; keep it off unless explicitly supported/enabled.
+                                                            kroko_embedded:
+                                                                backend.toLowerCase() === 'kroko'
+                                                                    ? (krokoEmbeddedAvailable ? !!config.kroko_embedded : false)
+                                                                    : config.kroko_embedded,
+                                                            local_stt_model: candidates[0]?.id || ''
+                                                        });
+                                                    }}
+                                                >
                                                     <option value="vosk" disabled={backendCaps?.stt?.vosk ? !backendCaps.stt.vosk.available : false}>
                                                         Vosk (Local){backendCaps?.stt?.vosk && !backendCaps.stt.vosk.available ? ' (unavailable)' : ''}
                                                     </option>
@@ -1175,78 +1239,78 @@ exten => s,1,NoOp(AI Agent Call)
                                                 Embedded Kroko requires a Local AI image rebuild with <code className="px-1 py-0.5 bg-muted rounded text-[11px]">INCLUDE_KROKO_EMBEDDED=true</code> (and a pinned <code className="px-1 py-0.5 bg-muted rounded text-[11px]">KROKO_SERVER_SHA256</code>).
                                             </p>
                                         )}
-	                                        {config.local_stt_backend === 'kroko' && !config.kroko_embedded && (
-	                                            <div>
-	                                                <label className="text-sm font-medium">Kroko API Key</label>
-	                                                <input
-	                                                    type="password"
-	                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                    value={config.kroko_api_key || ''}
-	                                                    onChange={e => setConfig({ ...config, kroko_api_key: e.target.value })}
-	                                                    placeholder="Kroko API Key"
-	                                                />
-	                                            </div>
-	                                        )}
+                                        {config.local_stt_backend === 'kroko' && !config.kroko_embedded && (
+                                            <div>
+                                                <label className="text-sm font-medium">Kroko API Key</label>
+                                                <input
+                                                    type="password"
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.kroko_api_key || ''}
+                                                    onChange={e => setConfig({ ...config, kroko_api_key: e.target.value })}
+                                                    placeholder="Kroko API Key"
+                                                />
+                                            </div>
+                                        )}
 
-	                                        <div className="space-y-2">
-	                                            <label className="text-sm font-medium">Model</label>
-	                                            <div className="flex space-x-2">
-	                                                <select
-	                                                    className="w-full p-2 rounded-md border border-input bg-background"
-	                                                    value={config.local_stt_model || ''}
-	                                                    onChange={e => {
-	                                                        const modelId = e.target.value;
-	                                                        const picked = (modelCatalog.stt || []).find((m: any) => m.id === modelId);
-	                                                        setConfig({
-	                                                            ...config,
-	                                                            local_stt_model: modelId,
-	                                                            local_stt_backend: picked?.backend || config.local_stt_backend
-	                                                        });
-	                                                    }}
-	                                                >
-	                                                    {(() => {
-	                                                        const backend = (config.local_stt_backend || 'vosk').toLowerCase();
-	                                                        const candidates = (modelCatalog.stt || []).filter((m: any) => {
-	                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
-	                                                            return langOk && (m.backend || '').toLowerCase() === backend;
-	                                                        });
-	                                                        if (!candidates.length) {
-	                                                            return <option value="">No catalog models found for {backend}</option>;
-	                                                        }
-	                                                        return candidates.map((m: any) => (
-	                                                            <option key={m.id} value={m.id}>
-	                                                                {m.name}
-	                                                                {m.size_display ? ` • ${m.size_display}` : ''}
-	                                                                {m.auto_download ? ' • Auto-download' : ''}
-	                                                            </option>
-	                                                        ));
-	                                                    })()}
-	                                                </select>
-	                                                {localHybridSttNeedsDownload && !localHybridSttInstalled && (
-	                                                    <button
-	                                                        type="button"
-	                                                        onClick={() =>
-	                                                            startSelectedModelsDownload({ skipLlmDownload: true, markDownloaded: false })
-	                                                        }
-	                                                        className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
-	                                                        disabled={localAIStatus.downloading}
-	                                                    >
-	                                                        Download
-	                                                    </button>
-	                                                )}
-	                                            </div>
-	                                            {localHybridSttNeedsDownload && (
-	                                                <p className="text-xs text-muted-foreground">
-	                                                    {localHybridSttInstalled ? 'Installed.' : 'Not installed yet. Download required before continuing.'}
-	                                                </p>
-	                                            )}
-	                                            {!localHybridSttNeedsDownload && localHybridSelectedSttModel?.auto_download && (
-	                                                <p className="text-xs text-amber-700 dark:text-amber-400">
-	                                                    This model auto-downloads on first use. You can continue, but the first call may take longer.
-	                                                </p>
-	                                            )}
-	                                        </div>
-	                                    </div>
+                                        <div className="space-y-2">
+                                            <label className="text-sm font-medium">Model</label>
+                                            <div className="flex space-x-2">
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background"
+                                                    value={config.local_stt_model || ''}
+                                                    onChange={e => {
+                                                        const modelId = e.target.value;
+                                                        const picked = (modelCatalog.stt || []).find((m: any) => m.id === modelId);
+                                                        setConfig({
+                                                            ...config,
+                                                            local_stt_model: modelId,
+                                                            local_stt_backend: picked?.backend || config.local_stt_backend
+                                                        });
+                                                    }}
+                                                >
+                                                    {(() => {
+                                                        const backend = (config.local_stt_backend || 'vosk').toLowerCase();
+                                                        const candidates = (modelCatalog.stt || []).filter((m: any) => {
+                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
+                                                            return langOk && (m.backend || '').toLowerCase() === backend;
+                                                        });
+                                                        if (!candidates.length) {
+                                                            return <option value="">No catalog models found for {backend}</option>;
+                                                        }
+                                                        return candidates.map((m: any) => (
+                                                            <option key={m.id} value={m.id}>
+                                                                {m.name}
+                                                                {m.size_display ? ` • ${m.size_display}` : ''}
+                                                                {m.auto_download ? ' • Auto-download' : ''}
+                                                            </option>
+                                                        ));
+                                                    })()}
+                                                </select>
+                                                {localHybridSttNeedsDownload && !localHybridSttInstalled && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            startSelectedModelsDownload({ skipLlmDownload: true, markDownloaded: false })
+                                                        }
+                                                        className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                                                        disabled={localAIStatus.downloading}
+                                                    >
+                                                        Download
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {localHybridSttNeedsDownload && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    {localHybridSttInstalled ? 'Installed.' : 'Not installed yet. Download required before continuing.'}
+                                                </p>
+                                            )}
+                                            {!localHybridSttNeedsDownload && localHybridSelectedSttModel?.auto_download && (
+                                                <p className="text-xs text-amber-700 dark:text-amber-400">
+                                                    This model auto-downloads on first use. You can continue, but the first call may take longer.
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
 
                                     {/* TTS Config */}
                                     <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
@@ -1254,116 +1318,116 @@ exten => s,1,NoOp(AI Agent Call)
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
                                                 <label className="text-sm font-medium">Backend</label>
-	                                                <select
-	                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                    value={
-	                                                        config.local_tts_backend === 'kokoro'
-	                                                            ? (config.kokoro_mode === 'local' ? 'kokoro_local' : 'kokoro_cloud')
-	                                                            : config.local_tts_backend
-	                                                    }
-	                                                    onChange={e => {
-	                                                        const val = e.target.value;
-	                                                        let nextBackend = val;
-	                                                        let nextKokoroMode = config.kokoro_mode;
-	                                                        if (val === 'kokoro_local') {
-	                                                            nextBackend = 'kokoro';
-	                                                            nextKokoroMode = 'local';
-	                                                        } else if (val === 'kokoro_cloud') {
-	                                                            nextBackend = 'kokoro';
-	                                                            nextKokoroMode = 'api';
-	                                                        }
-	                                                        const candidates = (modelCatalog.tts || []).filter((m: any) => {
-	                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
-	                                                            return langOk && (m.backend || '').toLowerCase() === String(nextBackend).toLowerCase();
-	                                                        });
-	                                                        setConfig({
-	                                                            ...config,
-	                                                            local_tts_backend: nextBackend,
-	                                                            kokoro_mode: nextKokoroMode,
-	                                                            local_tts_model: candidates[0]?.id || ''
-	                                                        });
-	                                                    }}
-	                                                >
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={
+                                                        config.local_tts_backend === 'kokoro'
+                                                            ? (config.kokoro_mode === 'local' ? 'kokoro_local' : 'kokoro_cloud')
+                                                            : config.local_tts_backend
+                                                    }
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        let nextBackend = val;
+                                                        let nextKokoroMode = config.kokoro_mode;
+                                                        if (val === 'kokoro_local') {
+                                                            nextBackend = 'kokoro';
+                                                            nextKokoroMode = 'local';
+                                                        } else if (val === 'kokoro_cloud') {
+                                                            nextBackend = 'kokoro';
+                                                            nextKokoroMode = 'api';
+                                                        }
+                                                        const candidates = (modelCatalog.tts || []).filter((m: any) => {
+                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
+                                                            return langOk && (m.backend || '').toLowerCase() === String(nextBackend).toLowerCase();
+                                                        });
+                                                        setConfig({
+                                                            ...config,
+                                                            local_tts_backend: nextBackend,
+                                                            kokoro_mode: nextKokoroMode,
+                                                            local_tts_model: candidates[0]?.id || ''
+                                                        });
+                                                    }}
+                                                >
                                                     <option value="piper">Piper (Local)</option>
                                                     <option value="kokoro_local">Kokoro (Local)</option>
                                                     <option value="kokoro_cloud">Kokoro (Cloud/API)</option>
                                                     <option value="melotts">MeloTTS (Local/CPU)</option>
-	                                                </select>
-	                                            </div></div>
+                                                </select>
+                                            </div></div>
 
-	                                        <div className="space-y-2">
-	                                            <label className="text-sm font-medium">Model</label>
-	                                            <div className="flex space-x-2">
-	                                                <select
-	                                                    className="w-full p-2 rounded-md border border-input bg-background"
-	                                                    value={config.local_tts_model || ''}
-	                                                    onChange={e => {
-	                                                        const modelId = e.target.value;
-	                                                        const picked = (modelCatalog.tts || []).find((m: any) => m.id === modelId);
-	                                                        setConfig({
-	                                                            ...config,
-	                                                            local_tts_model: modelId,
-	                                                            local_tts_backend: picked?.backend || config.local_tts_backend
-	                                                        });
-	                                                    }}
-	                                                    disabled={(config.local_tts_backend || '').toLowerCase() === 'melotts'}
-	                                                >
-	                                                    {(() => {
-	                                                        const backend = (config.local_tts_backend || 'piper').toLowerCase();
-	                                                        if (backend === 'melotts') {
-	                                                            return <option value="">MeloTTS (no downloadable model)</option>;
-	                                                        }
-	                                                        const candidates = (modelCatalog.tts || []).filter((m: any) => {
-	                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
-	                                                            return langOk && (m.backend || '').toLowerCase() === backend;
-	                                                        });
-	                                                        if (!candidates.length) {
-	                                                            return <option value="">No catalog models found for {backend}</option>;
-	                                                        }
-	                                                        return candidates.map((m: any) => (
-	                                                            <option key={m.id} value={m.id}>
-	                                                                {m.name}
-	                                                                {m.size_display ? ` • ${m.size_display}` : ''}
-	                                                                {m.auto_download ? ' • Auto-download' : ''}
-	                                                            </option>
-	                                                        ));
-	                                                    })()}
-	                                                </select>
-	                                                {localHybridTtsNeedsDownload && !localHybridTtsInstalled && (
-	                                                    <button
-	                                                        type="button"
-	                                                        onClick={() =>
-	                                                            startSelectedModelsDownload({ skipLlmDownload: true, markDownloaded: false })
-	                                                        }
-	                                                        className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
-	                                                        disabled={localAIStatus.downloading}
-	                                                    >
-	                                                        Download
-	                                                    </button>
-	                                                )}
-	                                            </div>
-	                                            {localHybridTtsNeedsDownload && (
-	                                                <p className="text-xs text-muted-foreground">
-	                                                    {localHybridTtsInstalled ? 'Installed.' : 'Not installed yet. Download required before continuing.'}
-	                                                </p>
-	                                            )}
-	                                            {(config.local_tts_backend || '').toLowerCase() === 'kokoro' &&
-	                                                (config.kokoro_mode || 'local').toLowerCase() !== 'local' && (
-	                                                    <p className="text-xs text-amber-700 dark:text-amber-400">
-	                                                        Kokoro in cloud/API mode does not require local model downloads.
-	                                                    </p>
-	                                                )}
-	                                            {!localHybridTtsNeedsDownload && localHybridSelectedTtsModel?.auto_download && (
-	                                                <p className="text-xs text-amber-700 dark:text-amber-400">
-	                                                    This model auto-downloads on first use. You can continue, but the first call may take longer.
-	                                                </p>
-	                                            )}
-	                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-sm font-medium">Model</label>
+                                            <div className="flex space-x-2">
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background"
+                                                    value={config.local_tts_model || ''}
+                                                    onChange={e => {
+                                                        const modelId = e.target.value;
+                                                        const picked = (modelCatalog.tts || []).find((m: any) => m.id === modelId);
+                                                        setConfig({
+                                                            ...config,
+                                                            local_tts_model: modelId,
+                                                            local_tts_backend: picked?.backend || config.local_tts_backend
+                                                        });
+                                                    }}
+                                                    disabled={(config.local_tts_backend || '').toLowerCase() === 'melotts'}
+                                                >
+                                                    {(() => {
+                                                        const backend = (config.local_tts_backend || 'piper').toLowerCase();
+                                                        if (backend === 'melotts') {
+                                                            return <option value="">MeloTTS (no downloadable model)</option>;
+                                                        }
+                                                        const candidates = (modelCatalog.tts || []).filter((m: any) => {
+                                                            const langOk = m.language === selectedLanguage || m.language === 'multi';
+                                                            return langOk && (m.backend || '').toLowerCase() === backend;
+                                                        });
+                                                        if (!candidates.length) {
+                                                            return <option value="">No catalog models found for {backend}</option>;
+                                                        }
+                                                        return candidates.map((m: any) => (
+                                                            <option key={m.id} value={m.id}>
+                                                                {m.name}
+                                                                {m.size_display ? ` • ${m.size_display}` : ''}
+                                                                {m.auto_download ? ' • Auto-download' : ''}
+                                                            </option>
+                                                        ));
+                                                    })()}
+                                                </select>
+                                                {localHybridTtsNeedsDownload && !localHybridTtsInstalled && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            startSelectedModelsDownload({ skipLlmDownload: true, markDownloaded: false })
+                                                        }
+                                                        className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                                                        disabled={localAIStatus.downloading}
+                                                    >
+                                                        Download
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {localHybridTtsNeedsDownload && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    {localHybridTtsInstalled ? 'Installed.' : 'Not installed yet. Download required before continuing.'}
+                                                </p>
+                                            )}
+                                            {(config.local_tts_backend || '').toLowerCase() === 'kokoro' &&
+                                                (config.kokoro_mode || 'local').toLowerCase() !== 'local' && (
+                                                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                                                        Kokoro in cloud/API mode does not require local model downloads.
+                                                    </p>
+                                                )}
+                                            {!localHybridTtsNeedsDownload && localHybridSelectedTtsModel?.auto_download && (
+                                                <p className="text-xs text-amber-700 dark:text-amber-400">
+                                                    This model auto-downloads on first use. You can continue, but the first call may take longer.
+                                                </p>
+                                            )}
+                                        </div>
 
-	                                        {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'api' && (
-	                                            <div>
-	                                                <label className="text-sm font-medium">Kokoro API Key</label>
-	                                                <input
+                                        {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'api' && (
+                                            <div>
+                                                <label className="text-sm font-medium">Kokoro API Key</label>
+                                                <input
                                                     type="password"
                                                     className="w-full p-2 rounded-md border border-input bg-background mt-1"
                                                     value={config.kokoro_api_key || ''}
@@ -1372,9 +1436,9 @@ exten => s,1,NoOp(AI Agent Call)
                                                 />
                                             </div>
                                         )}
-	                                        {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'local' && (
-	                                            <div>
-	                                                <label className="text-sm font-medium">Voice</label>
+                                        {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'local' && (
+                                            <div>
+                                                <label className="text-sm font-medium">Voice</label>
                                                 <select
                                                     className="w-full p-2 rounded-md border border-input bg-background mt-1"
                                                     value={config.kokoro_voice || 'af_heart'}
@@ -1395,39 +1459,39 @@ exten => s,1,NoOp(AI Agent Call)
                                                 <p className="text-xs text-muted-foreground mt-1">
                                                     af=American Female, am=American Male, bf=British Female, bm=British Male
                                                 </p>
-	                                            </div>
-	                                        )}
-	                                    </div>
+                                            </div>
+                                        )}
+                                    </div>
 
-	                                    {(localHybridMissingRequired || localAIStatus.downloading) && (
-	                                        <div className="p-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-900/20 space-y-3">
-	                                            {localHybridMissingRequired && (
-	                                                <p className="text-sm text-amber-900 dark:text-amber-200">
-	                                                    Selected local STT/TTS models are not installed yet. Download them before continuing.
-	                                                </p>
-	                                            )}
-	                                            {localAIStatus.downloading && (
-	                                                <p className="text-sm text-amber-900 dark:text-amber-200">
-	                                                    Download in progress…
-	                                                </p>
-	                                            )}
-	                                            <div className="flex justify-end">
-	                                                <button
-	                                                    type="button"
-	                                                    onClick={() =>
-	                                                        startSelectedModelsDownload({ skipLlmDownload: true, markDownloaded: false })
-	                                                    }
-	                                                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-	                                                    disabled={localAIStatus.downloading}
-	                                                >
-	                                                    {localAIStatus.downloading ? 'Downloading…' : 'Download Selected Models'}
-	                                                </button>
-	                                            </div>
-	                                        </div>
-	                                    )}
+                                    {(localHybridMissingRequired || localAIStatus.downloading) && (
+                                        <div className="p-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-900/20 space-y-3">
+                                            {localHybridMissingRequired && (
+                                                <p className="text-sm text-amber-900 dark:text-amber-200">
+                                                    Selected local STT/TTS models are not installed yet. Download them before continuing.
+                                                </p>
+                                            )}
+                                            {localAIStatus.downloading && (
+                                                <p className="text-sm text-amber-900 dark:text-amber-200">
+                                                    Download in progress…
+                                                </p>
+                                            )}
+                                            <div className="flex justify-end">
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        startSelectedModelsDownload({ skipLlmDownload: true, markDownloaded: false })
+                                                    }
+                                                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                                                    disabled={localAIStatus.downloading}
+                                                >
+                                                    {localAIStatus.downloading ? 'Downloading…' : 'Download Selected Models'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
 
-	                                    {/* LLM Config for Hybrid */}
-	                                    <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                    {/* LLM Config for Hybrid */}
+                                    <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
                                         <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Large Language Model (LLM)</h4>
                                         <div>
                                             <label className="text-sm font-medium">Provider</label>
@@ -1628,16 +1692,16 @@ exten => s,1,NoOp(AI Agent Call)
                                     <p className="text-xs text-muted-foreground">Required for ElevenLabs Conversational provider.</p>
                                 </div>
 
-                                        <div className="bg-amber-50/50 dark:bg-amber-900/10 p-4 rounded-md border border-amber-100 dark:border-amber-900/20">
-                                            <h4 className="font-semibold mb-2 text-amber-800 dark:text-amber-300 text-sm">Setup Requirements</h4>
-                                            <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
-                                                <li>Create an agent at elevenlabs.io/app/agents</li>
-                                                <li>Enable "Require authentication" in security settings</li>
-                                                <li>Add client tools (hangup_call, blind_transfer, etc.)</li>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                )}
+                                <div className="bg-amber-50/50 dark:bg-amber-900/10 p-4 rounded-md border border-amber-100 dark:border-amber-900/20">
+                                    <h4 className="font-semibold mb-2 text-amber-800 dark:text-amber-300 text-sm">Setup Requirements</h4>
+                                    <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
+                                        <li>Create an agent at elevenlabs.io/app/agents</li>
+                                        <li>Enable "Require authentication" in security settings</li>
+                                        <li>Add client tools (hangup_call, blind_transfer, etc.)</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        )}
 
                         {config.provider === 'local' && (
                             <div className="space-y-6">
@@ -1804,8 +1868,8 @@ exten => s,1,NoOp(AI Agent Call)
                                                         const val = e.target.value;
                                                         const model = modelCatalog?.stt?.find((m: any) => m.id === val);
                                                         if (model) {
-                                                            setConfig({ 
-                                                                ...config, 
+                                                            setConfig({
+                                                                ...config,
                                                                 local_stt_backend: model.backend,
                                                                 local_stt_model: model.id,
                                                                 kroko_embedded: model.backend === 'kroko' && model.embedded === true
@@ -1816,7 +1880,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                     }}
                                                 >
                                                     {/* Language-specific models */}
-                                                    {modelCatalog?.stt?.filter((m: any) => 
+                                                    {modelCatalog?.stt?.filter((m: any) =>
                                                         m.language === selectedLanguage || m.language === 'multi'
                                                     ).map((model: any) => {
                                                         const needsRebuild =
@@ -1830,15 +1894,15 @@ exten => s,1,NoOp(AI Agent Call)
                                                         );
                                                     })}
                                                     {/* Fallback if no models for language */}
-                                                    {(!modelCatalog?.stt || modelCatalog.stt.filter((m: any) => 
+                                                    {(!modelCatalog?.stt || modelCatalog.stt.filter((m: any) =>
                                                         m.language === selectedLanguage || m.language === 'multi'
                                                     ).length === 0) && (
-                                                        <>
-                                                            <option value="vosk">Vosk (Local)</option>
-                                                            <option value="kroko_cloud">Kroko (Cloud)</option>
-                                                            <option value="faster_whisper">Faster-Whisper (Local)</option>
-                                                        </>
-                                                    )}
+                                                            <>
+                                                                <option value="vosk">Vosk (Local)</option>
+                                                                <option value="kroko_cloud">Kroko (Cloud)</option>
+                                                                <option value="faster_whisper">Faster-Whisper (Local)</option>
+                                                            </>
+                                                        )}
                                                 </select>
                                                 <p className="text-xs text-muted-foreground mt-1">
                                                     Models filtered for {availableLanguages.language_names?.[selectedLanguage] || selectedLanguage}
@@ -1859,29 +1923,29 @@ exten => s,1,NoOp(AI Agent Call)
                                         )}
                                     </div>
 
-	                                    {/* TTS Config */}
-	                                    <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
-	                                        <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Text-to-Speech (TTS)</h4>
-	                                        <div className="grid grid-cols-2 gap-4">
-	                                            <div>
-	                                                <label className="text-sm font-medium">Voice / Model</label>
-	                                                <select
-	                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                    value={config.local_tts_model || config.local_tts_backend}
-	                                                    onChange={e => {
-	                                                        const val = e.target.value;
-	                                                        const model = modelCatalog?.tts?.find((m: any) => m.id === val);
-	                                                        if (model) {
-	                                                            setConfig({ 
-	                                                                ...config, 
-	                                                                local_tts_backend: model.backend,
-	                                                                local_tts_model: model.id,
-	                                                            });
-	                                                        }
-	                                                    }}
-	                                                >
+                                    {/* TTS Config */}
+                                    <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                        <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Text-to-Speech (TTS)</h4>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm font-medium">Voice / Model</label>
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.local_tts_model || config.local_tts_backend}
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        const model = modelCatalog?.tts?.find((m: any) => m.id === val);
+                                                        if (model) {
+                                                            setConfig({
+                                                                ...config,
+                                                                local_tts_backend: model.backend,
+                                                                local_tts_model: model.id,
+                                                            });
+                                                        }
+                                                    }}
+                                                >
                                                     {/* Language-specific voices */}
-                                                    {modelCatalog?.tts?.filter((m: any) => 
+                                                    {modelCatalog?.tts?.filter((m: any) =>
                                                         m.language === selectedLanguage || m.language === 'multi'
                                                     ).map((model: any) => {
                                                         const needsRebuild =
@@ -1893,102 +1957,102 @@ exten => s,1,NoOp(AI Agent Call)
                                                         );
                                                     })}
                                                     {/* Fallback if no models for language */}
-                                                    {(!modelCatalog?.tts || modelCatalog.tts.filter((m: any) => 
+                                                    {(!modelCatalog?.tts || modelCatalog.tts.filter((m: any) =>
                                                         m.language === selectedLanguage || m.language === 'multi'
                                                     ).length === 0) && (
-                                                        <>
-                                                            <option value="piper">Piper (Local)</option>
-                                                            <option value="kokoro">Kokoro (Premium)</option>
-                                                            <option value="melotts">MeloTTS (Local)</option>
-                                                        </>
-                                                    )}
+                                                            <>
+                                                                <option value="piper">Piper (Local)</option>
+                                                                <option value="kokoro">Kokoro (Premium)</option>
+                                                                <option value="melotts">MeloTTS (Local)</option>
+                                                            </>
+                                                        )}
                                                 </select>
-	                                                <p className="text-xs text-muted-foreground mt-1">
-	                                                    Voices filtered for {availableLanguages.language_names?.[selectedLanguage] || selectedLanguage}
-	                                                </p>
-	                                            </div>
-	                                            {config.local_tts_backend === 'kokoro' && (
-	                                                <div>
-	                                                    <label className="text-sm font-medium">Kokoro Mode</label>
-	                                                    <select
-	                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                        value={(config.kokoro_mode || 'local').toLowerCase()}
-	                                                        onChange={e => setConfig({ ...config, kokoro_mode: e.target.value })}
-	                                                    >
-	                                                        <option value="local">Local (downloaded files)</option>
-	                                                        <option value="api">Cloud/API (remote endpoint)</option>
-	                                                        {(showAdvancedKokoro || (config.kokoro_mode || '').toLowerCase() === 'hf') && (
-	                                                            <option value="hf">HuggingFace (auto-download, Advanced)</option>
-	                                                        )}
-	                                                    </select>
-	                                                    <label className="flex items-center space-x-2 cursor-pointer mt-2">
-	                                                        <input
-	                                                            type="checkbox"
-	                                                            checked={showAdvancedKokoro}
-	                                                            onChange={e => setShowAdvancedKokoro(e.target.checked)}
-	                                                            className="rounded border-gray-300"
-	                                                        />
-	                                                        <span className="text-sm text-muted-foreground">Show advanced modes</span>
-	                                                    </label>
-	                                                </div>
-	                                            )}
-	                                            {config.local_tts_backend === 'kokoro' && ['local', 'hf'].includes((config.kokoro_mode || 'local').toLowerCase()) && (
-	                                                <div>
-	                                                    <label className="text-sm font-medium">Voice</label>
-	                                                    <select
-	                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                        value={config.kokoro_voice || 'af_heart'}
-	                                                        onChange={e => setConfig({ ...config, kokoro_voice: e.target.value })}
-	                                                    >
-	                                                        <option value="af_heart">Heart (Female, US)</option>
-	                                                        <option value="af_bella">Bella (Female, US)</option>
-	                                                        <option value="af_nicole">Nicole (Female, US)</option>
-	                                                        <option value="af_sarah">Sarah (Female, US)</option>
-	                                                        <option value="af_sky">Sky (Female, US)</option>
-	                                                        <option value="am_adam">Adam (Male, US)</option>
-	                                                        <option value="am_michael">Michael (Male, US)</option>
-	                                                        <option value="bf_emma">Emma (Female, UK)</option>
-	                                                        <option value="bf_isabella">Isabella (Female, UK)</option>
-	                                                        <option value="bm_george">George (Male, UK)</option>
-	                                                        <option value="bm_lewis">Lewis (Male, UK)</option>
-	                                                    </select>
-	                                                    <p className="text-xs text-muted-foreground mt-1">
-	                                                        af=American Female, am=American Male, bf=British Female, bm=British Male
-	                                                    </p>
-	                                                </div>
-	                                            )}
-	                                        </div>
-	                                        {config.local_tts_backend === 'kokoro' && (config.kokoro_mode || '').toLowerCase() === 'api' && (
-	                                            <div>
-	                                                <label className="text-sm font-medium">Kokoro Web API</label>
-	                                                <input
-	                                                    type="text"
-	                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                    value={config.kokoro_api_base_url || ''}
-	                                                    onChange={e => setConfig({ ...config, kokoro_api_base_url: e.target.value })}
-	                                                    placeholder="https://voice-generator.pages.dev/api/v1"
-	                                                />
-	                                                <p className="text-xs text-muted-foreground mt-1">
-	                                                    Supports OpenAI-compatible `audio/speech` endpoint. Recommended to self-host for reliability.
-	                                                </p>
-	                                                <label className="text-sm font-medium mt-3 block">Token (optional)</label>
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                    Voices filtered for {availableLanguages.language_names?.[selectedLanguage] || selectedLanguage}
+                                                </p>
+                                            </div>
+                                            {config.local_tts_backend === 'kokoro' && (
+                                                <div>
+                                                    <label className="text-sm font-medium">Kokoro Mode</label>
+                                                    <select
+                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                        value={(config.kokoro_mode || 'local').toLowerCase()}
+                                                        onChange={e => setConfig({ ...config, kokoro_mode: e.target.value })}
+                                                    >
+                                                        <option value="local">Local (downloaded files)</option>
+                                                        <option value="api">Cloud/API (remote endpoint)</option>
+                                                        {(showAdvancedKokoro || (config.kokoro_mode || '').toLowerCase() === 'hf') && (
+                                                            <option value="hf">HuggingFace (auto-download, Advanced)</option>
+                                                        )}
+                                                    </select>
+                                                    <label className="flex items-center space-x-2 cursor-pointer mt-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={showAdvancedKokoro}
+                                                            onChange={e => setShowAdvancedKokoro(e.target.checked)}
+                                                            className="rounded border-gray-300"
+                                                        />
+                                                        <span className="text-sm text-muted-foreground">Show advanced modes</span>
+                                                    </label>
+                                                </div>
+                                            )}
+                                            {config.local_tts_backend === 'kokoro' && ['local', 'hf'].includes((config.kokoro_mode || 'local').toLowerCase()) && (
+                                                <div>
+                                                    <label className="text-sm font-medium">Voice</label>
+                                                    <select
+                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                        value={config.kokoro_voice || 'af_heart'}
+                                                        onChange={e => setConfig({ ...config, kokoro_voice: e.target.value })}
+                                                    >
+                                                        <option value="af_heart">Heart (Female, US)</option>
+                                                        <option value="af_bella">Bella (Female, US)</option>
+                                                        <option value="af_nicole">Nicole (Female, US)</option>
+                                                        <option value="af_sarah">Sarah (Female, US)</option>
+                                                        <option value="af_sky">Sky (Female, US)</option>
+                                                        <option value="am_adam">Adam (Male, US)</option>
+                                                        <option value="am_michael">Michael (Male, US)</option>
+                                                        <option value="bf_emma">Emma (Female, UK)</option>
+                                                        <option value="bf_isabella">Isabella (Female, UK)</option>
+                                                        <option value="bm_george">George (Male, UK)</option>
+                                                        <option value="bm_lewis">Lewis (Male, UK)</option>
+                                                    </select>
+                                                    <p className="text-xs text-muted-foreground mt-1">
+                                                        af=American Female, am=American Male, bf=British Female, bm=British Male
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+                                        {config.local_tts_backend === 'kokoro' && (config.kokoro_mode || '').toLowerCase() === 'api' && (
+                                            <div>
+                                                <label className="text-sm font-medium">Kokoro Web API</label>
+                                                <input
+                                                    type="text"
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.kokoro_api_base_url || ''}
+                                                    onChange={e => setConfig({ ...config, kokoro_api_base_url: e.target.value })}
+                                                    placeholder="https://voice-generator.pages.dev/api/v1"
+                                                />
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                    Supports OpenAI-compatible `audio/speech` endpoint. Recommended to self-host for reliability.
+                                                </p>
+                                                <label className="text-sm font-medium mt-3 block">Token (optional)</label>
                                                 <input
                                                     type="password"
                                                     className="w-full p-2 rounded-md border border-input bg-background mt-1"
-	                                                    value={config.kokoro_api_key || ''}
-	                                                    onChange={e => setConfig({ ...config, kokoro_api_key: e.target.value })}
-	                                                    placeholder="Bearer token (optional; Dashboard requires a token to enable Cloud/API selection)"
-	                                                />
-	                                            </div>
-	                                        )}
-	                                        {config.local_tts_backend === 'kokoro' && (config.kokoro_mode || '').toLowerCase() === 'hf' && (
-	                                            <div className="text-xs text-muted-foreground">
-	                                                HuggingFace mode forces Kokoro to load via the HuggingFace cache inside the container and may
-	                                                download weights/voices on first use. Rebuilding the container can trigger re-downloads unless
-	                                                the cache is persisted; prefer Local mode for production.
-	                                            </div>
-	                                        )}
-	                                    </div>
+                                                    value={config.kokoro_api_key || ''}
+                                                    onChange={e => setConfig({ ...config, kokoro_api_key: e.target.value })}
+                                                    placeholder="Bearer token (optional; Dashboard requires a token to enable Cloud/API selection)"
+                                                />
+                                            </div>
+                                        )}
+                                        {config.local_tts_backend === 'kokoro' && (config.kokoro_mode || '').toLowerCase() === 'hf' && (
+                                            <div className="text-xs text-muted-foreground">
+                                                HuggingFace mode forces Kokoro to load via the HuggingFace cache inside the container and may
+                                                download weights/voices on first use. Rebuilding the container can trigger re-downloads unless
+                                                the cache is persisted; prefer Local mode for production.
+                                            </div>
+                                        )}
+                                    </div>
 
                                     {/* LLM Config */}
                                     <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
@@ -2054,11 +2118,11 @@ exten => s,1,NoOp(AI Agent Call)
                                                     Downloads models for selected backends.
                                                 </p>
                                             </div>
-		                                            <button
-		                                                onClick={() => startSelectedModelsDownload()}
-		                                                disabled={localAIStatus.downloading || localAIStatus.downloadCompleted}
-		                                                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-		                                            >
+                                            <button
+                                                onClick={() => startSelectedModelsDownload()}
+                                                disabled={localAIStatus.downloading || localAIStatus.downloadCompleted}
+                                                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                                            >
                                                 {localAIStatus.downloading ? (
                                                     <span className="flex items-center gap-2">
                                                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -2088,7 +2152,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                     </span>
                                                 </div>
                                                 <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
-                                                    <div 
+                                                    <div
                                                         className="bg-blue-600 h-3 rounded-full transition-all duration-300"
                                                         style={{ width: `${localAIStatus.downloadProgress.percent}%` }}
                                                     />
@@ -2218,7 +2282,7 @@ exten => s,1,NoOp(AI Agent Call)
                                     <div>
                                         <p className="text-sm font-medium text-yellow-500">Remote Asterisk Detected</p>
                                         <p className="text-xs text-muted-foreground mt-1">
-                                            You're using a hostname ({config.asterisk_host}). For RTP audio security, 
+                                            You're using a hostname ({config.asterisk_host}). For RTP audio security,
                                             please enter the actual IP address of your Asterisk server.
                                         </p>
                                     </div>
@@ -2382,7 +2446,7 @@ exten => s,1,NoOp(AI Agent Call)
                                     </h3>
 
                                     {!localAIStatus.serverStarted ? (
-                                    <button
+                                        <button
                                             onClick={async () => {
                                                 try {
                                                     await startLocalAIServer();
@@ -2490,7 +2554,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                 </>
                                             )}
                                         </button>
-                                        
+
                                         {/* Progress Steps - show during build or after completion */}
                                         {startingEngine && engineProgress.steps.length === 0 && (
                                             <div className="mt-4 space-y-2 text-sm text-muted-foreground">
@@ -2679,7 +2743,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                         </>
                                     )}
                                 </button>
-                                
+
                                 {/* Progress Steps - show during build or after completion */}
                                 {startingEngine && engineProgress.steps.length === 0 && (
                                     <div className="mt-4 space-y-2 text-sm text-muted-foreground">
@@ -2815,20 +2879,20 @@ exten => s,1,NoOp(AI Agent - Local Full)
                         </button>
                     ) : <div></div>}
 
-	                    {step < 5 && (
-	                        <button
-	                            onClick={handleNext}
-	                            disabled={
-	                                loading ||
-	                                (step === 3 &&
-	                                    ((config.provider === 'local' &&
-	                                        (localAIStatus.downloading ||
-	                                            (!localAIStatus.downloadCompleted && !!localAIStatus.tier))) ||
-	                                        (config.provider === 'local_hybrid' &&
-	                                            (localAIStatus.downloading || localHybridMissingRequired))))
-	                            }
-	                            className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-	                        >
+                    {step < 5 && (
+                        <button
+                            onClick={handleNext}
+                            disabled={
+                                loading ||
+                                (step === 3 &&
+                                    ((config.provider === 'local' &&
+                                        (localAIStatus.downloading ||
+                                            (!localAIStatus.downloadCompleted && !!localAIStatus.tier))) ||
+                                        (config.provider === 'local_hybrid' &&
+                                            (localAIStatus.downloading || localHybridMissingRequired))))
+                            }
+                            className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
                             {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                             {step === 4 ? 'Finish Setup' : 'Next'}
                             {step < 4 && <ArrowRight className="w-4 h-4 ml-2" />}
@@ -2859,31 +2923,8 @@ exten => s,1,NoOp(AI Agent - Local Full)
                         </div>
                     </div>
                 )}
-
-                {/* Toast Notification */}
-	                {toast && (
-	                    <div className="fixed bottom-4 right-4 z-50">
-	                        <div
-	                            className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-in slide-in-from-right ${toast.type === 'success'
-	                                ? 'bg-green-500 text-white'
-	                                : toast.type === 'warning'
-	                                    ? 'bg-yellow-500 text-white'
-	                                    : 'bg-red-500 text-white'
-	                                }`}
-	                        >
-	                            {toast.type === 'success' ? (
-	                                <CheckCircle2 className="w-4 h-4" />
-	                            ) : toast.type === 'warning' ? (
-	                                <AlertTriangle className="w-4 h-4" />
-	                            ) : (
-	                                <XCircle className="w-4 h-4" />
-	                            )}
-	                            {toast.message}
-	                        </div>
-	                    </div>
-	                )}
             </div>
-        </div >
+        </div>
     );
 };
 

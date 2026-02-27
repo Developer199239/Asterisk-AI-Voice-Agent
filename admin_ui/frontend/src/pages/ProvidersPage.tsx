@@ -9,6 +9,7 @@ import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
+import { usePendingChanges } from '../hooks/usePendingChanges';
 
 // Provider Forms
 import GenericProviderForm from '../components/config/providers/GenericProviderForm';
@@ -38,7 +39,7 @@ const ProvidersPage: React.FC = () => {
     const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean; message: string } | undefined }>({});
     const [showAddProvidersModal, setShowAddProvidersModal] = useState(false);
     const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
-    const [pendingRestart, setPendingRestart] = useState(false);
+    const { pendingRestart, setPendingChanges, clearPendingChanges } = usePendingChanges();
     const [restartingEngine, setRestartingEngine] = useState(false);
 
     useEffect(() => {
@@ -102,7 +103,7 @@ const ProvidersPage: React.FC = () => {
             const sanitized = sanitizeConfigForSave(normalized);
             await axios.post('/api/config/yaml', { content: yaml.dump(sanitized) });
             setConfig(sanitized);
-            setPendingRestart(true);
+            setPendingChanges('restart');
         } catch (err) {
             console.error('Failed to save config', err);
             toast.error('Failed to save configuration');
@@ -262,7 +263,6 @@ const ProvidersPage: React.FC = () => {
 
         await saveConfig({ ...config, providers: nextProviders });
         setShowAddProvidersModal(false);
-        setPendingRestart(true);
     };
 
     const handleSetAsDefault = async (name: string) => {
@@ -277,7 +277,6 @@ const ProvidersPage: React.FC = () => {
             newConfig.providers[name].enabled = true;
         }
         await saveConfig(newConfig);
-        setPendingRestart(true);
     };
 
     const handleReloadAIEngine = async (force: boolean = false) => {
@@ -306,7 +305,7 @@ const ProvidersPage: React.FC = () => {
             }
 
             if (response.data.status === 'success') {
-                setPendingRestart(false);
+                clearPendingChanges();
                 toast.success('AI Engine restarted! Changes are now active.');
             }
         } catch (error: any) {
@@ -326,7 +325,7 @@ const ProvidersPage: React.FC = () => {
         // Check pipeline usage
         const pipelines = config.pipelines || {};
         const inUsePipelines = Object.entries(pipelines).filter(([_, p]: [string, any]) => p.stt === name || p.llm === name || p.tts === name);
-        
+
         // P1 Guard: Block if used by active pipeline
         const activePipeline = config.active_pipeline;
         if (activePipeline && pipelines[activePipeline]) {
@@ -383,7 +382,7 @@ const ProvidersPage: React.FC = () => {
         if (!newEnabled) {
             const pipelines = config.pipelines || {};
             const activePipeline = config.active_pipeline;
-            
+
             if (activePipeline && pipelines[activePipeline]) {
                 const ap = pipelines[activePipeline] as any;
                 if (ap.stt === name || ap.llm === name || ap.tts === name) {
@@ -540,12 +539,12 @@ const ProvidersPage: React.FC = () => {
 
         // Check provider name for specific forms, fallback to type
         const providerName = (providerForm.name || '').toLowerCase();
-        
+
         // Local provider (including full agent mode) uses LocalProviderForm
         if (providerForm.type === 'local' || providerName === 'local' || providerName.includes('local')) {
             return <LocalProviderForm config={providerForm} onChange={updateForm} />;
         }
-        
+
         // Check by provider NAME first (for full agents that have type='full')
         // This ensures Deepgram, Google Live, etc. use their specific forms
         if (providerName === 'deepgram' || providerName.includes('deepgram')) {
@@ -563,7 +562,7 @@ const ProvidersPage: React.FC = () => {
         if (providerName.includes('telnyx') || providerName.includes('telenyx')) {
             return <TelnyxProviderForm config={providerForm} onChange={updateForm} />;
         }
-        
+
         // Fall back to type-based selection
         switch (providerForm.type) {
             case 'openai_realtime':
@@ -618,11 +617,10 @@ const ProvidersPage: React.FC = () => {
                 <button
                     onClick={() => handleReloadAIEngine(false)}
                     disabled={restartingEngine}
-                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
-                        pendingRestart 
-                            ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium' 
+                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${pendingRestart
+                            ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium'
                             : 'bg-yellow-500/20 hover:bg-yellow-500/30'
-                    } disabled:opacity-50`}
+                        } disabled:opacity-50`}
                 >
                     {restartingEngine ? (
                         <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
@@ -699,53 +697,53 @@ const ProvidersPage: React.FC = () => {
                                         )}
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                                            {(providerData.model || providerData.voice || providerData.tts_model || providerData.llm_model || providerData.tts_voice_name || providerData.agent_id || providerData.voice_id || providerData.model_id) && (
-                                                <>
-                                                    {providerData.model && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
-                                                            {providerData.model}
-                                                        </span>
-                                                    )}
-                                                    {providerData.voice && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                            {providerData.voice}
-                                                        </span>
-                                                    )}
-                                                    {providerData.tts_model && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                            {providerData.tts_model}
-                                                        </span>
-                                                    )}
-                                                    {providerData.llm_model && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                            {providerData.llm_model}
-                                                        </span>
-                                                    )}
-                                                    {providerData.tts_voice_name && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                            {providerData.tts_voice_name}
-                                                        </span>
-                                                    )}
-                                                    {providerData.model_id && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
-                                                            {providerData.model_id}
-                                                        </span>
-                                                    )}
-                                                    {providerData.voice_id && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.voice_id}>
-                                                            {providerData.voice_id.length > 15 ? `${providerData.voice_id.substring(0, 15)}...` : providerData.voice_id}
-                                                        </span>
-                                                    )}
-                                                    {providerData.agent_id && !providerData.agent_id.startsWith('${') && (
-                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.agent_id}>
-                                                            {providerData.agent_id.length > 20 ? `${providerData.agent_id.substring(0, 20)}...` : providerData.agent_id}
-                                                        </span>
-                                                    )}
-                                                </>
-                                            )}
-                                        </div>
+                                        {(providerData.model || providerData.voice || providerData.tts_model || providerData.llm_model || providerData.tts_voice_name || providerData.agent_id || providerData.voice_id || providerData.model_id) && (
+                                            <>
+                                                {providerData.model && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
+                                                        {providerData.model}
+                                                    </span>
+                                                )}
+                                                {providerData.voice && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
+                                                        {providerData.voice}
+                                                    </span>
+                                                )}
+                                                {providerData.tts_model && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
+                                                        {providerData.tts_model}
+                                                    </span>
+                                                )}
+                                                {providerData.llm_model && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
+                                                        {providerData.llm_model}
+                                                    </span>
+                                                )}
+                                                {providerData.tts_voice_name && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
+                                                        {providerData.tts_voice_name}
+                                                    </span>
+                                                )}
+                                                {providerData.model_id && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
+                                                        {providerData.model_id}
+                                                    </span>
+                                                )}
+                                                {providerData.voice_id && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.voice_id}>
+                                                        {providerData.voice_id.length > 15 ? `${providerData.voice_id.substring(0, 15)}...` : providerData.voice_id}
+                                                    </span>
+                                                )}
+                                                {providerData.agent_id && !providerData.agent_id.startsWith('${') && (
+                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.agent_id}>
+                                                        {providerData.agent_id.length > 20 ? `${providerData.agent_id.substring(0, 20)}...` : providerData.agent_id}
+                                                    </span>
+                                                )}
+                                            </>
+                                        )}
                                     </div>
                                 </div>
+                            </div>
                             {/* Row 2: Actions */}
                             <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
                                 <div className="flex items-center gap-2">

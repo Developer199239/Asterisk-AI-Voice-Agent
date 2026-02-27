@@ -6,6 +6,7 @@ import os
 import logging
 import secrets
 from pathlib import Path
+import shutil
 
 
 def _ensure_outbound_prompt_assets() -> None:
@@ -53,6 +54,47 @@ load_dotenv(settings.ENV_PATH)
 # NOTE: DB permission alignment is handled by install/preflight steps (host-side),
 # keeping runtime code minimal and CI security scanners happy.
 _ensure_outbound_prompt_assets()
+
+def _cleanup_orphaned_model_downloads() -> None:
+    """
+    Clean up orphaned .part files and .extract_* directories in the local AI models directory
+    that may have been left behind by interrupted downloads/extractions.
+    """
+    try:
+        models_dir = Path(os.getenv("AAVA_MODELS_DIR") or "/mnt/asterisk_models")
+        if not models_dir.exists():
+            return
+        
+        cleaned_up = 0
+        
+        # Clean up files matching *.part
+        for part_file in models_dir.rglob("*.part"):
+            try:
+                if part_file.is_file():
+                    part_file.unlink()
+                    cleaned_up += 1
+            except Exception:
+                pass
+                
+        # Clean up directories matching .extract_*
+        for root, dirs, files in os.walk(models_dir):
+            for d in list(dirs):  # Use list to safely modify while iterating
+                if d.startswith(".extract_"):
+                    extract_path = Path(root) / d
+                    try:
+                        shutil.rmtree(extract_path)
+                        cleaned_up += 1
+                        dirs.remove(d) # Remove to prevent os.walk from entering it
+                    except Exception:
+                        pass
+        
+        if cleaned_up > 0:
+            logging.getLogger(__name__).info("Cleaned up %d orphaned model download temp file(s)/dir(s).", cleaned_up)
+            
+    except Exception as e:
+        logging.getLogger(__name__).warning("Failed to clean up orphaned model downloads: %s", e)
+
+_cleanup_orphaned_model_downloads()
 
 # SECURITY: Admin UI binds to 0.0.0.0 by default (DX-first).
 # If JWT_SECRET is missing/placeholder, generate an ephemeral secret so tokens
