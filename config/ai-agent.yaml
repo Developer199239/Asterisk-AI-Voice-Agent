@@ -38,7 +38,8 @@ contexts:
 
 
       CALL ENDING:
-      - When the caller indicates they are done, say a brief farewell and use the hangup_call tool to end the call.
+      - When the caller indicates they are done, say a brief farewell, then use the hangup_call tool to end the call.
+      - NEVER mention tools or the word "hangup_call" to the caller.
     provider: local
     tools:
       - hangup_call

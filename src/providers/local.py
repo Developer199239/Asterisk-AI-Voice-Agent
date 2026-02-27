@@ -398,6 +398,20 @@ class LocalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
             return ""
         clean = re.sub(r"<\|\s*(?:system|assistant|user|enduser|end)\s*\|>", "", clean, flags=re.IGNORECASE)
         clean = re.sub(r"<\|[^>\n\r]*\|?>?", "", clean)
+        # Some local models will "explain" tool usage in plain language (instead of emitting a tool call).
+        # Strip these phrases so they are never spoken to the caller.
+        clean = re.sub(
+            r"\bhangup_call\b\s*tool\s*is\s*used[^.?!]{0,120}[.?!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\buse\s+the\s+hangup_call\s+tool\b[^.?!]{0,120}[.?!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
         clean = re.sub(
             r"\(?\s*hangup_call\s+tool\s+executed\s*\)?",
             "",
@@ -505,7 +519,12 @@ class LocalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
             str(tool_call.get("name") or "").strip() == "hangup_call"
             for tool_call in normalized_tool_calls
         ):
-            response_text = response_text or "Goodbye!"
+            # If the model requested a hangup but did not provide a farewell_message, never risk
+            # speaking tool-chatter. Prefer a short, safe farewell.
+            safe = response_text or ""
+            if re.search(r"\bhangup_call\b|\btool\b", safe, flags=re.IGNORECASE):
+                safe = ""
+            response_text = safe.strip() or "Goodbye."
 
         if response_text and self.on_event:
             await self.on_event(
