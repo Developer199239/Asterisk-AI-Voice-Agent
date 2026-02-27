@@ -64,7 +64,6 @@ const Wizard = () => {
     const { confirm } = useConfirmDialog();
     const [step, setStep] = useState(1);
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
     const [showAdvancedKokoro, setShowAdvancedKokoro] = useState(false);
 
     const [config, setConfig] = useState<SetupConfig>({
@@ -319,7 +318,7 @@ exten => s,1,NoOp(AI Agent Call)
                                 return;
                             }
                             if (pRes.data.error) {
-                                setError('Download failed: ' + pRes.data.error);
+                                showToast('Download failed: ' + pRes.data.error, 'error');
                                 setLocalAIStatus(prev => ({ ...prev, downloading: false, downloadProgress: null }));
                                 return;
                             }
@@ -423,14 +422,13 @@ exten => s,1,NoOp(AI Agent Call)
             await axios.post('/api/wizard/skip');
             navigate('/');
         } catch (err: any) {
-            setError('Failed to skip setup: ' + err.message);
+            showToast('Failed to skip setup: ' + err.message, 'error');
             setShowSkipConfirm(false);
         }
     };
 
     const handleTestConnection = async () => {
         setLoading(true);
-        setError(null);
         try {
             const res = await axios.post('/api/wizard/validate-connection', {
                 host: config.asterisk_host,
@@ -445,7 +443,7 @@ exten => s,1,NoOp(AI Agent Call)
             }
             showToast(res.data.message || 'Successfully connected to Asterisk!', 'success');
         } catch (err: any) {
-            setError('Connection failed: ' + (err.response?.data?.error || err.message));
+            showToast('Connection failed: ' + (err.response?.data?.error || err.message), 'error');
         } finally {
             setLoading(false);
         }
@@ -453,11 +451,10 @@ exten => s,1,NoOp(AI Agent Call)
 
     const handleTestKey = async (provider: string, key: string, agentId?: string) => {
         if (!key) {
-            setError(`${provider} API Key is required`);
+            showToast(`${provider} API Key is required`, 'error');
             return;
         }
         setLoading(true);
-        setError(null);
         try {
             const payload: any = {
                 provider: provider === 'openai_realtime' ? 'openai' : provider,
@@ -518,7 +515,6 @@ exten => s,1,NoOp(AI Agent Call)
 
     const startLocalAIServer = useCallback(async () => {
         if (startingLocalServer) return;
-        setError(null);
         setStartingLocalServer(true);
 
         localServerPollRef.current.cancelled = false;
@@ -544,6 +540,7 @@ exten => s,1,NoOp(AI Agent Call)
             }
         } catch (err: any) {
             setLocalAIStatus((prev) => ({ ...prev, serverStarted: false, serverReady: false }));
+            showToast(err?.response?.data?.message || err?.message || 'Failed to start local_ai_server', 'error');
             throw err;
         } finally {
             setStartingLocalServer(false);
@@ -594,7 +591,7 @@ exten => s,1,NoOp(AI Agent Call)
         if (!localAIStatus.modelsReady && !localAIStatus.downloadCompleted) return;
 
         startLocalAIServer().catch((err: any) => {
-            setError(err?.response?.data?.message || err?.message || 'Failed to start local_ai_server');
+            showToast(err?.response?.data?.message || err?.message || 'Failed to start local_ai_server', 'error');
         });
     }, [
         step,
@@ -613,7 +610,6 @@ exten => s,1,NoOp(AI Agent Call)
         const markDownloaded = options.markDownloaded !== false;
 
         setLocalAIStatus(prev => ({ ...prev, downloading: true, downloadOutput: [], downloadProgress: null }));
-        setError(null);
 
         try {
             const startRes = await axios.post('/api/wizard/local/download-selected-models', {
@@ -670,7 +666,7 @@ exten => s,1,NoOp(AI Agent Call)
                         return;
                     }
                     if (res.data.error) {
-                        setError('Download failed: ' + res.data.error);
+                        showToast('Download failed: ' + res.data.error, 'error');
                         setLocalAIStatus(prev => ({ ...prev, downloading: false, downloadProgress: null }));
                         return;
                     }
@@ -683,7 +679,7 @@ exten => s,1,NoOp(AI Agent Call)
             };
             pollProgress();
         } catch (err: any) {
-            setError('Failed to start download: ' + (err.response?.data?.detail || err.message));
+            showToast('Failed to start download: ' + (err.response?.data?.detail || err.message), 'error');
             setLocalAIStatus(prev => ({ ...prev, downloading: false, downloadProgress: null }));
         }
     };
@@ -730,7 +726,6 @@ exten => s,1,NoOp(AI Agent Call)
         : localHybridTtsNeedsDownload && !localHybridTtsInstalled;
 
     const handleNext = async () => {
-        setError(null);
 
         // Basic required-field validation for non-technical users
         if (step === 4) {
@@ -745,53 +740,53 @@ exten => s,1,NoOp(AI Agent Call)
             }
 
             if (missing.length) {
-                setError(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required.`);
+                showToast(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required.`, 'error');
                 return;
             }
 
             // Validate server IP format if provided
             if (config.asterisk_server_ip && !isIPAddress(config.asterisk_server_ip)) {
-                setError('Asterisk Server IP must be a valid IP address (e.g., 192.168.1.100)');
+                showToast('Asterisk Server IP must be a valid IP address (e.g., 192.168.1.100)', 'error');
                 return;
             }
 
             // Provider key requirement for selected provider
             if (config.provider === 'openai_realtime' && !config.openai_key) {
-                setError('OpenAI API key is required for OpenAI Realtime.');
+                showToast('OpenAI API key is required for OpenAI Realtime.', 'error');
                 return;
             }
             if (config.provider === 'deepgram') {
                 if (!config.deepgram_key) {
-                    setError('Deepgram API key is required for Deepgram.');
+                    showToast('Deepgram API key is required for Deepgram.', 'error');
                     return;
                 }
                 if (!config.openai_key) {
-                    setError('OpenAI API key is required for Deepgram Think stage.');
+                    showToast('OpenAI API key is required for Deepgram Think stage.', 'error');
                     return;
                 }
             }
             if (config.provider === 'google_live' && !config.google_key) {
-                setError('Google API key is required for Google Live.');
+                showToast('Google API key is required for Google Live.', 'error');
                 return;
             }
             if (config.provider === 'local_hybrid') {
                 const llmProvider = (config.hybrid_llm_provider || 'openai').toLowerCase();
                 if (llmProvider === 'openai' && !config.openai_key) {
-                    setError('OpenAI API key is required for Local Hybrid when using OpenAI.');
+                    showToast('OpenAI API key is required for Local Hybrid when using OpenAI.', 'error');
                     return;
                 }
                 if (llmProvider === 'groq' && !config.groq_key) {
-                    setError('Groq API key is required for Local Hybrid when using Groq.');
+                    showToast('Groq API key is required for Local Hybrid when using Groq.', 'error');
                     return;
                 }
             }
             if (config.provider === 'elevenlabs_agent') {
                 if (!config.elevenlabs_key) {
-                    setError('ElevenLabs API key is required.');
+                    showToast('ElevenLabs API key is required.', 'error');
                     return;
                 }
                 if (!config.elevenlabs_agent_id) {
-                    setError('ElevenLabs Agent ID is required.');
+                    showToast('ElevenLabs Agent ID is required.', 'error');
                     return;
                 }
             }
@@ -799,7 +794,7 @@ exten => s,1,NoOp(AI Agent Call)
 
         if (step === 3) {
             if (config.provider === 'local_hybrid' && localHybridMissingRequired) {
-                setError('Please download the selected local STT/TTS models before continuing.');
+                showToast('Please download the selected local STT/TTS models before continuing.', 'error');
                 return;
             }
             if (config.provider === 'local_hybrid' && localHybridAutoDownloadWarning) {
@@ -908,28 +903,28 @@ exten => s,1,NoOp(AI Agent Call)
 
                 setStep(step + 1);
             } catch (err: any) {
-                setError(err.message);
+                showToast(err.message, 'error');
             } finally {
                 setLoading(false);
             }
         } else if (step === 4) {
             // Validate ARI fields
             if (!config.asterisk_host) {
-                setError('Asterisk Host is required');
+                showToast('Asterisk Host is required', 'error');
                 return;
             }
             if (!config.asterisk_username) {
-                setError('ARI Username is required');
+                showToast('ARI Username is required', 'error');
                 return;
             }
             if (!config.asterisk_password) {
-                setError('ARI Password is required');
+                showToast('ARI Password is required', 'error');
                 return;
             }
 
             // Validate secret strength (basic check)
             if (config.asterisk_password.length < 8) {
-                setError('ARI Password must be at least 8 characters long');
+                showToast('ARI Password must be at least 8 characters long', 'error');
                 return;
             }
 
@@ -940,7 +935,7 @@ exten => s,1,NoOp(AI Agent Call)
                 try {
                     await verifyLocalAIHealth();
                 } catch (err: any) {
-                    setError(err?.message || 'Local AI Server health check failed.');
+                    showToast(err?.message || 'Local AI Server health check failed.', 'error');
                     setLoading(false);
                     return;
                 }
@@ -965,7 +960,7 @@ exten => s,1,NoOp(AI Agent Call)
 
                 setStep(5); // Go to completion step
             } catch (err: any) {
-                setError(err.response?.data?.detail || err.message);
+                showToast(err.response?.data?.detail || err.message, 'error');
             } finally {
                 setLoading(false);
             }
@@ -1041,12 +1036,6 @@ exten => s,1,NoOp(AI Agent Call)
                     )}
                 </div>
 
-                {error && (
-                    <div className="mb-6 p-4 bg-destructive/10 border border-destructive/20 rounded-md flex items-center text-destructive">
-                        <AlertCircle className="w-5 h-5 mr-2" />
-                        {error}
-                    </div>
-                )}
 
                 {step === 1 && (
                     <div className="space-y-6">
@@ -1752,7 +1741,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                         local_llm_model: pickRecommendedLlmId()
                                                     }));
                                                 } catch (err: any) {
-                                                    setError('Failed to detect system: ' + err.message);
+                                                    showToast('Failed to detect system: ' + err.message, 'error');
                                                 }
                                                 setLoading(false);
                                             }}
@@ -2451,7 +2440,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                 try {
                                                     await startLocalAIServer();
                                                 } catch (err: any) {
-                                                    setError(err?.response?.data?.message || err?.message || 'Failed to start local_ai_server');
+                                                    showToast(err?.response?.data?.message || err?.message || 'Failed to start local_ai_server', 'error');
                                                 }
                                             }}
                                             disabled={startingLocalServer}
@@ -2512,7 +2501,7 @@ exten => s,1,NoOp(AI Agent Call)
                                         <button
                                             onClick={async () => {
                                                 setStartingEngine(true);
-                                                setError(null);
+                                                // Re-validating API connection locally if needed
                                                 setEngineProgress({ steps: [], currentStep: 'Starting...' });
                                                 try {
                                                     const res = await axios.post('/api/wizard/start-engine');
@@ -2526,15 +2515,15 @@ exten => s,1,NoOp(AI Agent Call)
                                                         // Show media setup warnings if any
                                                         const mediaErrors = res.data.media_setup?.errors || [];
                                                         if (mediaErrors.length > 0) {
-                                                            setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' +
+                                                            showToast('Warning: Media path setup had issues. Audio playback may not work.\n\n' +
                                                                 mediaErrors.join('\n') +
-                                                                '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
+                                                                '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated', 'warning');
                                                         }
                                                     } else {
-                                                        setError(res.data.message + (res.data.stderr ? `\n\nDetails: ${res.data.stderr.slice(0, 300)}` : ''));
+                                                        showToast(res.data.message + (res.data.stderr ? `\n\nDetails: ${res.data.stderr.slice(0, 300)}` : ''), 'error');
                                                     }
                                                 } catch (err: any) {
-                                                    setError(err.response?.data?.detail || err.message);
+                                                    showToast(err.response?.data?.detail || err.message, 'error');
                                                 } finally {
                                                     setStartingEngine(false);
                                                 }
@@ -2701,7 +2690,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                 <button
                                     onClick={async () => {
                                         setStartingEngine(true);
-                                        setError(null);
+                                        // Proceeding with config application
                                         setEngineProgress({ steps: [], currentStep: 'Starting...' });
                                         try {
                                             const res = await axios.post('/api/wizard/start-engine');
@@ -2715,15 +2704,15 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                                 // Show media setup warnings if any
                                                 const mediaErrors = res.data.media_setup?.errors || [];
                                                 if (mediaErrors.length > 0) {
-                                                    setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' +
+                                                    showToast('Warning: Media path setup had issues. Audio playback may not work.\n\n' +
                                                         mediaErrors.join('\n') +
-                                                        '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
+                                                        '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated', 'warning');
                                                 }
                                             } else {
-                                                setError(res.data.message + (res.data.stderr ? `\n\nDetails: ${res.data.stderr.slice(0, 300)}` : ''));
+                                                showToast(res.data.message + (res.data.stderr ? `\n\nDetails: ${res.data.stderr.slice(0, 300)}` : ''), 'error');
                                             }
                                         } catch (err: any) {
-                                            setError(err.response?.data?.detail || err.message);
+                                            showToast(err.response?.data?.detail || err.message, 'error');
                                         } finally {
                                             setStartingEngine(false);
                                         }
