@@ -2215,11 +2215,13 @@ async def start_local_ai_server():
                     "success": True,
                     "message": "Local AI Server built and started.",
                     "media_setup": media_setup,
+                    "building": True,
                 }
             return {
                 "success": False,
                 "message": f"Failed to build/start local_ai_server: {(out2 or '').strip()[:800]}",
                 "media_setup": media_setup,
+                "building": True,
             }
 
         return {

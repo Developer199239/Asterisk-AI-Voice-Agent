@@ -520,7 +520,6 @@ exten => s,1,NoOp(AI Agent Call)
         localServerPollRef.current.cancelled = false;
         localServerPollRef.current.timeouts.forEach((id) => clearTimeout(id));
         localServerPollRef.current.timeouts = [];
-        localServerPollRef.current.startedAt = Date.now();
 
         setLocalAIStatus((prev) => ({ ...prev, serverStarted: true, serverReady: false, serverLogs: ['Starting container...'] }));
 
@@ -530,6 +529,9 @@ exten => s,1,NoOp(AI Agent Call)
             if (!res.data.success) {
                 throw new Error(res.data.message || 'Failed to start local_ai_server');
             }
+            // Record startedAt AFTER the blocking POST request completes
+            localServerPollRef.current.startedAt = Date.now();
+
             // AAVA-177: Backend signals when a full image build was kicked off
             isBuilding = !!res.data.building;
             if (isBuilding) {
@@ -553,7 +555,13 @@ exten => s,1,NoOp(AI Agent Call)
             if (localServerPollRef.current.cancelled) return;
             const startedAt = localServerPollRef.current.startedAt || Date.now();
             const elapsed = Date.now() - startedAt;
-            if (elapsed >= pollTimeoutMs) return;
+            if (elapsed >= pollTimeoutMs) {
+                setLocalAIStatus((prev) => ({
+                    ...prev,
+                    serverLogs: [...prev.serverLogs, "Polling timed out after maximum wait time."],
+                }));
+                return;
+            }
             try {
                 const logRes = await axios.get('/api/wizard/local/server-logs');
                 if (!localServerPollRef.current.cancelled) {
