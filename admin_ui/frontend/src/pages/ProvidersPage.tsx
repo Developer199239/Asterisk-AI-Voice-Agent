@@ -41,9 +41,22 @@ const ProvidersPage: React.FC = () => {
     const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
     const { pendingRestart, setPendingChanges, clearPendingChanges } = usePendingChanges();
     const [restartingEngine, setRestartingEngine] = useState(false);
+    const [localAIStatus, setLocalAIStatus] = useState<any>(null);
 
     useEffect(() => {
         fetchConfig();
+        // Fetch local AI status for live model info on cards
+        const fetchLocalStatus = async () => {
+            try {
+                const res = await axios.get('/api/system/health');
+                if (res.data?.local_ai_server?.status === 'connected') {
+                    setLocalAIStatus(res.data.local_ai_server.details);
+                }
+            } catch { /* ignore */ }
+        };
+        fetchLocalStatus();
+        const interval = setInterval(fetchLocalStatus, 15000);
+        return () => clearInterval(interval);
     }, []);
 
     const fetchConfig = async () => {
@@ -618,8 +631,8 @@ const ProvidersPage: React.FC = () => {
                     onClick={() => handleReloadAIEngine(false)}
                     disabled={restartingEngine}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${pendingRestart
-                            ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium'
-                            : 'bg-yellow-500/20 hover:bg-yellow-500/30'
+                        ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium'
+                        : 'bg-yellow-500/20 hover:bg-yellow-500/30'
                         } disabled:opacity-50`}
                 >
                     {restartingEngine ? (
@@ -697,50 +710,71 @@ const ProvidersPage: React.FC = () => {
                                         )}
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                                        {(providerData.model || providerData.voice || providerData.tts_model || providerData.llm_model || providerData.tts_voice_name || providerData.agent_id || providerData.voice_id || providerData.model_id) && (
-                                            <>
-                                                {providerData.model && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
-                                                        {providerData.model}
-                                                    </span>
-                                                )}
-                                                {providerData.voice && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                        {providerData.voice}
-                                                    </span>
-                                                )}
-                                                {providerData.tts_model && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                        {providerData.tts_model}
-                                                    </span>
-                                                )}
-                                                {providerData.llm_model && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                        {providerData.llm_model}
-                                                    </span>
-                                                )}
-                                                {providerData.tts_voice_name && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground">
-                                                        {providerData.tts_voice_name}
-                                                    </span>
-                                                )}
-                                                {providerData.model_id && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
-                                                        {providerData.model_id}
-                                                    </span>
-                                                )}
-                                                {providerData.voice_id && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.voice_id}>
-                                                        {providerData.voice_id.length > 15 ? `${providerData.voice_id.substring(0, 15)}...` : providerData.voice_id}
-                                                    </span>
-                                                )}
-                                                {providerData.agent_id && !providerData.agent_id.startsWith('${') && (
-                                                    <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.agent_id}>
-                                                        {providerData.agent_id.length > 20 ? `${providerData.agent_id.substring(0, 20)}...` : providerData.agent_id}
-                                                    </span>
-                                                )}
-                                            </>
-                                        )}
+                                        {(() => {
+                                            // For local provider, show live-loaded model from health endpoint
+                                            const isLocal = name === 'local' || (providerData.type === 'local') || (providerData.type === 'full' && name.includes('local'));
+                                            if (isLocal && localAIStatus) {
+                                                const llmName = localAIStatus.models?.llm?.path?.split('/').pop() || null;
+                                                const sttName = localAIStatus.stt_backend || null;
+                                                const ttsName = localAIStatus.tts_backend || null;
+                                                const parts: string[] = [];
+                                                if (sttName) parts.push(`STT: ${sttName.charAt(0).toUpperCase() + sttName.slice(1)}`);
+                                                if (llmName) parts.push(llmName);
+                                                if (ttsName) parts.push(`TTS: ${ttsName.charAt(0).toUpperCase() + ttsName.slice(1)}`);
+                                                if (parts.length > 0) {
+                                                    return parts.map((label) => (
+                                                        <span key={label} className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-foreground">
+                                                            {label}
+                                                        </span>
+                                                    ));
+                                                }
+                                            }
+                                            // Fallback: show static YAML fields for non-local providers
+                                            return (
+                                                <>
+                                                    {providerData.model && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-foreground">
+                                                            {providerData.model}
+                                                        </span>
+                                                    )}
+                                                    {providerData.voice && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-muted-foreground">
+                                                            {providerData.voice}
+                                                        </span>
+                                                    )}
+                                                    {providerData.tts_model && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-muted-foreground">
+                                                            {providerData.tts_model}
+                                                        </span>
+                                                    )}
+                                                    {providerData.llm_model && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-muted-foreground">
+                                                            {providerData.llm_model}
+                                                        </span>
+                                                    )}
+                                                    {providerData.tts_voice_name && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-muted-foreground">
+                                                            {providerData.tts_voice_name}
+                                                        </span>
+                                                    )}
+                                                    {providerData.model_id && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-foreground">
+                                                            {providerData.model_id}
+                                                        </span>
+                                                    )}
+                                                    {providerData.voice_id && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-muted-foreground" title={providerData.voice_id}>
+                                                            {providerData.voice_id.length > 15 ? `${providerData.voice_id.substring(0, 15)}...` : providerData.voice_id}
+                                                        </span>
+                                                    )}
+                                                    {providerData.agent_id && !providerData.agent_id.startsWith('${') && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors text-muted-foreground" title={providerData.agent_id}>
+                                                            {providerData.agent_id.length > 20 ? `${providerData.agent_id.substring(0, 20)}...` : providerData.agent_id}
+                                                        </span>
+                                                    )}
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
                             </div>
