@@ -309,7 +309,7 @@ export const SystemTopology = () => {
 
       <div className="p-4">
         {/* Grid Layout for proper alignment */}
-        <div className="relative grid grid-cols-[160px_48px_160px_48px_200px] gap-y-4 justify-center items-stretch py-4">
+        <div className="relative grid grid-cols-[160px_48px_160px_48px_200px] gap-y-4 justify-center items-center py-4">
 
           {/* === ROW 1: Asterisk → AI Engine → Providers === */}
 
@@ -318,8 +318,8 @@ export const SystemTopology = () => {
             onClick={() => navigate('/env')}
             title="Go to Asterisk Settings →"
             className={`relative p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${hasAsteriskChannels
-                ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
-                : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
+              ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
+              : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
               }`}>
             {hasAsteriskChannels && (
               <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
@@ -372,10 +372,10 @@ export const SystemTopology = () => {
             onClick={() => navigate('/env#ai-engine')}
             title="Go to AI Engine Settings →"
             className={`relative p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${state.aiEngineStatus === 'error'
-                ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/50'
-                : hasActiveCalls
-                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
-                  : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
+              ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/50'
+              : hasActiveCalls
+                ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
+                : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
               }`}>
             {hasActiveCalls && state.aiEngineStatus === 'connected' && (
               <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
@@ -547,8 +547,8 @@ export const SystemTopology = () => {
                       {/* Pipeline name header */}
                       <div
                         className={`relative flex items-center gap-2 p-2 rounded-t-xl border border-b-0 backdrop-blur-sm transition-all ${isActive
-                            ? 'border-green-500/50 bg-green-500/10 shadow-[0_-4px_15px_rgb(34,197,94,0.05)] ring-1 ring-green-500/30 ring-b-0'
-                            : 'border-border/60 bg-card/70'
+                          ? 'border-green-500/50 bg-green-500/10 shadow-[0_-4px_15px_rgb(34,197,94,0.05)] ring-1 ring-green-500/30 ring-b-0'
+                          : 'border-border/60 bg-card/70'
                           }`}
                       >
                         <Layers className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
@@ -601,17 +601,17 @@ export const SystemTopology = () => {
           </div>
 
           {/* Local AI Server (aligned with AI Engine above) */}
-          <div className="flex flex-col justify-center h-full">
+          <div className="flex flex-col justify-center h-full self-stretch my-auto py-10">
             <div className="flex justify-center mb-3"><div className="inline-block px-3 py-1 rounded-full bg-muted/40 border border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider text-center">Local AI Server</div></div>
             <div className="flex justify-center">
               <div
                 onClick={() => navigate('/models')}
                 title="Go to Models →"
                 className={`relative p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${state.localAIStatus === 'error'
-                    ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/50'
-                    : isLocalAIActive
-                      ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
-                      : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
+                  ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/50'
+                  : isLocalAIActive
+                    ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
+                    : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
                   }`}>
                 {isLocalAIActive && state.localAIStatus === 'connected' && (
                   <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
@@ -668,8 +668,8 @@ export const SystemTopology = () => {
             <div className="flex flex-col gap-2">
               {/* STT */}
               <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-[1px] ${activeLocalModels.stt && state.localAIModels?.stt?.loaded
-                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
-                  : state.localAIModels?.stt?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
+                ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
+                : state.localAIModels?.stt?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
                 }`}>
                 {activeLocalModels.stt && state.localAIModels?.stt?.loaded && (
                   <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
@@ -690,8 +690,8 @@ export const SystemTopology = () => {
 
               {/* LLM */}
               <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-[1px] ${activeLocalModels.llm && state.localAIModels?.llm?.loaded
-                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
-                  : state.localAIModels?.llm?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
+                ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
+                : state.localAIModels?.llm?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
                 }`}>
                 {activeLocalModels.llm && state.localAIModels?.llm?.loaded && (
                   <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
@@ -712,8 +712,8 @@ export const SystemTopology = () => {
 
               {/* TTS */}
               <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-[1px] ${activeLocalModels.tts && state.localAIModels?.tts?.loaded
-                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
-                  : state.localAIModels?.tts?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
+                ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
+                : state.localAIModels?.tts?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
                 }`}>
                 {activeLocalModels.tts && state.localAIModels?.tts?.loaded && (
                   <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
