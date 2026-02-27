@@ -3883,6 +3883,28 @@ class LocalAIServer:
         repair_attempts = 0
         structured_attempts = 0
 
+        # Fast path: hangup_call is extremely common and should never wait on an additional
+        # structured tool-decision LLM pass. If the user clearly expressed end-of-call intent,
+        # immediately emit hangup_call (with a clean farewell) and skip structured/repair work.
+        try:
+            allowed_set = {str(name).strip() for name in (allowed_tools or []) if str(name).strip()}
+        except Exception:
+            allowed_set = set()
+        should_apply_hangup_heuristic = (
+            tool_choice != "none"
+            and not tool_calls
+            and "hangup_call" in allowed_set
+            and self._text_has_end_call_intent(latest_user_text)
+        )
+        if should_apply_hangup_heuristic:
+            tool_calls = [
+                {
+                    "name": "hangup_call",
+                    "parameters": {"farewell_message": self._select_farewell_message(clean_text)},
+                }
+            ]
+            tool_path = "heuristic"
+
         should_try_structured = (
             bool(getattr(self, "tool_gateway_enabled", True))
             and policy in {"strict", "compatible"}
@@ -3918,21 +3940,6 @@ class LocalAIServer:
             if repaired_calls:
                 tool_calls = repaired_calls
                 tool_path = "repair"
-
-        should_apply_hangup_heuristic = (
-            tool_choice != "none"
-            and not tool_calls
-            and "hangup_call" in {str(name).strip() for name in allowed_tools}
-            and self._text_has_end_call_intent(latest_user_text)
-        )
-        if should_apply_hangup_heuristic:
-            tool_calls = [
-                {
-                    "name": "hangup_call",
-                    "parameters": {"farewell_message": self._select_farewell_message(clean_text)},
-                }
-            ]
-            tool_path = "heuristic"
 
         if tool_choice == "none":
             tool_calls = []
