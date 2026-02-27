@@ -2175,6 +2175,10 @@ async def start_local_ai_server():
     Also sets up media paths for audio playback to work correctly.
     Uses the updater-runner pattern (like system.py) so that compose bind mounts
     resolve correctly on the host filesystem — fixes AAVA-193/AAVA-200.
+    
+    If any INCLUDE_* flag in .env differs from the Dockerfile default (e.g.
+    INCLUDE_FASTER_WHISPER=true when the default is false), we force a rebuild
+    so the selected backend library is actually baked into the image.
     """
     from api.system import (
         _compose_files_flags_for_service,
@@ -2197,9 +2201,54 @@ async def start_local_ai_server():
             f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d {flag} {svc}"
         )
 
+    def _needs_rebuild() -> bool:
+        """Check if any INCLUDE_* flag in .env differs from the CPU defaults,
+        meaning the user selected a non-default backend that requires a rebuild."""
+        from settings import PROJECT_ROOT as _pr
+        from api.rebuild_jobs import _read_env_file, _is_truthy, BACKEND_BUILD_ARGS, _DEFAULT_INCLUDE_BASE, _DEFAULT_INCLUDE_GPU
+        env_path = os.path.join(_pr, ".env")
+        env = _read_env_file(env_path)
+        gpu_available = _is_truthy(env.get("GPU_AVAILABLE"))
+        defaults = _DEFAULT_INCLUDE_GPU if gpu_available else _DEFAULT_INCLUDE_BASE
+
+        for backend, arg_name in BACKEND_BUILD_ARGS.items():
+            raw = env.get(arg_name)
+            if raw is not None:
+                enabled_in_env = _is_truthy(raw)
+                default_val = bool(defaults.get(backend, False))
+                if enabled_in_env and not default_val:
+                    print(f"DEBUG: Rebuild needed — {arg_name}=true but default is false")
+                    return True
+        return False
+
     try:
         host_root = _project_host_root_from_admin_ui_container()
         print(f"DEBUG: Using host project root: {host_root}")
+
+        rebuild_required = _needs_rebuild()
+
+        if rebuild_required:
+            # Backend was changed — must rebuild to include new libraries
+            print("DEBUG: Non-default INCLUDE_* flags detected, forcing build+up...")
+            code, out = _run_updater_ephemeral(
+                host_root,
+                env={"PROJECT_ROOT": host_root},
+                command=_compose_up_cmd("local_ai_server", build=True),
+                timeout_sec=1800,  # 30 min for GPU builds
+            )
+            if code == 0:
+                return {
+                    "success": True,
+                    "message": "Local AI Server built and started (new backends installed).",
+                    "media_setup": media_setup,
+                    "building": True,
+                }
+            return {
+                "success": False,
+                "message": f"Failed to build/start local_ai_server: {(out or '').strip()[:800]}",
+                "media_setup": media_setup,
+                "building": True,
+            }
 
         # Fast path: start without build if the image already exists.
         code, out = _run_updater_ephemeral(
