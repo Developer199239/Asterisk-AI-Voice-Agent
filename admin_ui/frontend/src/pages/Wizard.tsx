@@ -365,22 +365,48 @@ exten => s,1,NoOp(AI Agent Call)
                 m.language === selectedLanguage || m.language === 'multi'
             );
 
-            // Auto-select first STT model for the language
+            // Auto-select first STT model for the language, but preserve the
+            // user's chosen backend.  Only reset backend if no models exist
+            // for the current backend + language combination.
             if (sttModels.length > 0 && !sttModels.find((m: any) => m.id === config.local_stt_model)) {
-                setConfig(prev => ({
-                    ...prev,
-                    local_stt_model: sttModels[0].id,
-                    local_stt_backend: sttModels[0].backend
-                }));
+                const currentBackend = (config.local_stt_backend || 'vosk').toLowerCase();
+                const sameBackendModels = sttModels.filter(
+                    (m: any) => (m.backend || '').toLowerCase() === currentBackend
+                );
+                if (sameBackendModels.length > 0) {
+                    // Keep the user's backend, just pick the first model for it
+                    setConfig(prev => ({
+                        ...prev,
+                        local_stt_model: sameBackendModels[0].id,
+                    }));
+                } else {
+                    // No models for current backend in this language; fall back
+                    setConfig(prev => ({
+                        ...prev,
+                        local_stt_model: sttModels[0].id,
+                        local_stt_backend: sttModels[0].backend
+                    }));
+                }
             }
 
-            // Auto-select first TTS model for the language
+            // Auto-select first TTS model for the language (same logic)
             if (ttsModels.length > 0 && !ttsModels.find((m: any) => m.id === config.local_tts_model)) {
-                setConfig(prev => ({
-                    ...prev,
-                    local_tts_model: ttsModels[0].id,
-                    local_tts_backend: ttsModels[0].backend
-                }));
+                const currentTtsBackend = (config.local_tts_backend || 'piper').toLowerCase();
+                const sameTtsBackendModels = ttsModels.filter(
+                    (m: any) => (m.backend || '').toLowerCase() === currentTtsBackend
+                );
+                if (sameTtsBackendModels.length > 0) {
+                    setConfig(prev => ({
+                        ...prev,
+                        local_tts_model: sameTtsBackendModels[0].id,
+                    }));
+                } else {
+                    setConfig(prev => ({
+                        ...prev,
+                        local_tts_model: ttsModels[0].id,
+                        local_tts_backend: ttsModels[0].backend
+                    }));
+                }
             }
         }
     }, [selectedLanguage, modelCatalog]);

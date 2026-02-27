@@ -2796,8 +2796,13 @@ async def save_setup_config(config: SetupConfig):
             tts_model = tts_by_id.get(config.local_tts_model or "")
             llm_model = llm_by_id.get(config.local_llm_model or "")
 
-            stt_backend = (config.local_stt_backend or (stt_model or {}).get("backend") or "").strip().lower()
-            tts_backend = (config.local_tts_backend or (tts_model or {}).get("backend") or "").strip().lower()
+            # Prefer the model's own backend from catalog (authoritative) over
+            # the frontend's local_stt_backend which can be stale due to React
+            # useEffect auto-selection resetting it after the user chose a
+            # different backend.  Fall back to frontend value only when there
+            # is no resolved catalog model.
+            stt_backend = ((stt_model or {}).get("backend") or config.local_stt_backend or "").strip().lower()
+            tts_backend = ((tts_model or {}).get("backend") or config.local_tts_backend or "").strip().lower()
 
             if stt_backend:
                 env_updates["LOCAL_STT_BACKEND"] = stt_backend
