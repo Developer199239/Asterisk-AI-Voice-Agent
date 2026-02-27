@@ -128,6 +128,7 @@ class ModelInfo(BaseModel):
     backend: Optional[str] = None  # vosk, sherpa, kroko, piper, kokoro
     size_mb: Optional[float] = None
     voice_files: Optional[Dict[str, str]] = None  # For Kokoro voices
+    chat_format: Optional[str] = None  # llama-cpp-python chat template (LLM only)
 
 
 class AvailableModels(BaseModel):
@@ -538,18 +539,22 @@ async def list_available_models():
                     voice_files=voice_files
                 ))
     
-    # Scan LLM models
+    # Scan LLM models — enrich with chat_format from catalog
+    from api.models_catalog import LLM_MODELS as _LLM_CATALOG
+    _catalog_by_path = {m.get("model_path", ""): m for m in _LLM_CATALOG if m.get("model_path")}
     llm_dir = os.path.join(models_dir, "llm")
     if os.path.exists(llm_dir):
         for item in os.listdir(llm_dir):
             if item.endswith(".gguf"):
                 item_path = os.path.join(llm_dir, item)
+                catalog_entry = _catalog_by_path.get(item, {})
                 llm_models.append(ModelInfo(
                     id=item.replace(".gguf", ""),
                     name=item.replace(".gguf", ""),
                     path=f"/app/models/llm/{item}",
                     type="llm",
-                    size_mb=get_file_size_mb(item_path)
+                    size_mb=get_file_size_mb(item_path),
+                    chat_format=catalog_entry.get("chat_format") or None
                 ))
     
     return AvailableModels(

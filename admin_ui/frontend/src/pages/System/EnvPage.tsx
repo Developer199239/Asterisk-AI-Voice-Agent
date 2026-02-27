@@ -1494,6 +1494,27 @@ const EnvPage = () => {
                                     checked={isTrue(env['LOCAL_LLM_USE_MLOCK'])}
                                     onChange={(e) => updateEnv('LOCAL_LLM_USE_MLOCK', e.target.checked ? '1' : '0')}
                                 />
+                                <div className="col-span-full">
+                                    <FormInput
+                                        label="Chat Format"
+                                        value={env['LOCAL_LLM_CHAT_FORMAT'] || ''}
+                                        onChange={(e) => updateEnv('LOCAL_LLM_CHAT_FORMAT', e.target.value)}
+                                        placeholder="e.g. chatml, llama-3, mistral-instruct, gemma"
+                                        tooltip="Chat template for create_chat_completion(). Auto-set when selecting a model. Leave empty for legacy Phi-style prompting."
+                                    />
+                                </div>
+                                <div className="col-span-full">
+                                    <label className="text-sm font-medium leading-none">Voice Preamble</label>
+                                    <textarea
+                                        className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 mt-1.5"
+                                        value={env['LOCAL_LLM_VOICE_PREAMBLE'] || ''}
+                                        onChange={(e) => updateEnv('LOCAL_LLM_VOICE_PREAMBLE', e.target.value)}
+                                        placeholder="You are a voice assistant on a phone call. Keep responses short and conversational..."
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Meta-instructions prepended to the system prompt for voice-optimized responses (no markdown, concise, natural speech).
+                                    </p>
+                                </div>
                             </div>
                         </ConfigCard>
                     </ConfigSection>

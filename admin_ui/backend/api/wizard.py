@@ -2932,6 +2932,10 @@ async def save_setup_config(config: SetupConfig):
             elif tts_model_path:
                 env_updates["LOCAL_TTS_MODEL_PATH"] = _safe_join_under_dir("/app/models/tts", tts_model_path)
 
+            # Auto-set chat_format from LLM catalog entry
+            if llm_model and llm_model.get("chat_format"):
+                env_updates["LOCAL_LLM_CHAT_FORMAT"] = llm_model["chat_format"]
+
             if config.provider == "local":
                 if config.local_llm_model == "custom_gguf_url":
                     custom_name = (config.local_llm_custom_filename or "").strip()

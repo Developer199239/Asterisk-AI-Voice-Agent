@@ -65,6 +65,13 @@ class LocalAIConfig:
     )
     llm_use_mlock: bool = False
     llm_infer_timeout_sec: float = 20.0
+    llm_chat_format: str = ""
+    llm_voice_preamble: str = (
+        "You are a voice assistant on a phone call. "
+        "Keep responses short and conversational. "
+        "Do not use markdown, bullet points, numbered lists, or any visual formatting. "
+        "Speak naturally as if talking to someone on the phone."
+    )
     tool_gateway_enabled: bool = True
 
     tts_backend: str = "piper"
@@ -170,6 +177,14 @@ class LocalAIConfig:
             llm_stop_tokens=stop_tokens,
             llm_use_mlock=_parse_bool(os.getenv("LOCAL_LLM_USE_MLOCK", "0")),
             llm_infer_timeout_sec=float(os.getenv("LOCAL_LLM_INFER_TIMEOUT_SEC", "20.0")),
+            llm_chat_format=(os.getenv("LOCAL_LLM_CHAT_FORMAT", "") or "").strip(),
+            llm_voice_preamble=os.getenv(
+                "LOCAL_LLM_VOICE_PREAMBLE",
+                "You are a voice assistant on a phone call. "
+                "Keep responses short and conversational. "
+                "Do not use markdown, bullet points, numbered lists, or any visual formatting. "
+                "Speak naturally as if talking to someone on the phone.",
+            ),
             tool_gateway_enabled=_parse_bool(os.getenv("LOCAL_TOOL_GATEWAY_ENABLED", "1"), default=True),
             tts_backend=(os.getenv("LOCAL_TTS_BACKEND", "piper") or "piper").strip().lower(),
             tts_model_path=os.getenv(

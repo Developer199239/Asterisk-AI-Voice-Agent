@@ -1032,6 +1032,8 @@ class LocalAIServer:
         self.llm_system_prompt = config.llm_system_prompt
         self.llm_stop_tokens = list(config.llm_stop_tokens)
         self.llm_use_mlock = config.llm_use_mlock
+        self.llm_chat_format = config.llm_chat_format
+        self.llm_voice_preamble = config.llm_voice_preamble
         self.tool_gateway_enabled = bool(config.tool_gateway_enabled)
 
         # TTS configuration
@@ -1552,7 +1554,7 @@ class LocalAIServer:
                     pass
 
                 try:
-                    self.llm_model = Llama(
+                    llama_kwargs = dict(
                         model_path=self.llm_model_path,
                         n_ctx=ctx,
                         n_threads=self.llm_threads,
@@ -1561,8 +1563,10 @@ class LocalAIServer:
                         verbose=False,
                         use_mmap=True,
                         use_mlock=self.llm_use_mlock,
-                        add_bos=False,
                     )
+                    if self.llm_chat_format:
+                        llama_kwargs["chat_format"] = self.llm_chat_format
+                    self.llm_model = Llama(**llama_kwargs)
                     loaded = True
                     break
                 except Exception as exc:
@@ -1594,13 +1598,14 @@ class LocalAIServer:
 
             logging.info("✅ LLM model loaded: %s (%s)", self.llm_model_path, gpu_status)
             logging.info(
-                "📊 LLM Config: ctx=%s, threads=%s, batch=%s, max_tokens=%s, temp=%s, gpu_layers=%s",
+                "📊 LLM Config: ctx=%s, threads=%s, batch=%s, max_tokens=%s, temp=%s, gpu_layers=%s, chat_format=%s",
                 self.llm_context,
                 self.llm_threads,
                 self.llm_batch,
                 self.llm_max_tokens,
                 self.llm_temperature,
                 gpu_layers,
+                self.llm_chat_format or "(legacy-phi)",
             )
 
             if can_auto_ctx:
@@ -1768,19 +1773,20 @@ class LocalAIServer:
         try:
             session = SessionContext(call_id="startup-latency")
             sample_text = "Hello, can you hear me?"
-            prompt, prompt_tokens, truncated, raw_tokens = self._prepare_llm_prompt(
+            prompt, prompt_tokens, truncated, raw_tokens, chat_messages = self._prepare_llm_prompt(
                 session, sample_text
             )
             loop = asyncio.get_running_loop()
             started = loop.time()
             logging.info(
-                "🧪 LLM WARMUP START - Running startup latency check (prompt_tokens=%s raw_tokens=%s model=%s ctx=%s batch=%s max_tokens<=%s)",
+                "🧪 LLM WARMUP START - Running startup latency check (prompt_tokens=%s raw_tokens=%s model=%s ctx=%s batch=%s max_tokens<=%s chat_format=%s)",
                 prompt_tokens,
                 raw_tokens,
                 os.path.basename(self.llm_model_path),
                 self.llm_context,
                 self.llm_batch,
                 min(self.llm_max_tokens, 32),
+                self.llm_chat_format or "(legacy-phi)",
             )
 
             # Heartbeat: log progress while the warm-up runs so users see activity
@@ -1805,16 +1811,27 @@ class LocalAIServer:
 
             hb_task = asyncio.create_task(_heartbeat())
 
-            await asyncio.to_thread(
-                self.llm_model,
-                prompt,
-                max_tokens=min(self.llm_max_tokens, 32),
-                stop=self.llm_stop_tokens,
-                echo=False,
-                temperature=self.llm_temperature,
-                top_p=self.llm_top_p,
-                repeat_penalty=self.llm_repeat_penalty,
-            )
+            if self.llm_chat_format:
+                await asyncio.to_thread(
+                    self.llm_model.create_chat_completion,
+                    messages=chat_messages,
+                    max_tokens=min(self.llm_max_tokens, 32),
+                    stop=self.llm_stop_tokens,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+            else:
+                await asyncio.to_thread(
+                    self.llm_model,
+                    prompt,
+                    max_tokens=min(self.llm_max_tokens, 32),
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
 
             latency_ms = round((loop.time() - started) * 1000.0, 2)
             done.set()
@@ -2285,8 +2302,52 @@ class LocalAIServer:
             logging.error("STT processing failed: %s", exc, exc_info=True)
             return ""
 
+    async def process_llm_chat(self, messages: List[Dict[str, str]]) -> str:
+        """Run LLM inference via create_chat_completion (chat_format mode).
+
+        Uses the model's configured chat_format to automatically apply the
+        correct chat template for the loaded model (Llama-3, Phi-3, Mistral, etc.).
+        """
+        async with self._llm_lock:
+            try:
+                if not self.llm_model:
+                    logging.warning("LLM model not loaded, using fallback")
+                    return "I'm here to help you. How can I assist you today?"
+
+                max_tokens = self.llm_max_tokens
+                loop = asyncio.get_running_loop()
+                started = loop.time()
+                output = await asyncio.to_thread(
+                    self.llm_model.create_chat_completion,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    stop=self.llm_stop_tokens,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+
+                choices = output.get("choices", []) if isinstance(output, dict) else []
+                if not choices:
+                    logging.warning("🤖 LLM RESULT (chat) - No choices returned, using fallback response")
+                    return "I'm here to help you. How can I assist you today?"
+
+                message = choices[0].get("message", {})
+                response = (message.get("content") or "").strip()
+                latency_ms = round((loop.time() - started) * 1000.0, 2)
+                logging.info(
+                    "🤖 LLM RESULT (chat) - Completed in %s ms tokens=%s",
+                    latency_ms,
+                    len(response.split()),
+                )
+                return response
+
+            except Exception as exc:
+                logging.error("LLM chat processing failed: %s", exc, exc_info=True)
+                return "I'm here to help you. How can I assist you today?"
+
     async def process_llm(self, prompt: str) -> str:
-        """Run LLM inference using the prepared Phi-style prompt.
+        """Run LLM inference using a raw prompt string (legacy Phi-style path).
         
         Uses a lock to serialize inference calls - llama-cpp is NOT thread-safe
         and will segfault if multiple threads try to use the model simultaneously.
@@ -2465,11 +2526,24 @@ class LocalAIServer:
 
         return best, True
 
+    def _get_effective_system_prompt(self) -> str:
+        """Compose the effective system prompt by prepending voice preamble (if set)."""
+        system = (self.llm_system_prompt or "").strip()
+        preamble = (self.llm_voice_preamble or "").strip()
+        if preamble and system:
+            return f"{preamble}\n\n{system}"
+        return preamble or system
+
     def _prepare_llm_prompt(
         self, session: SessionContext, new_turn: str
-    ) -> Tuple[str, int, bool, int]:
+    ) -> Tuple[str, int, bool, int, List[Dict[str, str]]]:
         """
         Append a user turn, trim dialog history to fit context, and report token counts.
+
+        Returns (prompt_text, prompt_tokens, truncated, raw_tokens, chat_messages).
+        - prompt_text: legacy Phi-style raw string (used when chat_format is empty)
+        - chat_messages: OpenAI-style messages list with system/user/assistant roles
+          (used when chat_format is set, via create_chat_completion)
 
         Important: We keep a true chat transcript (user/assistant turns) rather than
         concatenating all user turns into a single mega-message. Concatenation causes
@@ -2481,7 +2555,9 @@ class LocalAIServer:
         if new_turn:
             candidate_messages.append({"role": "user", "content": new_turn})
 
-        raw_prompt = self._build_phi_chat_prompt(candidate_messages, self.llm_system_prompt or "")
+        effective_system = self._get_effective_system_prompt()
+
+        raw_prompt = self._build_phi_chat_prompt(candidate_messages, effective_system)
         raw_prompt = self._strip_leading_bos(raw_prompt)
         raw_tokens = self._count_prompt_tokens(raw_prompt)
 
@@ -2495,14 +2571,13 @@ class LocalAIServer:
             return self._count_prompt_tokens(prompt)
 
         # Trim oldest turns until prompt fits.
-        while trimmed_messages and _count_with_system(self.llm_system_prompt or "", trimmed_messages) > max_prompt_tokens:
-            # Drop one message at a time from the front; prefer dropping in pairs if aligned.
+        while trimmed_messages and _count_with_system(effective_system, trimmed_messages) > max_prompt_tokens:
             trimmed_messages.pop(0)
             truncated = True
 
         safety_margin = 8
         max_allowed_prompt_tokens = max(self.llm_context - safety_margin, 32)
-        system_prompt = (self.llm_system_prompt or "").strip()
+        system_prompt = effective_system
 
         prompt_text = self._build_phi_chat_prompt(trimmed_messages, system_prompt)
         prompt_text = self._strip_leading_bos(prompt_text)
@@ -2536,10 +2611,16 @@ class LocalAIServer:
                 max_allowed_prompt_tokens,
             )
 
+        # Build chat_messages for create_chat_completion path.
+        chat_messages: List[Dict[str, str]] = []
+        if system_prompt:
+            chat_messages.append({"role": "system", "content": system_prompt})
+        chat_messages.extend(trimmed_messages)
+
         # Update session state. Keep llm_user_turns in sync for existing logs/metrics.
         session.llm_messages = trimmed_messages
         session.llm_user_turns = [m.get("content", "") for m in trimmed_messages if (m.get("role") or "").lower() == "user"]
-        return prompt_text, prompt_tokens, truncated, raw_tokens
+        return prompt_text, prompt_tokens, truncated, raw_tokens, chat_messages
 
     async def process_tts(self, text: str) -> bytes:
         """Process TTS with 8kHz uLaw generation - routes to appropriate backend."""
@@ -4135,17 +4216,19 @@ class LocalAIServer:
                 )
                 return
 
-        prompt_text, prompt_tokens, truncated, raw_tokens = self._prepare_llm_prompt(
+        prompt_text, prompt_tokens, truncated, raw_tokens, chat_messages = self._prepare_llm_prompt(
             session, clean_text
         )
+        use_chat_path = bool(self.llm_chat_format)
         logging.info(
-            "🧠 LLM PROMPT - call_id=%s tokens=%s raw_tokens=%s max_ctx=%s turns=%s truncated=%s preview=%s",
+            "🧠 LLM PROMPT - call_id=%s tokens=%s raw_tokens=%s max_ctx=%s turns=%s truncated=%s chat_format=%s preview=%s",
             session.call_id,
             prompt_tokens,
             raw_tokens,
             self.llm_context,
             len(session.llm_user_turns),
             truncated,
+            self.llm_chat_format or "(legacy-phi)",
             prompt_text[:120],
         )
 
@@ -4157,9 +4240,14 @@ class LocalAIServer:
                 mode,
                 prompt_text[:80],
             )
-            llm_response = await asyncio.wait_for(
-                asyncio.shield(self.process_llm(prompt_text)), timeout=infer_timeout
-            )
+            if use_chat_path:
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm_chat(chat_messages)), timeout=infer_timeout
+                )
+            else:
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm(prompt_text)), timeout=infer_timeout
+                )
         except asyncio.TimeoutError:
             logging.warning(
                 "🧠 LLM TIMEOUT - Using fallback call_id=%s mode=%s timeout=%.1fs",
@@ -4189,24 +4277,45 @@ class LocalAIServer:
                     mode,
                     clean_text[:80],
                 )
-                retry_prompt = (
-                    f"{prompt_text}\n\n"
-                    "IMPORTANT: Do NOT output any tool calls or tool tags. "
-                    "Do NOT include <tool_call>...</tool_call> or <hangup_call>...</hangup_call>. "
-                    "Respond with plain conversational text only."
-                )
-                try:
-                    llm_retry = await asyncio.wait_for(
-                        asyncio.shield(self.process_llm(retry_prompt)), timeout=infer_timeout
+                if use_chat_path:
+                    retry_messages = list(chat_messages) + [
+                        {"role": "user", "content": (
+                            "IMPORTANT: Do NOT output any tool calls or tool tags. "
+                            "Do NOT include <tool_call>...</tool_call> or <hangup_call>...</hangup_call>. "
+                            "Respond with plain conversational text only."
+                        )}
+                    ]
+                    try:
+                        llm_retry = await asyncio.wait_for(
+                            asyncio.shield(self.process_llm_chat(retry_messages)), timeout=infer_timeout
+                        )
+                        if llm_retry and isinstance(llm_retry, str):
+                            llm_response = llm_retry
+                    except Exception:
+                        logging.debug(
+                            "LLM retry without tools failed; keeping original response call_id=%s",
+                            session.call_id,
+                            exc_info=True,
+                        )
+                else:
+                    retry_prompt = (
+                        f"{prompt_text}\n\n"
+                        "IMPORTANT: Do NOT output any tool calls or tool tags. "
+                        "Do NOT include <tool_call>...</tool_call> or <hangup_call>...</hangup_call>. "
+                        "Respond with plain conversational text only."
                     )
-                    if llm_retry and isinstance(llm_retry, str):
-                        llm_response = llm_retry
-                except Exception:
-                    logging.debug(
-                        "LLM retry without tools failed; keeping original response call_id=%s",
-                        session.call_id,
-                        exc_info=True,
-                    )
+                    try:
+                        llm_retry = await asyncio.wait_for(
+                            asyncio.shield(self.process_llm(retry_prompt)), timeout=infer_timeout
+                        )
+                        if llm_retry and isinstance(llm_retry, str):
+                            llm_response = llm_retry
+                    except Exception:
+                        logging.debug(
+                            "LLM retry without tools failed; keeping original response call_id=%s",
+                            session.call_id,
+                            exc_info=True,
+                        )
 
         # Record assistant turn for subsequent prompts (avoid tool-call markup in history).
         assistant_text = self._strip_tool_calls_for_tts(llm_response or "").strip()
@@ -4519,15 +4628,26 @@ class LocalAIServer:
         )
 
         infer_timeout = self.config.llm_infer_timeout_sec
+        use_chat_path = bool(self.llm_chat_format)
         try:
             logging.info(
                 "🧠 LLM START - Generating response call_id=%s mode=%s",
                 session.call_id,
                 mode or "llm",
             )
-            llm_response = await asyncio.wait_for(
-                asyncio.shield(self.process_llm(text)), timeout=infer_timeout
-            )
+            if use_chat_path:
+                effective_system = self._get_effective_system_prompt()
+                chat_msgs: List[Dict[str, str]] = []
+                if effective_system:
+                    chat_msgs.append({"role": "system", "content": effective_system})
+                chat_msgs.append({"role": "user", "content": text})
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm_chat(chat_msgs)), timeout=infer_timeout
+                )
+            else:
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm(text)), timeout=infer_timeout
+                )
         except asyncio.TimeoutError:
             logging.warning(
                 "🧠 LLM TIMEOUT - Using fallback call_id=%s mode=%s timeout=%.1fs",

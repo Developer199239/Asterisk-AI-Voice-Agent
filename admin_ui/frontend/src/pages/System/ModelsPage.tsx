@@ -27,6 +27,7 @@ interface ModelInfo {
     recommended_ram_gb?: number;
     tool_calling?: 'recommended' | 'experimental' | 'none' | string;
     tool_calling_note?: string;
+    chat_format?: string;
 }
 
 interface InstalledModel {
@@ -717,6 +718,23 @@ const ModelsPage = () => {
             // Apply LLM changes (model and/or tuning) in one request to avoid multiple reloads.
             if (remainingChanges.llm || hasLlmTuningChanges) {
                 updateApplyProgress('switching', 82, 'Applying LLM changes...', 'Sending LLM switch request');
+
+                // Auto-set chat_format from catalog when switching LLM model
+                if (remainingChanges.llm && availableModels?.llm) {
+                    const matchedModel = (availableModels.llm as any[]).find(
+                        (m: any) => m.model_path === remainingChanges.llm || m.path === remainingChanges.llm || m.id === remainingChanges.llm
+                    );
+                    const catalogChatFormat = matchedModel?.chat_format || '';
+                    try {
+                        const currentEnv = (await axios.get('/api/config/env')).data || {};
+                        currentEnv['LOCAL_LLM_CHAT_FORMAT'] = catalogChatFormat;
+                        await axios.post('/api/config/env', currentEnv);
+                        updateApplyProgress('switching', 84, 'Applying LLM changes...', `Chat format auto-set to: ${catalogChatFormat || '(legacy)'}`);
+                    } catch (envErr) {
+                        console.warn('Failed to auto-set LOCAL_LLM_CHAT_FORMAT', envErr);
+                    }
+                }
+
                 await axios.post('/api/local-ai/switch', {
                     model_type: 'llm',
                     model_path: remainingChanges.llm || undefined,
