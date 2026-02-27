@@ -928,7 +928,7 @@ const ModelsPage = () => {
 
                                 {/* LLM Model */}
                                 <div className="p-4 rounded-lg border border-border bg-muted/30">
-                                    <div className="flex items-center gap-2 mb-2">
+                                    <div className="flex items-center gap-2 mb-3">
                                         <Brain className="w-4 h-4 text-purple-500" />
                                         <span className="text-sm font-medium">LLM</span>
                                         <span className={`ml-auto px-2 py-0.5 rounded text-xs ${activeModels.llm.loaded ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'
@@ -948,19 +948,18 @@ const ModelsPage = () => {
                                             <option key={m.path} value={m.path}>{m.name}</option>
                                         ))}
                                     </select>
-                                    <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.llm.display || activeModels.llm.path}>
-                                        {activeModels.llm.display || getModelName(activeModels.llm.path)}
-                                    </div>
-                                    <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-                                        <label className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-2 py-1">
-                                            <span className="text-muted-foreground">Context (n_ctx)</span>
+
+                                    {/* Tuning Controls */}
+                                    <div className="mt-3 flex gap-2">
+                                        <div className="flex-1 min-w-0">
+                                            <label className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Context</label>
                                             <select
                                                 value={pendingLlmConfig.context ?? activeModels.llm.config?.context ?? ''}
                                                 onChange={(e) => {
                                                     const v = e.target.value ? parseInt(e.target.value, 10) : undefined;
                                                     setPendingLlmConfig(prev => ({ ...prev, context: v }));
                                                 }}
-                                                className="px-2 py-1 rounded-md border border-border bg-background"
+                                                className="w-full px-2 py-1.5 text-xs rounded-md border border-border bg-background"
                                                 disabled={restarting}
                                                 title="Change requires LLM reload. Leave blank to keep current value."
                                             >
@@ -969,9 +968,9 @@ const ModelsPage = () => {
                                                     <option key={v} value={v}>{v}</option>
                                                 ))}
                                             </select>
-                                        </label>
-                                        <label className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-2 py-1">
-                                            <span className="text-muted-foreground">Max tokens</span>
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <label className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Max Tokens</label>
                                             <input
                                                 type="number"
                                                 min={1}
@@ -980,35 +979,39 @@ const ModelsPage = () => {
                                                     const v = e.target.value ? parseInt(e.target.value, 10) : undefined;
                                                     setPendingLlmConfig(prev => ({ ...prev, max_tokens: v }));
                                                 }}
-                                                className="w-24 px-2 py-1 rounded-md border border-border bg-background"
+                                                className="w-full px-2 py-1.5 text-xs rounded-md border border-border bg-background"
                                                 disabled={restarting}
                                                 title="Upper bound for each local LLM response."
                                             />
-                                        </label>
+                                        </div>
                                     </div>
+
+                                    {/* Runtime Stats */}
                                     {(activeModels.llm.prompt_fit?.system_prompt_tokens != null || activeModels.llm.prompt_fit?.safe_max_tokens != null) && (
-                                        <div className="mt-2 rounded-md border border-border bg-muted/20 p-2 text-xs space-y-1">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="text-muted-foreground">System prompt tokens</span>
-                                                <span className="font-mono">{activeModels.llm.prompt_fit?.system_prompt_tokens ?? '—'}</span>
-                                            </div>
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="text-muted-foreground">Safe max tokens</span>
-                                                <span className="font-mono">{activeModels.llm.prompt_fit?.safe_max_tokens ?? '—'}</span>
-                                            </div>
-                                            {activeModels.llm.auto_context?.enabled && (
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <span className="text-muted-foreground">Auto ctx source</span>
-                                                    <span className="font-mono">{activeModels.llm.auto_context?.source || 'auto'}</span>
+                                        <div className="mt-3 rounded-md border border-border bg-muted/20 px-3 py-2">
+                                            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                                                <div>
+                                                    <span className="text-muted-foreground">Prompt tokens</span>
+                                                    <span className="ml-1 font-mono font-medium">{activeModels.llm.prompt_fit?.system_prompt_tokens ?? '—'}</span>
                                                 </div>
-                                            )}
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="text-muted-foreground">Tool capability</span>
-                                                <span className="font-mono">{activeModels.llm.tool_capability?.level || 'unknown'}</span>
-                                            </div>
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="text-muted-foreground">Tool policy</span>
-                                                <span className="font-mono">{resolveToolPolicy()}</span>
+                                                <div>
+                                                    <span className="text-muted-foreground">Safe max</span>
+                                                    <span className="ml-1 font-mono font-medium">{activeModels.llm.prompt_fit?.safe_max_tokens ?? '—'}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-muted-foreground">Tools</span>
+                                                    <span className="ml-1 font-mono font-medium">{activeModels.llm.tool_capability?.level || 'unknown'}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-muted-foreground">Policy</span>
+                                                    <span className="ml-1 font-mono font-medium">{resolveToolPolicy()}</span>
+                                                </div>
+                                                {activeModels.llm.auto_context?.enabled && (
+                                                    <div className="col-span-2">
+                                                        <span className="text-muted-foreground">Auto ctx</span>
+                                                        <span className="ml-1 font-mono font-medium">{activeModels.llm.auto_context?.source || 'auto'}</span>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )}
