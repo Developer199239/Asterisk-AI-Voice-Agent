@@ -1504,6 +1504,11 @@ class LocalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
                             is_final = data.get("is_final", True)
                             
                             if text and is_final and self.on_event:
+                                # Defense-in-depth: reject punctuation-only transcripts (e.g. "?", ".")
+                                # that Kroko/other STT backends emit from silence/noise
+                                if not any(ch.isalnum() for ch in text):
+                                    logger.info("Suppressed non-linguistic stt_result", call_id=call_id, text=text[:20])
+                                    continue
                                 if call_id:
                                     self._last_user_transcript_by_call[call_id] = text
                                 await self.on_event({

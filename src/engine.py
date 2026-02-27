@@ -6994,22 +6994,6 @@ class Engine:
             except Exception:
                 continuous_input = False
 
-            if not continuous_input and caller_channel_id not in getattr(self, '_ci_debug_logged', set()):
-                if not hasattr(self, '_ci_debug_logged'):
-                    self._ci_debug_logged = set()
-                self._ci_debug_logged.add(caller_channel_id)
-                logger.warning(
-                    "continuous_input=False debug",
-                    call_id=caller_channel_id,
-                    provider_name=provider_name,
-                    has_call_provider=provider is not None,
-                    has_global_provider=self.providers.get(provider_name) is not None,
-                    caps_source_type=type(provider_caps_source).__name__ if provider_caps_source else None,
-                    has_get_caps=hasattr(provider_caps_source, 'get_capabilities') if provider_caps_source else False,
-                    caps=repr(capabilities) if capabilities else None,
-                    pcfg_type=type(getattr(provider_caps_source, 'config', None)).__name__ if provider_caps_source else None,
-                )
-
             # For continuous-input providers, forward audio (but respect gating during TTS playback)
             # OpenAI Realtime has server-side echo cancellation, but we still need to gate during TTS
             # to prevent the provider from hearing its own audio as "user speech"

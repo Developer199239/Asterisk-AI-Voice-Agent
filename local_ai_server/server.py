@@ -3991,6 +3991,50 @@ class LocalAIServer:
         idle_promoted: bool = False,
     ) -> None:
         clean_text = (text or "").strip()
+        # DEBUG: trace non-linguistic check
+        _dbg_has_alnum = any(ch.isalnum() for ch in clean_text) if clean_text else False
+        if clean_text and not _dbg_has_alnum:
+            logging.warning(
+                "📝 NON-LINGUISTIC TRACE - call_id=%s mode=%s text=%r len=%d idle=%s",
+                session.call_id, mode, clean_text[:20], len(clean_text), idle_promoted,
+            )
+        # Guardrail: some STT backends (notably telephony-optimized streaming models) may emit
+        # punctuation-only "finals" like "?" or "." during silence/noise. Treat these as empty
+        # to avoid triggering downstream LLM/TTS loops.
+        try:
+            has_alnum = any(ch.isalnum() for ch in clean_text)
+        except Exception:
+            has_alnum = True
+        if clean_text and not has_alnum:
+            reason = "idle-timeout" if idle_promoted else "recognizer-final"
+            if mode == "stt":
+                # For STT mode, emit an empty final so the engine adapter can complete cleanly.
+                logging.info(
+                    "📝 STT FINAL - Emitting empty transcript (non-linguistic) call_id=%s mode=%s reason=%s",
+                    session.call_id,
+                    mode,
+                    reason,
+                )
+                if await self._emit_stt_result(
+                    websocket,
+                    "",
+                    session,
+                    request_id,
+                    source_mode=mode,
+                    is_final=True,
+                    is_partial=False,
+                    confidence=confidence,
+                ):
+                    self._reset_stt_session(session, "")
+                return
+            logging.info(
+                "📝 STT FINAL SUPPRESSED - Non-linguistic transcript call_id=%s mode=%s reason=%s text=%s",
+                session.call_id,
+                mode,
+                reason,
+                clean_text[:16],
+            )
+            return
         normalized_text = _normalize_text(clean_text)
         last_final_text = session.last_final_text
         last_final_norm = session.last_final_norm
