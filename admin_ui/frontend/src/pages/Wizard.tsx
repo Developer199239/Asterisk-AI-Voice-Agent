@@ -1188,18 +1188,17 @@ exten => s,1,NoOp(AI Agent Call)
                                                         });
                                                     }}
                                                 >
-                                                    <option value="vosk" disabled={backendCaps?.stt?.vosk ? !backendCaps.stt.vosk.available : false}>
+                                                    <option value="vosk">
                                                         Vosk (Local){backendCaps?.stt?.vosk && !backendCaps.stt.vosk.available ? ' (unavailable)' : ''}
                                                     </option>
                                                     <option value="kroko">
                                                         Kroko (Local/Cloud)
                                                     </option>
-                                                    <option value="sherpa" disabled={backendCaps?.stt?.sherpa ? !backendCaps.stt.sherpa.available : false}>
+                                                    <option value="sherpa">
                                                         Sherpa (Local){backendCaps?.stt?.sherpa && !backendCaps.stt.sherpa.available ? ' (requires rebuild)' : ''}
                                                     </option>
                                                     <option
                                                         value="faster_whisper"
-                                                        disabled={backendCaps?.stt?.faster_whisper ? !backendCaps.stt.faster_whisper.available : false}
                                                     >
                                                         Faster-Whisper (Local){backendCaps?.stt?.faster_whisper && !backendCaps.stt.faster_whisper.available ? ' (requires rebuild)' : ''}
                                                     </option>
@@ -1211,7 +1210,6 @@ exten => s,1,NoOp(AI Agent Call)
                                                         <input
                                                             type="checkbox"
                                                             checked={config.kroko_embedded}
-                                                            disabled={backendCaps?.stt?.kroko_embedded ? !backendCaps.stt.kroko_embedded.available : false}
                                                             onChange={e => setConfig({ ...config, kroko_embedded: e.target.checked })}
                                                             className="rounded border-gray-300"
                                                         />
@@ -1877,7 +1875,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                             (model.backend === 'whisper_cpp' && backendCaps && !backendCaps.stt?.whisper_cpp?.available) ||
                                                             (model.backend === 'kroko' && model.embedded && backendCaps && !backendCaps.stt?.kroko_embedded?.available);
                                                         return (
-                                                            <option key={model.id} value={model.id} disabled={!!needsRebuild}>
+                                                            <option key={model.id} value={model.id}>
                                                                 {model.name} ({model.backend}) - {model.size_display}{needsRebuild ? ' (requires rebuild)' : ''}
                                                             </option>
                                                         );
@@ -1940,7 +1938,7 @@ exten => s,1,NoOp(AI Agent Call)
                                                         const needsRebuild =
                                                             (model.backend === 'melotts' && backendCaps && !backendCaps.tts?.melotts?.available);
                                                         return (
-                                                            <option key={model.id} value={model.id} disabled={!!needsRebuild}>
+                                                            <option key={model.id} value={model.id}>
                                                                 {model.name} ({model.backend}) - {model.size_display}{needsRebuild ? ' (requires rebuild)' : ''}
                                                             </option>
                                                         );
