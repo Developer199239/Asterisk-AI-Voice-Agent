@@ -1234,9 +1234,22 @@ exten => s,1,NoOp(AI Agent Call)
                                                     <option
                                                         value="faster_whisper"
                                                     >
-                                                        Faster-Whisper (Local){backendCaps?.stt?.faster_whisper && !backendCaps.stt.faster_whisper.available ? ' (requires rebuild)' : ''}
+                                                        Faster-Whisper{!localAIStatus.gpuDetected ? ' ⚠ GPU recommended' : ''}{backendCaps?.stt?.faster_whisper && !backendCaps.stt.faster_whisper.available ? ' (requires rebuild)' : ''}
                                                     </option>
                                                 </select>
+                                                {/* Rebuild / GPU warning for non-default STT backends */}
+                                                {['faster_whisper', 'whisper_cpp'].includes(config.local_stt_backend) && (
+                                                    <div className="mt-1.5 text-xs space-y-1">
+                                                        {!localAIStatus.gpuDetected && (
+                                                            <p className="text-amber-600 dark:text-amber-400">
+                                                                ⚠ {config.local_stt_backend === 'faster_whisper' ? 'Faster-Whisper' : 'Whisper.cpp'} works on CPU but is significantly slower. GPU is recommended for real-time transcription.
+                                                            </p>
+                                                        )}
+                                                        <p className="text-muted-foreground">
+                                                            ℹ This backend requires a Docker rebuild on first use (~3-5 min). The wizard will handle this automatically.
+                                                        </p>
+                                                    </div>
+                                                )}
                                             </div>
                                             {config.local_stt_backend === 'kroko' && (
                                                 <div className="flex items-center pt-6">
@@ -2085,14 +2098,30 @@ exten => s,1,NoOp(AI Agent Call)
                                                 value={config.local_llm_model}
                                                 onChange={e => setConfig({ ...config, local_llm_model: e.target.value })}
                                             >
-                                                {(modelCatalog?.llm || []).filter((m: any) => !m.requires_api_key).map((model: any) => (
-                                                    <option key={model.id} value={model.id}>
-                                                        {model.name}
-                                                        {model.system_recommended ? ' • Recommended' : ''}
-                                                        {model.size_display ? ` • ${model.size_display}` : ''}
-                                                        {model.description ? ` • ${model.description}` : ''}
-                                                    </option>
-                                                ))}
+                                                {(() => {
+                                                    const systemRam = localAIStatus.ramGb || 0;
+                                                    const localModels = (modelCatalog?.llm || []).filter((m: any) => !m.requires_api_key);
+                                                    // Sort: models within RAM budget first, then over-budget models
+                                                    const sorted = [...localModels].sort((a: any, b: any) => {
+                                                        const aFits = !a.recommended_ram_gb || a.recommended_ram_gb <= systemRam;
+                                                        const bFits = !b.recommended_ram_gb || b.recommended_ram_gb <= systemRam;
+                                                        if (aFits && !bFits) return -1;
+                                                        if (!aFits && bFits) return 1;
+                                                        return 0;
+                                                    });
+                                                    return sorted.map((model: any) => {
+                                                        const exceedsRam = systemRam > 0 && model.recommended_ram_gb && model.recommended_ram_gb > systemRam;
+                                                        return (
+                                                            <option key={model.id} value={model.id}>
+                                                                {model.name}
+                                                                {model.system_recommended ? ' • Recommended' : ''}
+                                                                {model.size_display ? ` • ${model.size_display}` : ''}
+                                                                {exceedsRam ? ` • ⚠ needs ${model.recommended_ram_gb}GB RAM` : ''}
+                                                                {!exceedsRam && model.description ? ` • ${model.description}` : ''}
+                                                            </option>
+                                                        );
+                                                    });
+                                                })()}
                                                 <option value="custom_gguf_url">Custom GGUF (URL)</option>
                                             </select>
                                             {config.local_llm_model === 'custom_gguf_url' && (

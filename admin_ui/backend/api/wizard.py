@@ -1198,24 +1198,24 @@ async def detect_local_tier():
                 "download_size": "~1.5 GB"
             },
             "MEDIUM_CPU": {
-                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Piper Medium",
-                "performance": "20-30 seconds per turn",
+                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Kokoro",
+                "performance": "15-25 seconds per turn",
                 "download_size": "~3.5 GB"
             },
             "HEAVY_CPU": {
-                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Piper Medium",
-                "performance": "25-35 seconds per turn",
-                "download_size": "~3.5 GB"
+                "models": "Qwen 2.5-3B + Vosk 0.22 + Kokoro",
+                "performance": "12-20 seconds per turn",
+                "download_size": "~4.5 GB"
             },
             "MEDIUM_GPU": {
-                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Piper Medium (GPU)",
-                "performance": "8-12 seconds per turn",
-                "download_size": "~3.5 GB"
+                "models": "Qwen 2.5-3B + Faster-Whisper Base + Kokoro (GPU)",
+                "performance": "3-6 seconds per turn",
+                "download_size": "~4.5 GB"
             },
             "HEAVY_GPU": {
-                "models": "Llama-2 13B + Vosk 0.22 + Piper High (GPU)",
-                "performance": "10-15 seconds per turn",
-                "download_size": "~10 GB"
+                "models": "Qwen 2.5-7B + Faster-Whisper Base + Kokoro (GPU)",
+                "performance": "4-8 seconds per turn",
+                "download_size": "~7 GB"
             }
         }
         
@@ -1928,12 +1928,34 @@ async def download_selected_models(selection: ModelSelection):
             env_updates = []
             
             # Persist backend selections (even if no download needed)
-            env_updates.append(f"LOCAL_STT_BACKEND={stt_model.get('backend') or selection.stt}")
-            env_updates.append(f"LOCAL_TTS_BACKEND={tts_model.get('backend') or selection.tts}")
+            resolved_stt_backend = (stt_model.get("backend") or selection.stt or "").lower()
+            resolved_tts_backend = (tts_model.get("backend") or selection.tts or "").lower()
+            env_updates.append(f"LOCAL_STT_BACKEND={resolved_stt_backend}")
+            env_updates.append(f"LOCAL_TTS_BACKEND={resolved_tts_backend}")
             if skip_llm_download:
                 env_updates.append("LOCAL_AI_MODE=minimal")
             else:
                 env_updates.append("LOCAL_AI_MODE=full")
+
+            # ── INCLUDE_* build-arg flags ──────────────────────────────────
+            # Set the corresponding Docker build-arg flag so that a
+            # subsequent `docker compose up --build` will include the
+            # selected backend's Python package in the image.
+            _BACKEND_TO_INCLUDE = {
+                "faster_whisper": "INCLUDE_FASTER_WHISPER",
+                "whisper_cpp":    "INCLUDE_WHISPER_CPP",
+                "melotts":        "INCLUDE_MELOTTS",
+                "sherpa":         "INCLUDE_SHERPA",
+                "vosk":           "INCLUDE_VOSK",
+                "piper":          "INCLUDE_PIPER",
+                "kokoro":         "INCLUDE_KOKORO",
+            }
+            for backend_key, include_flag in _BACKEND_TO_INCLUDE.items():
+                if resolved_stt_backend == backend_key or resolved_tts_backend == backend_key:
+                    env_updates.append(f"{include_flag}=true")
+            # Kroko embedded requires its own build flag
+            if resolved_stt_backend == "kroko" and selection.kroko_embedded:
+                env_updates.append("INCLUDE_KROKO_EMBEDDED=true")
 
             # Kroko toggle (embedded vs cloud)
             if (stt_model.get("backend") or selection.stt) == "kroko":
@@ -2809,6 +2831,23 @@ async def save_setup_config(config: SetupConfig):
             if tts_backend:
                 env_updates["LOCAL_TTS_BACKEND"] = tts_backend
             env_updates["LOCAL_AI_MODE"] = "minimal" if config.provider == "local_hybrid" else "full"
+
+            # Set INCLUDE_* build-arg flags so Docker builds include the
+            # selected backend's library (mirrors download-selected-models).
+            _BACKEND_INCLUDE_MAP = {
+                "faster_whisper": "INCLUDE_FASTER_WHISPER",
+                "whisper_cpp": "INCLUDE_WHISPER_CPP",
+                "melotts": "INCLUDE_MELOTTS",
+                "sherpa": "INCLUDE_SHERPA",
+                "vosk": "INCLUDE_VOSK",
+                "piper": "INCLUDE_PIPER",
+                "kokoro": "INCLUDE_KOKORO",
+            }
+            for bk, inc_flag in _BACKEND_INCLUDE_MAP.items():
+                if stt_backend == bk or tts_backend == bk:
+                    env_updates[inc_flag] = "true"
+            if stt_backend == "kroko" and config.kroko_embedded:
+                env_updates["INCLUDE_KROKO_EMBEDDED"] = "true"
 
             stt_model_path = (stt_model or {}).get("model_path")
             if stt_backend == "sherpa" and stt_model_path:
