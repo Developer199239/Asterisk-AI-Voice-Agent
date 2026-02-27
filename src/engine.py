@@ -488,6 +488,8 @@ class Engine:
         # Pipeline runtime structures (Milestone 7): per-call audio queues and runner tasks
         self._pipeline_queues: Dict[str, asyncio.Queue] = {}
         self._pipeline_tasks: Dict[str, asyncio.Task] = {}
+        # TalkDetect-based barge-in confirmation tasks (per-call)
+        self._talkdetect_barge_tasks: Dict[str, asyncio.Task] = {}
         # Per-call background tasks (fire-and-forget) that should be cancelled on cleanup
         self._call_bg_tasks: Dict[str, Set[asyncio.Task]] = {}
         # Track calls where a pipeline was explicitly requested via AI_PROVIDER
@@ -4360,10 +4362,87 @@ class Engine:
             except Exception:
                 pass
 
-            await self._apply_barge_in_action(call_id, source="talkdetect", reason="ChannelTalkingStarted")
-            logger.info("🎧 BARGE-IN (TalkDetect) triggered", call_id=call_id, channel_id=channel_id)
+            # Confirm that talking persists for at least min_ms to avoid over-sensitive triggers
+            # on brief noise spikes or echo.
+            try:
+                td_state = session.vad_state.setdefault("talkdetect_barge", {})
+                td_state["talking"] = True
+                td_state["start_ts"] = now
+                session.vad_state["talkdetect_barge"] = td_state
+                await self._save_session(session)
+            except Exception:
+                pass
+
+            try:
+                existing = self._talkdetect_barge_tasks.pop(call_id, None)
+                if existing:
+                    existing.cancel()
+            except Exception:
+                pass
+
+            provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+            min_ms = self._resolve_barge_in_min_ms(
+                session,
+                cfg,
+                pipeline_mode=bool(self._pipeline_forced.get(call_id)),
+                provider_name=provider_name,
+            )
+            task = asyncio.create_task(self._confirm_talkdetect_barge_in(call_id, channel_id=channel_id, min_ms=min_ms))
+            self._talkdetect_barge_tasks[call_id] = task
+            try:
+                task.add_done_callback(self._log_task_exception)
+            except Exception:
+                pass
         except Exception:
             logger.debug("ChannelTalkingStarted handler failed", ari_event=event, exc_info=True)
+
+    async def _confirm_talkdetect_barge_in(self, call_id: str, *, channel_id: Optional[str], min_ms: int) -> None:
+        """Confirm TALK_DETECT 'talking' persists for min_ms, then apply barge-in."""
+        try:
+            await asyncio.sleep(max(0.0, float(min_ms or 0) / 1000.0))
+
+            session = await self.session_store.get_by_call_id(call_id)
+            if not session:
+                return
+
+            # Only proceed if the call is still considered "talking" by the finished handler.
+            try:
+                td_state = (getattr(session, "vad_state", None) or {}).get("talkdetect_barge", {}) or {}
+                if not bool(td_state.get("talking", False)):
+                    return
+            except Exception:
+                return
+
+            # Only act when local playback/gating is active; otherwise this is just "caller is talking".
+            if bool(getattr(session, "audio_capture_enabled", True)) and not bool(getattr(session, "tts_playing", False)):
+                return
+
+            cfg = getattr(self.config, "barge_in", None)
+            if not cfg or not getattr(cfg, "enabled", True):
+                return
+
+            now = time.time()
+            cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
+            last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
+            if last_barge_in_ts and (now - last_barge_in_ts) * 1000 < cooldown_ms:
+                return
+
+            # Clear talking flag to avoid repeated triggers while TALK_DETECT remains active.
+            try:
+                td_state = (getattr(session, "vad_state", None) or {}).get("talkdetect_barge", {}) or {}
+                td_state["talking"] = False
+                session.vad_state["talkdetect_barge"] = td_state
+                await self._save_session(session)
+            except Exception:
+                pass
+
+            await self._apply_barge_in_action(call_id, source="talkdetect", reason=f"ChannelTalkingStarted>=min_ms:{min_ms}")
+            logger.info("🎧 BARGE-IN (TalkDetect) triggered", call_id=call_id, channel_id=channel_id, min_ms=min_ms)
+        finally:
+            try:
+                self._talkdetect_barge_tasks.pop(call_id, None)
+            except Exception:
+                pass
 
     async def _handle_channel_talking_finished(self, event: dict) -> None:
         """Informational handler for talk detection end events (pipelines)."""
@@ -4382,6 +4461,19 @@ class Engine:
                     return
             except Exception:
                 return
+            try:
+                td_state = (getattr(session, "vad_state", None) or {}).get("talkdetect_barge", {}) or {}
+                td_state["talking"] = False
+                session.vad_state["talkdetect_barge"] = td_state
+                await self._save_session(session)
+            except Exception:
+                pass
+            try:
+                task = self._talkdetect_barge_tasks.pop(call_id, None)
+                if task:
+                    task.cancel()
+            except Exception:
+                pass
             logger.debug("TalkDetect finished", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("ChannelTalkingFinished handler failed", ari_event=event, exc_info=True)
@@ -4605,6 +4697,14 @@ class Engine:
                 self._pipeline_forced.pop(call_id, None)
             except Exception:
                 logger.debug("Pipeline cleanup failed", call_id=call_id, exc_info=True)
+
+            # Cancel any pending talkdetect confirmation task (barge-in)
+            try:
+                task = self._talkdetect_barge_tasks.pop(call_id, None)
+                if task:
+                    task.cancel()
+            except Exception:
+                pass
 
             # Clear per-call resample states to prevent unbounded memory growth
             self._resample_state_provider_in.pop(call_id, None)
