@@ -14,12 +14,12 @@ from structlog import get_logger
 import audioop
 from ..config import LocalProviderConfig
 from ..audio.resampler import resample_audio
-from .base import AIProviderInterface
+from .base import AIProviderInterface, ProviderCapabilities, ProviderCapabilitiesMixin
 from ..tools.parser import parse_response_with_tools, validate_tool_call, has_tool_intent_markers
 
 logger = get_logger(__name__)
 
-class LocalProvider(AIProviderInterface):
+class LocalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
     """
     AI Provider that connects to the external Local AI Server via WebSockets.
     """
@@ -675,6 +675,16 @@ class LocalProvider(AIProviderInterface):
     def supported_codecs(self) -> List[str]:
         return ["ulaw"]
 
+    def get_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            input_encodings=["pcm16"],
+            input_sample_rates_hz=[16000],
+            output_encodings=["ulaw"],
+            output_sample_rates_hz=[8000],
+            is_full_agent=True,
+            requires_continuous_audio=True,
+        )
+
     def is_ready(self) -> bool:
         """
         Readiness for the *provider config* (mirrors other providers):
@@ -1094,7 +1104,7 @@ class LocalProvider(AIProviderInterface):
         except Exception:
             logger.debug("Failed applying Local AI Server system prompt", call_id=call_id, exc_info=True)
 
-    async def send_audio(self, audio_chunk: bytes):
+    async def send_audio(self, audio_chunk: bytes, sample_rate: int = 0, encoding: str = ""):
         """Send audio chunk to Local AI Server for STT processing."""
         try:
             logger.info("🎵 PROVIDER INPUT - Sending to Local AI Server",

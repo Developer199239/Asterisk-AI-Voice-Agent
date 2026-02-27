@@ -7959,6 +7959,26 @@ class Engine:
                         if call_id not in self._segment_tts_active:
                             await self.streaming_playback_manager.start_segment_gating(call_id)
                             self._segment_tts_active.add(call_id)
+                            # Safety net: verify gating was actually set; if not, apply directly
+                            try:
+                                _seg_session = await self.session_store.get_by_call_id(call_id)
+                                if _seg_session and _seg_session.audio_capture_enabled:
+                                    _seg_token = None
+                                    try:
+                                        _seg_info = self.streaming_playback_manager.active_streams.get(call_id)
+                                        if _seg_info:
+                                            _seg_token = str(_seg_info.get('stream_id') or '')
+                                    except Exception:
+                                        pass
+                                    if not _seg_token:
+                                        _seg_token = f"tts_segment:{call_id}"
+                                    if self.conversation_coordinator:
+                                        await self.conversation_coordinator.on_tts_start(call_id, _seg_token)
+                                    else:
+                                        await self.session_store.set_gating_token(call_id, _seg_token)
+                                    logger.info("Segment gating fallback applied", call_id=call_id, token=_seg_token)
+                            except Exception:
+                                logger.debug("Segment gating fallback failed", call_id=call_id, exc_info=True)
                 except Exception:
                     logger.debug("Failed to start segment gating", call_id=call_id, exc_info=True)
                 if coalesce_enabled and q is None and not isinstance(out_chunk, list):
@@ -8203,22 +8223,20 @@ class Engine:
                         await self.streaming_playback_manager.end_segment_gating(call_id)
                     except Exception:
                         logger.debug("Failed to end segment gating", call_id=call_id, exc_info=True)
+                    # Also clear fallback gating token if direct gating was applied
+                    try:
+                        _fallback_token = f"tts_segment:{call_id}"
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.on_tts_end(call_id, _fallback_token, reason="segment-end-fallback")
+                        else:
+                            await self.session_store.clear_gating_token(call_id, _fallback_token)
+                    except Exception:
+                        pass
                     # CRITICAL FIX #1: Do NOT discard call_id for providers with server-side AEC
                     # (OpenAI, Deepgram, etc.) — discarding causes repeated re-gating interruptions.
                     # Re-arm only for providers/backends that need self-echo suppression.
                     _prov = getattr(session, 'provider_name', None)
-                    should_rearm_segment_gating = _prov == "google_live"
-                    if not should_rearm_segment_gating and _prov == "local":
-                        try:
-                            local_provider = self._call_providers.get(call_id)
-                            if local_provider and hasattr(local_provider, "is_whisper_stt_active"):
-                                should_rearm_segment_gating = bool(local_provider.is_whisper_stt_active())
-                        except Exception:
-                            logger.debug(
-                                "Failed detecting LocalProvider STT backend for segment-gating rearm",
-                                call_id=call_id,
-                                exc_info=True,
-                            )
+                    should_rearm_segment_gating = _prov in ("google_live", "local")
                     if should_rearm_segment_gating:
                         try:
                             self._segment_tts_active.discard(call_id)
