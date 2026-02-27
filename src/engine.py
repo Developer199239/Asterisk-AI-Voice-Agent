@@ -2584,6 +2584,13 @@ class Engine:
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
 
+            # Enable Asterisk talk detection early so barge-in works even when ExternalMedia RTP
+            # input is gated/dropped during playback for continuous-input providers.
+            try:
+                await self._enable_pipeline_talk_detect(session)
+            except Exception:
+                logger.debug("TalkDetect enable failed on call start", call_id=caller_channel_id, exc_info=True)
+
             # Read called_number: cache (from ChannelVarSet events) > GET request > "unknown"
             # The cache is populated from DIALED_NUMBER and __FROM_DID ChannelVarSet events
             # which fire early in dialplan, before StasisStart. GET requests may fail due to timing.
@@ -4217,14 +4224,16 @@ class Engine:
             logger.error("Error handling ChannelVarset", error=str(exc), exc_info=True)
 
     async def _enable_pipeline_talk_detect(self, session: CallSession) -> None:
-        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel for pipelines."""
+        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel.
+
+        Used for pipeline barge-in and also as a reliable barge-in signal for ExternalMedia calls
+        where upstream RTP may be gated/dropped during playback for continuous-input providers.
+        """
         try:
             cfg = getattr(self.config, "barge_in", None)
             if not cfg or not bool(getattr(cfg, "pipeline_talk_detect_enabled", False)):
                 return
             call_id = session.call_id
-            if not bool(self._pipeline_forced.get(call_id)):
-                return
             channel_id = getattr(session, "caller_channel_id", None)
             if not channel_id:
                 return
@@ -4249,14 +4258,14 @@ class Engine:
             await self._save_session(session)
             if ok:
                 logger.info(
-                    "Enabled TALK_DETECT for pipeline",
+                    "Enabled TALK_DETECT for barge-in",
                     call_id=call_id,
                     channel_id=channel_id,
                     silence_ms=silence_ms,
                     talking_threshold=talking_thr,
                 )
             else:
-                logger.warning("Failed to enable TALK_DETECT for pipeline", call_id=call_id, channel_id=channel_id)
+                logger.warning("Failed to enable TALK_DETECT for barge-in", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("Enable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
@@ -4290,7 +4299,7 @@ class Engine:
             logger.debug("Disable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
     async def _handle_channel_talking_started(self, event: dict) -> None:
-        """Trigger pipeline barge-in when Asterisk detects caller speech during TTS playback."""
+        """Trigger barge-in when Asterisk detects caller speech during TTS playback."""
         try:
             channel = event.get("channel", {}) or {}
             channel_id = channel.get("id")
@@ -4302,7 +4311,12 @@ class Engine:
                 return
             call_id = session.call_id
 
-            if not bool(self._pipeline_forced.get(call_id)):
+            # Only act when TALK_DETECT was enabled by this engine for the session.
+            try:
+                td = (getattr(session, "vad_state", None) or {}).get("pipeline_talk_detect", {}) or {}
+                if not bool(td.get("enabled", False)):
+                    return
+            except Exception:
                 return
 
             # Only act when local playback/gating is active; otherwise this is just "caller is talking".
@@ -4362,7 +4376,11 @@ class Engine:
             if not session:
                 return
             call_id = session.call_id
-            if not bool(self._pipeline_forced.get(call_id)):
+            try:
+                td = (getattr(session, "vad_state", None) or {}).get("pipeline_talk_detect", {}) or {}
+                if not bool(td.get("enabled", False)):
+                    return
+            except Exception:
                 return
             logger.debug("TalkDetect finished", call_id=call_id, channel_id=channel_id)
         except Exception:
