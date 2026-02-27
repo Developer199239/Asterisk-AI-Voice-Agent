@@ -601,13 +601,13 @@ export const SystemTopology = () => {
           </div>
 
           {/* Local AI Server (aligned with AI Engine above) */}
-          <div className="flex flex-col justify-center h-full self-stretch my-auto py-10">
-            <div className="flex justify-center mb-3"><div className="inline-block px-3 py-1 rounded-full bg-muted/40 border border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider text-center">Local AI Server</div></div>
-            <div className="flex justify-center">
+          <div className="flex flex-col h-full self-stretch py-10">
+            <div className="flex justify-center mb-3 flex-shrink-0"><div className="inline-block px-3 py-1 rounded-full bg-muted/40 border border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider text-center">Local AI Server</div></div>
+            <div className="flex justify-center flex-1 h-full">
               <div
                 onClick={() => navigate('/models')}
                 title="Go to Models →"
-                className={`relative p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${state.localAIStatus === 'error'
+                className={`flex flex-col justify-center relative w-full h-full p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${state.localAIStatus === 'error'
                   ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/50'
                   : isLocalAIActive
                     ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
