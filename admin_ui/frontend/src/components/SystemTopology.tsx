@@ -50,7 +50,7 @@ interface TopologyState {
 // These handle STT+LLM+TTS internally as complete agents
 const FULL_AGENT_PROVIDERS = new Set([
   'deepgram',
-  'openai_realtime', 
+  'openai_realtime',
   'google_live',
   'elevenlabs_agent',
 ]);
@@ -116,7 +116,7 @@ export const SystemTopology = () => {
       try {
         const res = await axios.get('/api/config/yaml');
         const parsed = yaml.load(res.data.content) as any;
-        
+
         // Extract only full agent providers (not modular pipeline components)
         const providers: ProviderConfig[] = [];
         if (parsed?.providers && typeof parsed.providers === 'object') {
@@ -189,7 +189,7 @@ export const SystemTopology = () => {
       try {
         const res = await axios.get('/api/system/sessions');
         const sessions = res.data.sessions || [];
-        
+
         const calls = new Map<string, CallState>();
         for (const session of sessions) {
           calls.set(session.call_id, {
@@ -200,13 +200,13 @@ export const SystemTopology = () => {
             state: session.conversation_state === 'greeting' ? 'arriving' : 'connected',
           });
         }
-        
+
         setState(prev => ({ ...prev, activeCalls: calls }));
       } catch (err) {
         console.error('Failed to fetch active sessions', err);
       }
     };
-    
+
     fetchActiveSessions();
     const interval = setInterval(fetchActiveSessions, 2000);
     return () => clearInterval(interval);
@@ -309,19 +309,18 @@ export const SystemTopology = () => {
 
       <div className="p-4">
         {/* Grid Layout for proper alignment */}
-        <div className="relative grid grid-cols-[160px_48px_160px_48px_200px] gap-y-4 justify-center items-start">
-          
+        <div className="relative grid grid-cols-[160px_48px_160px_48px_200px] gap-y-4 justify-center items-stretch py-4">
+
           {/* === ROW 1: Asterisk → AI Engine → Providers === */}
-          
+
           {/* Asterisk PBX */}
-          <div 
+          <div
             onClick={() => navigate('/env')}
             title="Go to Asterisk Settings →"
-            className={`relative p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer hover:opacity-80 ${
-            hasAsteriskChannels 
-              ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
-              : 'border-border bg-card hover:border-primary/40'
-          }`}>
+            className={`relative p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${hasAsteriskChannels
+                ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
+                : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
+              }`}>
             {hasAsteriskChannels && (
               <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
             )}
@@ -354,40 +353,39 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* Arrow 1: Asterisk → AI Engine */}
-          <div className="flex items-center justify-center self-center">
-            <div className={`w-6 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
-              {hasActiveCalls && (
-                <div className="absolute inset-y-0 w-4 bg-green-300 animate-flow" />
-              )}
-            </div>
-            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
-              hasActiveCalls ? 'border-l-green-500' : 'border-l-border'
-            } border-t-transparent border-b-transparent`} />
+          {/* Arrow */}
+          <div className="flex items-center justify-center self-center w-full">
+            <svg className="w-full h-4 overflow-visible" viewBox="0 0 48 16" preserveAspectRatio="none">
+              <path
+                d="M 0 8 L 40 8"
+                stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'}
+                strokeWidth="2"
+                className={hasActiveCalls ? 'animate-flow-dash' : ''}
+                strokeDasharray="4 4"
+              />
+              <polygon points="40,3 48,8 40,13" fill={hasActiveCalls ? '#22c55e' : '#e5e7eb'} />
+            </svg>
           </div>
 
           {/* AI Engine Core */}
-          <div 
+          <div
             onClick={() => navigate('/env#ai-engine')}
             title="Go to AI Engine Settings →"
-            className={`relative p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer hover:opacity-80 ${
-            state.aiEngineStatus === 'error'
-              ? 'border-red-500 bg-red-500/10'
-              : hasActiveCalls 
-                ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20' 
-                : 'border-border bg-card hover:border-primary/40'
-          }`}>
+            className={`relative p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${state.aiEngineStatus === 'error'
+                ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/50'
+                : hasActiveCalls
+                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
+                  : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
+              }`}>
             {hasActiveCalls && state.aiEngineStatus === 'connected' && (
               <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
             )}
             <div className="flex flex-col items-center gap-2">
-              <Cpu className={`w-8 h-8 ${
-                state.aiEngineStatus === 'error' ? 'text-red-500' : hasActiveCalls ? 'text-green-500' : 'text-muted-foreground'
-              }`} />
+              <Cpu className={`w-8 h-8 ${state.aiEngineStatus === 'error' ? 'text-red-500' : hasActiveCalls ? 'text-green-500' : 'text-muted-foreground'
+                }`} />
               <div className="text-center">
-                <div className={`font-semibold ${
-                  state.aiEngineStatus === 'error' ? 'text-red-500' : hasActiveCalls ? 'text-green-500' : 'text-foreground'
-                }`}>AI Engine</div>
+                <div className={`font-semibold ${state.aiEngineStatus === 'error' ? 'text-red-500' : hasActiveCalls ? 'text-green-500' : 'text-foreground'
+                  }`}>AI Engine</div>
                 <div className="text-xs text-muted-foreground">Core</div>
               </div>
               <div className="w-full pt-2 mt-2 border-t border-border/50">
@@ -406,25 +404,29 @@ export const SystemTopology = () => {
             </div>
           </div>
 
-          {/* Arrow 2: AI Engine → Providers */}
-          <div className="flex items-center justify-center self-center">
-            <div className={`w-6 h-0.5 ${hasActiveCalls ? 'bg-green-500' : 'bg-border'} relative overflow-hidden`}>
-              {hasActiveCalls && (
-                <div className="absolute inset-y-0 w-4 bg-green-300 animate-flow" />
-              )}
-            </div>
-            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
-              hasActiveCalls ? 'border-l-green-500' : 'border-l-border'
-            } border-t-transparent border-b-transparent`} />
+          {/* Arrow */}
+          <div className="flex items-center justify-center self-center w-full">
+            <svg className="w-full h-4 overflow-visible" viewBox="0 0 48 16" preserveAspectRatio="none">
+              <path
+                d="M 0 8 L 40 8"
+                stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'}
+                strokeWidth="2"
+                className={hasActiveCalls ? 'animate-flow-dash' : ''}
+                strokeDasharray="4 4"
+              />
+              <polygon points="40,3 48,8 40,13" fill={hasActiveCalls ? '#22c55e' : '#e5e7eb'} />
+            </svg>
           </div>
 
           {/* Providers (Full Agents Only) */}
           <div>
-            <div 
-              onClick={() => navigate('/providers')}
-              title="Go to Providers →"
-              className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center cursor-pointer hover:text-primary transition-colors"
-            >Providers</div>
+            <div className="flex justify-center">
+              <div
+                onClick={() => navigate('/providers')}
+                title="Go to Providers →"
+                className="inline-block px-3 py-1 mx-auto rounded-full bg-muted/40 border border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider mb-3 text-center cursor-pointer hover:text-primary transition-colors"
+              >Providers</div>
+            </div>
             <div className="flex flex-col gap-2">
               {state.configuredProviders.length === 0 ? (
                 <div className="p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center">
@@ -435,24 +437,24 @@ export const SystemTopology = () => {
                   const activeCount = activeProviders.get(provider.name) || 0;
                   const isActive = activeCount > 0;
                   const isDefault = provider.name === state.defaultProvider;
-                  
+
                   const getIconColor = () => {
                     if (!provider.enabled) return 'text-orange-500';
                     if (provider.enabled && provider.ready) return 'text-green-500';
                     return 'text-red-500';
                   };
                   const iconColor = getIconColor();
-                  
-                  const cellClass = isActive 
-                    ? 'border-green-500 bg-green-500/10 shadow-md shadow-green-500/20' 
-                    : 'border-border bg-card';
-                  
+
+                  const cellClass = isActive
+                    ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
+                    : 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm';
+
                   return (
-                    <div 
+                    <div
                       key={provider.name}
                       onClick={() => navigate('/providers')}
                       title={`Configure ${provider.displayName} →`}
-                      className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${cellClass}`}
+                      className={`relative flex items-center gap-2 p-2 px-3 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-[1px] ${cellClass}`}
                     >
                       {isActive && (
                         <div className="absolute inset-0 rounded-lg border border-green-500 animate-ping opacity-20" />
@@ -475,66 +477,58 @@ export const SystemTopology = () => {
           </div>
 
           {/* === ROW 2: SVG-based T-junction from AI Engine === */}
-          
+
           {/* Full width SVG spanning columns 1-5 for precise arrow drawing */}
           <div className="col-span-5 h-14 relative">
-            <svg 
+            <svg
               className="absolute inset-0 w-full h-full"
               viewBox="0 0 616 56"
               preserveAspectRatio="xMidYMid meet"
             >
               {/* Grid columns: 160 + 48 + 160 + 48 + 200 = 616 total */}
               {/* Col 1 center: 80, Col 3 center: 160+48+80 = 288 */}
-              
-              {/* Vertical line from AI Engine (col 3 center = 258) */}
-              <line 
-                x1="288" y1="0" x2="288" y2="12" 
-                stroke={hasActiveCalls ? '#22c55e' : '#e5e7eb'} 
+
+              {/* Center bezier path from AI Engine to Local AI using smooth corners */}
+              <path
+                d="M 288 0 L 288 48"
+                stroke={isLocalAIActive ? '#22c55e' : '#e5e7eb'}
                 strokeWidth="2"
+                fill="none"
+                strokeDasharray="4 4"
+                className={isLocalAIActive ? 'animate-flow-dash' : ''}
               />
-              
-              {/* Horizontal bar from col 1 center (70) to col 3 center (258) */}
-              <line 
-                x1="80" y1="12" x2="288" y2="12" 
-                stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'} 
-                strokeWidth="2"
-              />
-              
-              {/* Left vertical line down to Pipelines (col 1 center = 70) */}
-              <line 
-                x1="80" y1="12" x2="80" y2="48" 
-                stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'} 
-                strokeWidth="2"
-              />
-              {/* Left arrowhead */}
-              <polygon 
-                points="80,56 74,46 86,46" 
-                fill={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'}
-              />
-              
-              {/* Center vertical line down to Local AI (col 3 center = 258) */}
-              <line 
-                x1="288" y1="12" x2="288" y2="48" 
-                stroke={isLocalAIActive ? '#22c55e' : '#e5e7eb'} 
-                strokeWidth="2"
-              />
-              {/* Center arrowhead */}
-              <polygon 
-                points="288,56 282,46 294,46" 
+              <polygon
+                points="288,56 282,46 294,46"
                 fill={isLocalAIActive ? '#22c55e' : '#e5e7eb'}
+              />
+
+              {/* Left bezier path from AI Engine to Pipelines branching off */}
+              <path
+                d="M 288 12 Q 288 20 280 20 L 88 20 Q 80 20 80 28 L 80 48"
+                stroke={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'}
+                strokeWidth="2"
+                fill="none"
+                strokeDasharray="4 4"
+                className={activePipelines.size > 0 ? 'animate-flow-dash' : ''}
+              />
+              <polygon
+                points="80,56 74,46 86,46"
+                fill={activePipelines.size > 0 ? '#22c55e' : '#e5e7eb'}
               />
             </svg>
           </div>
 
           {/* === ROW 3: Pipelines ← Local AI Server → Models === */}
-          
+
           {/* Pipelines with sub-components */}
           <div>
-            <div 
-              onClick={() => navigate('/pipelines')}
-              title="Go to Pipelines →"
-              className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center cursor-pointer hover:text-primary transition-colors"
-            >Pipelines</div>
+            <div className="flex justify-center">
+              <div
+                onClick={() => navigate('/pipelines')}
+                title="Go to Pipelines →"
+                className="inline-block px-3 py-1 mx-auto rounded-full bg-muted/40 border border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider mb-3 text-center cursor-pointer hover:text-primary transition-colors"
+              >Pipelines</div>
+            </div>
             {state.configuredPipelines.length === 0 ? (
               <div className="p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center">
                 No pipelines
@@ -547,16 +541,15 @@ export const SystemTopology = () => {
                   // Mark default only on exact match to avoid multiple "default" pipelines being shown.
                   const isDefault =
                     pipeline.name === state.activePipeline || pipeline.name === state.defaultProvider;
-                  
+
                   return (
                     <div key={pipeline.name} onClick={() => navigate('/pipelines')} title={`Configure ${pipeline.name.replace(/_/g, ' ')} →`} className="flex flex-col cursor-pointer hover:opacity-80">
                       {/* Pipeline name header */}
-                      <div 
-                        className={`relative flex items-center gap-2 p-2 rounded-t-lg border border-b-0 transition-all ${
-                          isActive 
-                            ? 'border-green-500 bg-green-500/10' 
-                            : 'border-border bg-card'
-                        }`}
+                      <div
+                        className={`relative flex items-center gap-2 p-2 rounded-t-xl border border-b-0 backdrop-blur-sm transition-all ${isActive
+                            ? 'border-green-500/50 bg-green-500/10 shadow-[0_-4px_15px_rgb(34,197,94,0.05)] ring-1 ring-green-500/30 ring-b-0'
+                            : 'border-border/60 bg-card/70'
+                          }`}
                       >
                         <Layers className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
                         <span className={`text-xs font-medium truncate ${isActive ? 'text-green-500' : 'text-foreground'}`}>
@@ -565,27 +558,23 @@ export const SystemTopology = () => {
                         {isDefault && <div className="w-2.5 h-2.5 rounded-full bg-yellow-500 ml-auto flex-shrink-0" title="Default Pipeline" />}
                       </div>
                       {/* Pipeline components (STT/LLM/TTS) */}
-                      <div className={`flex flex-col gap-0.5 p-1.5 rounded-b-lg border transition-all ${
-                        isActive ? 'border-green-500 bg-green-500/5' : 'border-border bg-muted/30'
-                      }`}>
-                        {/* STT */}
-                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${
-                          isActive ? 'text-green-500' : 'text-muted-foreground'
+                      <div className={`flex flex-col gap-0.5 p-1.5 rounded-b-xl border backdrop-blur-sm transition-all ${isActive ? 'border-green-500/50 bg-green-500/5 ring-1 ring-green-500/30 ring-t-0 shadow-[0_4px_15px_rgb(34,197,94,0.05)]' : 'border-border/60 bg-muted/20'
                         }`}>
+                        {/* STT */}
+                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${isActive ? 'text-green-500' : 'text-muted-foreground'
+                          }`}>
                           <Mic className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
                           <span className="truncate">{pipeline.stt || 'N/A'}</span>
                         </div>
                         {/* LLM */}
-                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${
-                          isActive ? 'text-green-500' : 'text-muted-foreground'
-                        }`}>
+                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${isActive ? 'text-green-500' : 'text-muted-foreground'
+                          }`}>
                           <MessageSquare className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
                           <span className="truncate">{pipeline.llm || 'N/A'}</span>
                         </div>
                         {/* TTS */}
-                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${
-                          isActive ? 'text-green-500' : 'text-muted-foreground'
-                        }`}>
+                        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] ${isActive ? 'text-green-500' : 'text-muted-foreground'
+                          }`}>
                           <Volume2 className={`w-3 h-3 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
                           <span className="truncate">{pipeline.tts || 'N/A'}</span>
                         </div>
@@ -598,50 +587,55 @@ export const SystemTopology = () => {
           </div>
 
           {/* Arrow: Pipelines ← Local AI */}
-          <div className="flex items-center justify-center self-center">
-            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-r-[8px] ${
-              isLocalAIUsedByPipelines ? 'border-r-green-500' : 'border-r-border'
-            } border-t-transparent border-b-transparent`} />
-            <div className={`w-6 h-0.5 ${isLocalAIUsedByPipelines ? 'bg-green-500' : 'bg-border'}`} />
+          <div className="flex items-center justify-center self-center w-full">
+            <svg className="w-full h-4 overflow-visible" viewBox="0 0 48 16" preserveAspectRatio="none">
+              <path
+                d="M 48 8 L 8 8"
+                stroke={isLocalAIUsedByPipelines ? '#22c55e' : '#e5e7eb'}
+                strokeWidth="2"
+                className={isLocalAIUsedByPipelines ? 'animate-flow-dash' : ''}
+                strokeDasharray="4 4"
+              />
+              <polygon points="8,3 0,8 8,13" fill={isLocalAIUsedByPipelines ? '#22c55e' : '#e5e7eb'} />
+            </svg>
           </div>
 
           {/* Local AI Server (aligned with AI Engine above) */}
-          <div>
-            <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center">Local AI Server</div>
-            <div 
-              onClick={() => navigate('/models')}
-              title="Go to Models →"
-              className={`relative p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer hover:opacity-80 ${
-              state.localAIStatus === 'error'
-                ? 'border-red-500 bg-red-500/10'
-                : isLocalAIActive
-                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
-                  : 'border-border bg-card hover:border-primary/40'
-            }`}>
-              {isLocalAIActive && state.localAIStatus === 'connected' && (
-                <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
-              )}
-              <div className="flex flex-col items-center gap-2">
-                <Server className={`w-8 h-8 ${
-                  state.localAIStatus === 'error' ? 'text-red-500' : isLocalAIActive ? 'text-green-500' : 'text-muted-foreground'
-                }`} />
-                <div className="text-center">
-                  <div className={`font-semibold ${
-                    state.localAIStatus === 'error' ? 'text-red-500' : isLocalAIActive ? 'text-green-500' : 'text-foreground'
-                  }`}>Local AI</div>
-                  <div className="text-xs text-muted-foreground">Server</div>
-                </div>
-                <div className="w-full pt-2 mt-2 border-t border-border/50">
-                  <div className="flex items-center justify-center text-xs">
-                    {state.localAIStatus === 'connected' ? (
-                      <span className="flex items-center gap-1 text-green-500">
-                        <CheckCircle2 className="w-3 h-3" /> Connected
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1 text-red-500">
-                        <XCircle className="w-3 h-3" /> Disconnected
-                      </span>
-                    )}
+          <div className="flex flex-col justify-center h-full">
+            <div className="flex justify-center mb-3"><div className="inline-block px-3 py-1 rounded-full bg-muted/40 border border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider text-center">Local AI Server</div></div>
+            <div className="flex justify-center">
+              <div
+                onClick={() => navigate('/models')}
+                title="Go to Models →"
+                className={`relative p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-1 ${state.localAIStatus === 'error'
+                    ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/50'
+                    : isLocalAIActive
+                      ? 'border-green-500/50 bg-green-500/10 shadow-[0_8px_30px_rgb(34,197,94,0.15)] ring-1 ring-green-500/50'
+                      : 'border-border/60 bg-card/60 hover:bg-card/80 hover:border-primary/40 shadow-sm'
+                  }`}>
+                {isLocalAIActive && state.localAIStatus === 'connected' && (
+                  <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
+                )}
+                <div className="flex flex-col items-center gap-2">
+                  <Server className={`w-8 h-8 ${state.localAIStatus === 'error' ? 'text-red-500' : isLocalAIActive ? 'text-green-500' : 'text-muted-foreground'
+                    }`} />
+                  <div className="text-center">
+                    <div className={`font-semibold ${state.localAIStatus === 'error' ? 'text-red-500' : isLocalAIActive ? 'text-green-500' : 'text-foreground'
+                      }`}>Local AI</div>
+                    <div className="text-xs text-muted-foreground">Server</div>
+                  </div>
+                  <div className="w-full pt-2 mt-2 border-t border-border/50">
+                    <div className="flex items-center justify-center text-xs">
+                      {state.localAIStatus === 'connected' ? (
+                        <span className="flex items-center gap-1 text-green-500">
+                          <CheckCircle2 className="w-3 h-3" /> Connected
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-red-500">
+                          <XCircle className="w-3 h-3" /> Disconnected
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -649,27 +643,34 @@ export const SystemTopology = () => {
           </div>
 
           {/* Arrow: Local AI → Models */}
-          <div className="flex items-center justify-center self-center">
-            <div className={`w-6 h-0.5 ${isLocalAIActive ? 'bg-green-500' : 'bg-border'}`} />
-            <div className={`w-0 h-0 border-t-[6px] border-b-[6px] border-l-[8px] ${
-              isLocalAIActive ? 'border-l-green-500' : 'border-l-border'
-            } border-t-transparent border-b-transparent`} />
+          <div className="flex items-center justify-center self-center w-full">
+            <svg className="w-full h-4 overflow-visible" viewBox="0 0 48 16" preserveAspectRatio="none">
+              <path
+                d="M 0 8 L 40 8"
+                stroke={isLocalAIActive ? '#22c55e' : '#e5e7eb'}
+                strokeWidth="2"
+                className={isLocalAIActive ? 'animate-flow-dash' : ''}
+                strokeDasharray="4 4"
+              />
+              <polygon points="40,3 48,8 40,13" fill={isLocalAIActive ? '#22c55e' : '#e5e7eb'} />
+            </svg>
           </div>
 
           {/* STT / LLM / TTS Models */}
           <div>
-            <div 
-              onClick={() => navigate('/models')}
-              title="Go to Models →"
-              className="text-xs text-muted-foreground uppercase tracking-wide mb-2 text-center cursor-pointer hover:text-primary transition-colors"
-            >Models</div>
+            <div className="flex justify-center">
+              <div
+                onClick={() => navigate('/models')}
+                title="Go to Models →"
+                className="inline-block px-3 py-1 mx-auto rounded-full bg-muted/40 border border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider mb-3 text-center cursor-pointer hover:text-primary transition-colors"
+              >Models</div>
+            </div>
             <div className="flex flex-col gap-2">
               {/* STT */}
-              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${
-                activeLocalModels.stt && state.localAIModels?.stt?.loaded
-                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
-                  : state.localAIModels?.stt?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
-              }`}>
+              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-[1px] ${activeLocalModels.stt && state.localAIModels?.stt?.loaded
+                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
+                  : state.localAIModels?.stt?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
+                }`}>
                 {activeLocalModels.stt && state.localAIModels?.stt?.loaded && (
                   <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
                 )}
@@ -688,11 +689,10 @@ export const SystemTopology = () => {
               </div>
 
               {/* LLM */}
-              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${
-                activeLocalModels.llm && state.localAIModels?.llm?.loaded
-                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
-                  : state.localAIModels?.llm?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
-              }`}>
+              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-[1px] ${activeLocalModels.llm && state.localAIModels?.llm?.loaded
+                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
+                  : state.localAIModels?.llm?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
+                }`}>
                 {activeLocalModels.llm && state.localAIModels?.llm?.loaded && (
                   <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
                 )}
@@ -711,11 +711,10 @@ export const SystemTopology = () => {
               </div>
 
               {/* TTS */}
-              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-lg border transition-all duration-300 cursor-pointer hover:opacity-80 ${
-                activeLocalModels.tts && state.localAIModels?.tts?.loaded
-                  ? 'border-green-500 bg-green-500/10 shadow-lg shadow-green-500/20'
-                  : state.localAIModels?.tts?.loaded ? 'border-border bg-card' : 'border-border bg-muted/50'
-              }`}>
+              <div onClick={() => navigate('/models')} title="Go to Models →" className={`relative flex items-center gap-2 p-2 px-3 rounded-xl border backdrop-blur-sm transition-all duration-300 cursor-pointer hover:-translate-y-[1px] ${activeLocalModels.tts && state.localAIModels?.tts?.loaded
+                  ? 'border-green-500/50 bg-green-500/10 shadow-[0_4px_15px_rgb(34,197,94,0.1)] ring-1 ring-green-500/30'
+                  : state.localAIModels?.tts?.loaded ? 'border-border/60 bg-card/60 hover:bg-card/80 shadow-sm' : 'border-border/40 bg-muted/30'
+                }`}>
                 {activeLocalModels.tts && state.localAIModels?.tts?.loaded && (
                   <div className="absolute inset-0 rounded-lg border-2 border-green-500 animate-ping opacity-20" />
                 )}
@@ -759,12 +758,13 @@ export const SystemTopology = () => {
 
       {/* CSS for flow animation */}
       <style>{`
-        @keyframes flow {
-          0% { transform: translateX(-16px); }
-          100% { transform: translateX(32px); }
+        @keyframes flow-dash {
+          to {
+            stroke-dashoffset: -8;
+          }
         }
-        .animate-flow {
-          animation: flow 0.8s linear infinite;
+        .animate-flow-dash {
+          animation: flow-dash 0.5s linear infinite;
         }
       `}</style>
     </div>
