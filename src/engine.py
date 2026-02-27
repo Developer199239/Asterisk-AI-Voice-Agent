@@ -488,8 +488,6 @@ class Engine:
         # Pipeline runtime structures (Milestone 7): per-call audio queues and runner tasks
         self._pipeline_queues: Dict[str, asyncio.Queue] = {}
         self._pipeline_tasks: Dict[str, asyncio.Task] = {}
-        # TalkDetect-based barge-in confirmation tasks (per-call)
-        self._talkdetect_barge_tasks: Dict[str, asyncio.Task] = {}
         # Per-call background tasks (fire-and-forget) that should be cancelled on cleanup
         self._call_bg_tasks: Dict[str, Set[asyncio.Task]] = {}
         # Track calls where a pipeline was explicitly requested via AI_PROVIDER
@@ -2586,13 +2584,6 @@ class Engine:
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
 
-            # Enable Asterisk talk detection early so barge-in works even when ExternalMedia RTP
-            # input is gated/dropped during playback for continuous-input providers.
-            try:
-                await self._enable_pipeline_talk_detect(session)
-            except Exception:
-                logger.debug("TalkDetect enable failed on call start", call_id=caller_channel_id, exc_info=True)
-
             # Read called_number: cache (from ChannelVarSet events) > GET request > "unknown"
             # The cache is populated from DIALED_NUMBER and __FROM_DID ChannelVarSet events
             # which fire early in dialplan, before StasisStart. GET requests may fail due to timing.
@@ -4226,16 +4217,14 @@ class Engine:
             logger.error("Error handling ChannelVarset", error=str(exc), exc_info=True)
 
     async def _enable_pipeline_talk_detect(self, session: CallSession) -> None:
-        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel.
-
-        Used for pipeline barge-in and also as a reliable barge-in signal for ExternalMedia calls
-        where upstream RTP may be gated/dropped during playback for continuous-input providers.
-        """
+        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel for pipelines."""
         try:
             cfg = getattr(self.config, "barge_in", None)
             if not cfg or not bool(getattr(cfg, "pipeline_talk_detect_enabled", False)):
                 return
             call_id = session.call_id
+            if not bool(self._pipeline_forced.get(call_id)):
+                return
             channel_id = getattr(session, "caller_channel_id", None)
             if not channel_id:
                 return
@@ -4260,14 +4249,14 @@ class Engine:
             await self._save_session(session)
             if ok:
                 logger.info(
-                    "Enabled TALK_DETECT for barge-in",
+                    "Enabled TALK_DETECT for pipeline",
                     call_id=call_id,
                     channel_id=channel_id,
                     silence_ms=silence_ms,
                     talking_threshold=talking_thr,
                 )
             else:
-                logger.warning("Failed to enable TALK_DETECT for barge-in", call_id=call_id, channel_id=channel_id)
+                logger.warning("Failed to enable TALK_DETECT for pipeline", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("Enable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
@@ -4301,7 +4290,7 @@ class Engine:
             logger.debug("Disable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
     async def _handle_channel_talking_started(self, event: dict) -> None:
-        """Trigger barge-in when Asterisk detects caller speech during TTS playback."""
+        """Trigger pipeline barge-in when Asterisk detects caller speech during TTS playback."""
         try:
             channel = event.get("channel", {}) or {}
             channel_id = channel.get("id")
@@ -4313,12 +4302,7 @@ class Engine:
                 return
             call_id = session.call_id
 
-            # Only act when TALK_DETECT was enabled by this engine for the session.
-            try:
-                td = (getattr(session, "vad_state", None) or {}).get("pipeline_talk_detect", {}) or {}
-                if not bool(td.get("enabled", False)):
-                    return
-            except Exception:
+            if not bool(self._pipeline_forced.get(call_id)):
                 return
 
             # Only act when local playback/gating is active; otherwise this is just "caller is talking".
@@ -4362,87 +4346,10 @@ class Engine:
             except Exception:
                 pass
 
-            # Confirm that talking persists for at least min_ms to avoid over-sensitive triggers
-            # on brief noise spikes or echo.
-            try:
-                td_state = session.vad_state.setdefault("talkdetect_barge", {})
-                td_state["talking"] = True
-                td_state["start_ts"] = now
-                session.vad_state["talkdetect_barge"] = td_state
-                await self._save_session(session)
-            except Exception:
-                pass
-
-            try:
-                existing = self._talkdetect_barge_tasks.pop(call_id, None)
-                if existing:
-                    existing.cancel()
-            except Exception:
-                pass
-
-            provider_name = getattr(session, "provider_name", None) or self.config.default_provider
-            min_ms = self._resolve_barge_in_min_ms(
-                session,
-                cfg,
-                pipeline_mode=bool(self._pipeline_forced.get(call_id)),
-                provider_name=provider_name,
-            )
-            task = asyncio.create_task(self._confirm_talkdetect_barge_in(call_id, channel_id=channel_id, min_ms=min_ms))
-            self._talkdetect_barge_tasks[call_id] = task
-            try:
-                task.add_done_callback(self._log_task_exception)
-            except Exception:
-                pass
+            await self._apply_barge_in_action(call_id, source="talkdetect", reason="ChannelTalkingStarted")
+            logger.info("🎧 BARGE-IN (TalkDetect) triggered", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("ChannelTalkingStarted handler failed", ari_event=event, exc_info=True)
-
-    async def _confirm_talkdetect_barge_in(self, call_id: str, *, channel_id: Optional[str], min_ms: int) -> None:
-        """Confirm TALK_DETECT 'talking' persists for min_ms, then apply barge-in."""
-        try:
-            await asyncio.sleep(max(0.0, float(min_ms or 0) / 1000.0))
-
-            session = await self.session_store.get_by_call_id(call_id)
-            if not session:
-                return
-
-            # Only proceed if the call is still considered "talking" by the finished handler.
-            try:
-                td_state = (getattr(session, "vad_state", None) or {}).get("talkdetect_barge", {}) or {}
-                if not bool(td_state.get("talking", False)):
-                    return
-            except Exception:
-                return
-
-            # Only act when local playback/gating is active; otherwise this is just "caller is talking".
-            if bool(getattr(session, "audio_capture_enabled", True)) and not bool(getattr(session, "tts_playing", False)):
-                return
-
-            cfg = getattr(self.config, "barge_in", None)
-            if not cfg or not getattr(cfg, "enabled", True):
-                return
-
-            now = time.time()
-            cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
-            last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
-            if last_barge_in_ts and (now - last_barge_in_ts) * 1000 < cooldown_ms:
-                return
-
-            # Clear talking flag to avoid repeated triggers while TALK_DETECT remains active.
-            try:
-                td_state = (getattr(session, "vad_state", None) or {}).get("talkdetect_barge", {}) or {}
-                td_state["talking"] = False
-                session.vad_state["talkdetect_barge"] = td_state
-                await self._save_session(session)
-            except Exception:
-                pass
-
-            await self._apply_barge_in_action(call_id, source="talkdetect", reason=f"ChannelTalkingStarted>=min_ms:{min_ms}")
-            logger.info("🎧 BARGE-IN (TalkDetect) triggered", call_id=call_id, channel_id=channel_id, min_ms=min_ms)
-        finally:
-            try:
-                self._talkdetect_barge_tasks.pop(call_id, None)
-            except Exception:
-                pass
 
     async def _handle_channel_talking_finished(self, event: dict) -> None:
         """Informational handler for talk detection end events (pipelines)."""
@@ -4455,25 +4362,8 @@ class Engine:
             if not session:
                 return
             call_id = session.call_id
-            try:
-                td = (getattr(session, "vad_state", None) or {}).get("pipeline_talk_detect", {}) or {}
-                if not bool(td.get("enabled", False)):
-                    return
-            except Exception:
+            if not bool(self._pipeline_forced.get(call_id)):
                 return
-            try:
-                td_state = (getattr(session, "vad_state", None) or {}).get("talkdetect_barge", {}) or {}
-                td_state["talking"] = False
-                session.vad_state["talkdetect_barge"] = td_state
-                await self._save_session(session)
-            except Exception:
-                pass
-            try:
-                task = self._talkdetect_barge_tasks.pop(call_id, None)
-                if task:
-                    task.cancel()
-            except Exception:
-                pass
             logger.debug("TalkDetect finished", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("ChannelTalkingFinished handler failed", ari_event=event, exc_info=True)
@@ -4697,14 +4587,6 @@ class Engine:
                 self._pipeline_forced.pop(call_id, None)
             except Exception:
                 logger.debug("Pipeline cleanup failed", call_id=call_id, exc_info=True)
-
-            # Cancel any pending talkdetect confirmation task (barge-in)
-            try:
-                task = self._talkdetect_barge_tasks.pop(call_id, None)
-                if task:
-                    task.cancel()
-            except Exception:
-                pass
 
             # Clear per-call resample states to prevent unbounded memory growth
             self._resample_state_provider_in.pop(call_id, None)
@@ -6565,8 +6447,12 @@ class Engine:
                 return
 
             # Only when we can reasonably assume inbound is caller-isolated.
-            if not await self._is_inbound_isolated_for_barge_in_fallback(session):
-                return
+            # For ExternalMedia RTP, the inbound stream is expected to already be caller-isolated
+            # (bridge mix excludes the ExternalMedia channel's own transmitted audio), so we skip
+            # the playback/MOH isolation heuristic which would otherwise prevent barge-in during TTS.
+            if source != "externalmedia":
+                if not await self._is_inbound_isolated_for_barge_in_fallback(session):
+                    return
 
             import time
 
@@ -7139,12 +7025,27 @@ class Engine:
                     # Replace audio with silence (zero-filled PCM16)
                     pcm_16k = b'\x00' * len(pcm_16k)
                 elif not needs_gating and not session.audio_capture_enabled:
-                    # For other providers, can safely drop audio during TTS
+                    # For other providers, do not forward audio during TTS, but still run
+                    # local barge-in detection on the real inbound frames so interruptions work.
                     logger.debug(
                         "Dropping RTP audio for continuous provider during TTS playback",
                         call_id=caller_channel_id,
                         provider=provider_name,
                     )
+                    try:
+                        await self._maybe_provider_barge_in_fallback(
+                            session,
+                            pcm16=pcm_for_barge_in,
+                            pcm_rate_hz=int(getattr(self.rtp_server, 'sample_rate', 16000) if self.rtp_server else 16000),
+                            audiosocket_wire=None,
+                            source="externalmedia",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Provider barge-in fallback check failed (ExternalMedia/continuous gated)",
+                            call_id=caller_channel_id,
+                            exc_info=True,
+                        )
                     return
                 if not getattr(session, "provider_session_active", False):
                     return
