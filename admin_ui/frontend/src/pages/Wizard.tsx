@@ -2420,8 +2420,12 @@ exten => s,1,NoOp(AI Agent Call)
                                         <HardDrive className="w-4 h-4 mr-2" />
                                         Downloaded Models
                                     </h3>
-                                    <p className="text-sm text-green-700 dark:text-green-400">
-                                        Tier: {localAIStatus.tier} | {localAIStatus.tierInfo?.models || 'Models ready'}
+                                    <p className="text-sm text-green-700 dark:text-green-400 mt-2">
+                                        <div className="flex flex-col gap-1">
+                                            <span><strong>STT:</strong> {modelCatalog?.stt?.find(m => m.id === config.local_stt_model)?.name || config.local_stt_backend || 'Default'}</span>
+                                            <span><strong>LLM:</strong> {modelCatalog?.llm?.find(m => m.id === config.local_llm_model)?.name || config.local_llm_model || 'None'}</span>
+                                            <span><strong>TTS:</strong> {modelCatalog?.tts?.find(m => m.id === config.local_tts_model)?.name || config.local_tts_backend || 'Default'}</span>
+                                        </div>
                                     </p>
                                 </div>
 
