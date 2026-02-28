@@ -103,3 +103,27 @@ On `10.44.0.103`:
 
 - `python3 -m py_compile local_ai_server/config.py` passed.
 - `npm --prefix admin_ui/frontend run build` passed.
+
+## 2026-02-28 — Local UI Tooltip Coverage Pass
+
+### Goal
+
+- Improve operator guidance by adding explicit tooltips for Local AI STT/TTS/LLM tuning controls exposed in Admin UI.
+
+### Changes
+
+- `admin_ui/frontend/src/pages/System/EnvPage.tsx`
+  - Added tooltip text for:
+    - STT advanced segmentation toggle (`stt-segment-advanced`)
+    - Kroko controls (`Embedded Mode`, `Kroko Model Path`, `Kroko Port`, `Kroko URL`, `Kroko Language`)
+    - Kokoro advanced mode toggle (`kokoro-advanced`)
+    - LLM base controls (`LOCAL_LLM_MODEL_PATH`, `LOCAL_LLM_CONTEXT`, `LOCAL_LLM_BATCH`, `LOCAL_LLM_MAX_TOKENS`, `LOCAL_LLM_TEMPERATURE`, `LOCAL_LLM_THREADS`, `LOCAL_LLM_INFER_TIMEOUT_SEC`)
+    - LLM advanced switches (`LOCAL_LLM_USE_MLOCK`, `LOCAL_TOOL_GATEWAY_ENABLED`)
+  - Replaced plain labels with tooltip-enabled `FormLabel` for:
+    - `LOCAL_LLM_SYSTEM_PROMPT`
+    - `LOCAL_LLM_VOICE_PREAMBLE`
+  - Added textarea IDs for accessible `htmlFor` bindings.
+
+### Validation
+
+- `npm --prefix admin_ui/frontend run build` passed.

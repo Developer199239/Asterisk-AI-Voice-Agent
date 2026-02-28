@@ -5,7 +5,7 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { Save, Eye, EyeOff, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, XCircle, Loader2, Cpu, Server, Settings } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
-import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
+import { FormInput, FormLabel, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
 
 import { useAuth } from '../../auth/AuthContext';
 
@@ -1177,6 +1177,7 @@ const EnvPage = () => {
                                         id="stt-segment-advanced"
                                         label="Show Whisper Segmentation Advanced"
                                         description="Expose preroll, min, and max utterance segmentation controls for faster_whisper/whisper_cpp."
+                                        tooltip="Advanced segmentation controls. Increase only when debugging turn cuts or clipping."
                                         checked={showAdvancedSttSegment}
                                         onChange={(e) => setShowAdvancedSttSegment(e.target.checked)}
                                     />
@@ -1228,6 +1229,7 @@ const EnvPage = () => {
                                     description={localCaps?.stt?.kroko_embedded && !localCaps.stt.kroko_embedded.available
                                         ? 'Rebuild local_ai_server with INCLUDE_KROKO_EMBEDDED=true to enable.'
                                         : 'Run Kroko locally (requires model download).'}
+                                    tooltip="When enabled, STT runs against the local embedded Kroko server instead of the remote Kroko websocket API."
                                     checked={isTrue(env['KROKO_EMBEDDED'])}
                                     onChange={(e) => updateEnv('KROKO_EMBEDDED', String(e.target.checked))}
                                     disabled={localCaps?.stt?.kroko_embedded ? !localCaps.stt.kroko_embedded.available : false}
@@ -1238,12 +1240,14 @@ const EnvPage = () => {
                                             label="Kroko Model Path"
                                             value={env['KROKO_MODEL_PATH'] || '/app/models/stt/kroko'}
                                             onChange={(e) => updateEnv('KROKO_MODEL_PATH', e.target.value)}
+                                            tooltip="Path to embedded Kroko model assets inside the local_ai_server container."
                                         />
                                         <FormInput
                                             label="Kroko Port"
                                             type="number"
                                             value={env['KROKO_PORT'] || '6006'}
                                             onChange={(e) => updateEnv('KROKO_PORT', e.target.value)}
+                                            tooltip="Local port used by the embedded Kroko websocket server."
                                         />
                                     </>
                                 ) : (
@@ -1252,6 +1256,7 @@ const EnvPage = () => {
                                             label="Kroko URL"
                                             value={env['KROKO_URL'] || 'wss://app.kroko.ai/api/v1/transcripts/streaming'}
                                             onChange={(e) => updateEnv('KROKO_URL', e.target.value)}
+                                            tooltip="Remote Kroko websocket endpoint used when Embedded Mode is disabled."
                                         />
                                         {renderSecretInput('Kroko API Key', 'KROKO_API_KEY', 'Your Kroko API key')}
                                     </>
@@ -1267,6 +1272,7 @@ const EnvPage = () => {
                                         { value: 'fr-FR', label: 'French' },
                                         { value: 'de-DE', label: 'German' },
                                     ]}
+                                    tooltip="Locale hint sent to Kroko STT for better recognition."
                                 />
                             </>
                         )}
@@ -1396,6 +1402,7 @@ const EnvPage = () => {
 	                                        id="kokoro-advanced"
 	                                        label="Show advanced modes"
 	                                        description="Enables HuggingFace auto-download mode. Recommended only if you can tolerate runtime downloads."
+	                                        tooltip="Shows optional HF mode. Keep disabled for predictable production behavior."
 	                                        checked={showAdvancedKokoro}
 	                                        onChange={(e) => setShowAdvancedKokoro(e.target.checked)}
 	                                    />
@@ -1511,6 +1518,7 @@ const EnvPage = () => {
                                         label="LLM Model Path"
                                         value={env['LOCAL_LLM_MODEL_PATH'] || '/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf'}
                                         onChange={(e) => updateEnv('LOCAL_LLM_MODEL_PATH', e.target.value)}
+                                        tooltip="Path to the GGUF model file loaded by local llama.cpp runtime."
                                     />
                                 </div>
                                 <FormInput
@@ -1518,18 +1526,21 @@ const EnvPage = () => {
                                     type="number"
                                     value={env['LOCAL_LLM_CONTEXT'] || '4096'}
                                     onChange={(e) => updateEnv('LOCAL_LLM_CONTEXT', e.target.value)}
+                                    tooltip="Maximum prompt+history tokens retained in context. Larger values increase VRAM/RAM use."
                                 />
                                 <FormInput
                                     label="Batch Size"
                                     type="number"
                                     value={env['LOCAL_LLM_BATCH'] || '256'}
                                     onChange={(e) => updateEnv('LOCAL_LLM_BATCH', e.target.value)}
+                                    tooltip="Token processing batch size for llama.cpp. Higher may improve throughput but can increase latency spikes."
                                 />
                                 <FormInput
                                     label="Max Tokens"
                                     type="number"
                                     value={env['LOCAL_LLM_MAX_TOKENS'] || '128'}
                                     onChange={(e) => updateEnv('LOCAL_LLM_MAX_TOKENS', e.target.value)}
+                                    tooltip="Maximum new tokens generated per assistant response."
                                 />
                                 <FormInput
                                     label="Temperature"
@@ -1537,18 +1548,21 @@ const EnvPage = () => {
                                     step="0.1"
                                     value={env['LOCAL_LLM_TEMPERATURE'] || '0.7'}
                                     onChange={(e) => updateEnv('LOCAL_LLM_TEMPERATURE', e.target.value)}
+                                    tooltip="Randomness of generation. Lower is more deterministic; higher is more varied."
                                 />
                                 <FormInput
                                     label="Threads"
                                     type="number"
                                     value={env['LOCAL_LLM_THREADS'] || '4'}
                                     onChange={(e) => updateEnv('LOCAL_LLM_THREADS', e.target.value)}
+                                    tooltip="CPU threads used by local inference. Tune to available host cores."
                                 />
                                 <FormInput
                                     label="Infer Timeout (s)"
                                     type="number"
                                     value={env['LOCAL_LLM_INFER_TIMEOUT_SEC'] || '30'}
                                     onChange={(e) => updateEnv('LOCAL_LLM_INFER_TIMEOUT_SEC', e.target.value)}
+                                    tooltip="Hard timeout for one LLM generation request before returning an error."
                                 />
                             </div>
                         </ConfigCard>
@@ -1592,6 +1606,7 @@ const EnvPage = () => {
                                     id="llm-mlock"
                                     label="Lock Model in RAM"
                                     description="Prevent model from being swapped to disk (requires privileges)."
+                                    tooltip="Uses mlock where available to reduce paging-induced latency jitter."
                                     checked={isTrue(env['LOCAL_LLM_USE_MLOCK'])}
                                     onChange={(e) => updateEnv('LOCAL_LLM_USE_MLOCK', e.target.checked ? '1' : '0')}
                                 />
@@ -1599,12 +1614,19 @@ const EnvPage = () => {
                                     id="llm-tool-gateway"
                                     label="Tool Gateway Enabled"
                                     description="Enable server-side normalization and guardrails for local tool-calls."
+                                    tooltip="Keeps tool-call payloads normalized and validated before engine execution."
                                     checked={isTrue(env['LOCAL_TOOL_GATEWAY_ENABLED'] || '1')}
                                     onChange={(e) => updateEnv('LOCAL_TOOL_GATEWAY_ENABLED', e.target.checked ? '1' : '0')}
                                 />
                                 <div className="col-span-full">
-                                    <label className="text-sm font-medium leading-none">System Prompt</label>
+                                    <FormLabel
+                                        htmlFor="local-llm-system-prompt"
+                                        tooltip="Base instruction prepended to all local LLM turns."
+                                    >
+                                        System Prompt
+                                    </FormLabel>
                                     <textarea
+                                        id="local-llm-system-prompt"
                                         className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 mt-1.5"
                                         value={env['LOCAL_LLM_SYSTEM_PROMPT'] || ''}
                                         onChange={(e) => updateEnv('LOCAL_LLM_SYSTEM_PROMPT', e.target.value)}
@@ -1632,8 +1654,14 @@ const EnvPage = () => {
                                     />
                                 </div>
                                 <div className="col-span-full">
-                                    <label className="text-sm font-medium leading-none">Voice Preamble</label>
+                                    <FormLabel
+                                        htmlFor="local-llm-voice-preamble"
+                                        tooltip="Voice-mode instructions appended after system prompt to shape spoken style."
+                                    >
+                                        Voice Preamble
+                                    </FormLabel>
                                     <textarea
+                                        id="local-llm-voice-preamble"
                                         className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 mt-1.5"
                                         value={env['LOCAL_LLM_VOICE_PREAMBLE'] || ''}
                                         onChange={(e) => updateEnv('LOCAL_LLM_VOICE_PREAMBLE', e.target.value)}
