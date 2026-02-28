@@ -4333,7 +4333,7 @@ class Engine:
             except Exception:
                 tts_elapsed_ms = 0
 
-            initial_protect = int(getattr(cfg, "initial_protection_ms", 200))
+            initial_protect = int(getattr(cfg, "talk_detect_initial_protection_ms", 1500))
             try:
                 if getattr(session, "conversation_state", None) == "greeting":
                     greet_ms = int(getattr(cfg, "greeting_protection_ms", 0))
@@ -4342,6 +4342,12 @@ class Engine:
             except Exception:
                 pass
             if tts_elapsed_ms < initial_protect:
+                logger.debug(
+                    "TalkDetect suppressed (echo protection)",
+                    call_id=call_id,
+                    tts_elapsed_ms=tts_elapsed_ms,
+                    protection_ms=initial_protect,
+                )
                 return
 
             cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
