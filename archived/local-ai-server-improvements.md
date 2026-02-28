@@ -68,3 +68,38 @@ On `10.44.0.103`:
 
 - On host, reset to previous known good commit, rebuild `local_ai_server`, restart.
 
+## 2026-02-28 — UI/Config Alignment Pass
+
+### Goals
+
+- Align Admin UI env keys with Local AI Server runtime keys.
+- Expose previously hidden runtime knobs for STT/TTS/LLM.
+- Preserve backward compatibility for older `.env` keys.
+
+### Changes
+
+- `admin_ui/frontend/src/pages/System/EnvPage.tsx`
+  - Fixed STT idle key mapping to canonical `LOCAL_STT_IDLE_MS` (with UI fallback read for legacy `LOCAL_STT_IDLE_TIMEOUT_MS`).
+  - Fixed Whisper.cpp model path mapping to canonical `WHISPER_CPP_MODEL_PATH` (with legacy read fallback in UI).
+  - Added Whisper segmentation controls for whisper-family STT:
+    - `LOCAL_STT_SEGMENT_ENERGY_THRESHOLD`
+    - `LOCAL_STT_SEGMENT_SILENCE_MS`
+    - Advanced: `LOCAL_STT_SEGMENT_PREROLL_MS`, `LOCAL_STT_SEGMENT_MIN_MS`, `LOCAL_STT_SEGMENT_MAX_MS`
+  - Added missing Whisper.cpp language control: `WHISPER_CPP_LANGUAGE`.
+  - Added missing Kokoro controls: `KOKORO_LANG`, `KOKORO_API_MODEL`.
+  - Added missing advanced LLM controls:
+    - `LOCAL_LLM_GPU_LAYERS_AUTO_DEFAULT`
+    - `LOCAL_TOOL_GATEWAY_ENABLED`
+    - `LOCAL_LLM_SYSTEM_PROMPT`
+    - `LOCAL_LLM_STOP_TOKENS`
+  - Added tooltips for all newly exposed options.
+- `local_ai_server/config.py`
+  - Added compatibility alias for Whisper.cpp path:
+    - `WHISPER_CPP_MODEL_PATH` OR legacy `LOCAL_WHISPER_CPP_MODEL_PATH`
+  - Added compatibility alias for STT idle timeout:
+    - `LOCAL_STT_IDLE_MS` OR legacy `LOCAL_STT_IDLE_TIMEOUT_MS`
+
+### Validation
+
+- `python3 -m py_compile local_ai_server/config.py` passed.
+- `npm --prefix admin_ui/frontend run build` passed.

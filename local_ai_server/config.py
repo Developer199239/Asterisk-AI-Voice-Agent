@@ -135,6 +135,18 @@ class LocalAIConfig:
         else:
             llm_context = 2048 if _parse_bool(os.getenv("GPU_AVAILABLE", "0"), default=False) else 768
 
+        # Backward-compatibility aliases for older UI keys.
+        whisper_cpp_model_path = (
+            os.getenv("WHISPER_CPP_MODEL_PATH")
+            or os.getenv("LOCAL_WHISPER_CPP_MODEL_PATH")
+            or "/app/models/stt/ggml-base.en.bin"
+        )
+        stt_idle_ms_raw = (
+            os.getenv("LOCAL_STT_IDLE_MS")
+            or os.getenv("LOCAL_STT_IDLE_TIMEOUT_MS")
+            or "5000"
+        )
+
         return cls(
             runtime_mode=runtime_mode,
             ws_host=os.getenv("LOCAL_WS_HOST", "127.0.0.1"),
@@ -151,9 +163,7 @@ class LocalAIConfig:
             faster_whisper_device=os.getenv("FASTER_WHISPER_DEVICE", "cpu"),
             faster_whisper_compute=os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8"),
             faster_whisper_language=os.getenv("FASTER_WHISPER_LANGUAGE", "en"),
-            whisper_cpp_model_path=os.getenv(
-                "WHISPER_CPP_MODEL_PATH", "/app/models/stt/ggml-base.en.bin"
-            ),
+            whisper_cpp_model_path=whisper_cpp_model_path,
             whisper_cpp_language=os.getenv("WHISPER_CPP_LANGUAGE", "en"),
             kroko_url=os.getenv(
                 "KROKO_URL",
@@ -208,7 +218,7 @@ class LocalAIConfig:
             kokoro_api_base_url=(os.getenv("KOKORO_API_BASE_URL", "") or "").strip(),
             kokoro_api_key=(os.getenv("KOKORO_API_KEY", "") or "").strip(),
             kokoro_api_model=(os.getenv("KOKORO_API_MODEL", "model") or "model").strip(),
-            stt_idle_ms=int(os.getenv("LOCAL_STT_IDLE_MS", "5000")),
+            stt_idle_ms=int(stt_idle_ms_raw),
             stt_segment_energy_threshold=int(os.getenv("LOCAL_STT_SEGMENT_ENERGY_THRESHOLD", "1200")),
             stt_segment_preroll_ms=int(os.getenv("LOCAL_STT_SEGMENT_PREROLL_MS", "200")),
             stt_segment_min_ms=int(os.getenv("LOCAL_STT_SEGMENT_MIN_MS", "250")),
