@@ -5567,22 +5567,26 @@ class Engine:
                     return
                 if not getattr(session, "provider_session_active", False):
                     return
-                # CRITICAL FIX: Google Live needs gating, but OpenAI/Deepgram don't
-                # - Google Live: Bidirectional audio, NO server-side echo cancellation → NEEDS gating
-                # - OpenAI Realtime: Server-side AEC → gating harmful
-                # - Deepgram: Text-based output → no echo risk
-                needs_gating = provider_name == "google_live"
+                # Providers with native barge-in have server-side AEC (they know their
+                # own output and subtract echo).  They MUST receive real audio during TTS
+                # so their AEC can detect user speech for barge-in.  Only gate providers
+                # without native barge-in.
+                has_native_bi = False
+                try:
+                    _caps = None
+                    if provider_caps_source and hasattr(provider_caps_source, 'get_capabilities'):
+                        _caps = provider_caps_source.get_capabilities()
+                    has_native_bi = bool(_caps and getattr(_caps, 'has_native_barge_in', False))
+                except Exception:
+                    pass
+                needs_gating = not has_native_bi and provider_name == "google_live"
                 
                 if needs_gating and not session.audio_capture_enabled:
-                    # CRITICAL: Google Live requires continuous audio stream (like WebRTC)
-                    # Send SILENCE frames instead of blocking to maintain stream continuity
-                    # This prevents echo while keeping VAD healthy
                     logger.debug(
-                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
+                        "🔇 GATING ACTIVE - Sending silence frame (TTS playing)",
                         call_id=caller_channel_id,
                         audio_capture_enabled=session.audio_capture_enabled,
                     )
-                    # Replace audio with silence (zero-filled PCM16)
                     pcm_bytes = b'\x00' * len(pcm_bytes)
 
                 # Provider-agnostic upstream squelch: replace non-speech audio with silence so
@@ -7068,19 +7072,25 @@ class Engine:
                 # Preserve original inbound audio for local barge-in fallback checks (never run VAD on silence-substituted frames).
                 pcm_for_barge_in = pcm_16k
 
-                # CRITICAL: Check if audio capture is disabled (TTS playing)
-                # For Google Live: Send silence frames to maintain stream continuity (like AudioSocket)
-                # For OpenAI/Deepgram: Can drop audio (they handle gaps gracefully)
-                needs_gating = provider_name == "google_live"
+                # Providers with native barge-in have server-side AEC — they MUST
+                # receive real audio during TTS so their AEC can detect user speech.
+                # Only gate providers that lack native barge-in.
+                has_native_bi = False
+                try:
+                    _caps = None
+                    if provider_caps_source and hasattr(provider_caps_source, 'get_capabilities'):
+                        _caps = provider_caps_source.get_capabilities()
+                    has_native_bi = bool(_caps and getattr(_caps, 'has_native_barge_in', False))
+                except Exception:
+                    pass
+                needs_gating = not has_native_bi and provider_name == "google_live"
                 
                 if needs_gating and not session.audio_capture_enabled:
-                    # Send SILENCE instead of dropping to maintain Google Live's stream
                     logger.debug(
-                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
+                        "🔇 GATING ACTIVE - Sending silence frame (TTS playing)",
                         call_id=caller_channel_id,
                         provider=provider_name,
                     )
-                    # Replace audio with silence (zero-filled PCM16)
                     pcm_16k = b'\x00' * len(pcm_16k)
                 elif not needs_gating and not session.audio_capture_enabled:
                     # For other providers, do not forward audio during TTS, but still run
