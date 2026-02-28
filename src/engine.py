@@ -4350,28 +4350,6 @@ class Engine:
                 )
                 return
 
-            # Providers with native barge-in handle their own interruption
-            # detection via server-side AEC.  Local TalkDetect sees acoustic
-            # echo from the phone handset and falsely triggers after the fixed
-            # protection window expires.  Suppress for the entire duration of
-            # active streaming playback; the provider will emit ProviderBargeIn
-            # or equivalent when it detects real user speech.
-            try:
-                provider = self._call_providers.get(call_id)
-                if provider and hasattr(provider, "get_capabilities"):
-                    caps = provider.get_capabilities()
-                    if caps and getattr(caps, "has_native_barge_in", False):
-                        if self.streaming_playback_manager.is_stream_active(call_id):
-                            logger.debug(
-                                "TalkDetect suppressed (native barge-in provider, TTS active)",
-                                call_id=call_id,
-                                provider=getattr(session, "provider_name", ""),
-                                tts_elapsed_ms=tts_elapsed_ms,
-                            )
-                            return
-            except Exception:
-                pass
-
             cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
             last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
             if last_barge_in_ts and (now - last_barge_in_ts) * 1000 < cooldown_ms:
@@ -5567,26 +5545,22 @@ class Engine:
                     return
                 if not getattr(session, "provider_session_active", False):
                     return
-                # Providers with native barge-in have server-side AEC (they know their
-                # own output and subtract echo).  They MUST receive real audio during TTS
-                # so their AEC can detect user speech for barge-in.  Only gate providers
-                # without native barge-in.
-                has_native_bi = False
-                try:
-                    _caps = None
-                    if provider_caps_source and hasattr(provider_caps_source, 'get_capabilities'):
-                        _caps = provider_caps_source.get_capabilities()
-                    has_native_bi = bool(_caps and getattr(_caps, 'has_native_barge_in', False))
-                except Exception:
-                    pass
-                needs_gating = not has_native_bi and provider_name == "google_live"
+                # CRITICAL FIX: Google Live needs gating, but OpenAI/Deepgram don't
+                # - Google Live: Bidirectional audio, NO server-side echo cancellation → NEEDS gating
+                # - OpenAI Realtime: Server-side AEC → gating harmful
+                # - Deepgram: Text-based output → no echo risk
+                needs_gating = provider_name == "google_live"
                 
                 if needs_gating and not session.audio_capture_enabled:
+                    # CRITICAL: Google Live requires continuous audio stream (like WebRTC)
+                    # Send SILENCE frames instead of blocking to maintain stream continuity
+                    # This prevents echo while keeping VAD healthy
                     logger.debug(
-                        "🔇 GATING ACTIVE - Sending silence frame (TTS playing)",
+                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
                         call_id=caller_channel_id,
                         audio_capture_enabled=session.audio_capture_enabled,
                     )
+                    # Replace audio with silence (zero-filled PCM16)
                     pcm_bytes = b'\x00' * len(pcm_bytes)
 
                 # Provider-agnostic upstream squelch: replace non-speech audio with silence so
@@ -6477,19 +6451,6 @@ class Engine:
             if allow and provider_name not in allow:
                 return
 
-            # Skip local VAD fallback for providers that handle their own barge-in
-            # natively (has_native_barge_in=True).  These providers emit ProviderBargeIn
-            # or equivalent events through on_provider_event, so local VAD is redundant
-            # and can false-trigger on acoustic echo from speakerphone.
-            try:
-                provider = self._call_providers.get(call_id)
-                if provider and hasattr(provider, "get_capabilities"):
-                    caps = provider.get_capabilities()
-                    if caps and getattr(caps, "has_native_barge_in", False):
-                        return
-            except Exception:
-                pass
-
             # Only relevant while streaming playback is active (agent is speaking).
             try:
                 if not self.streaming_playback_manager.is_stream_active(call_id):
@@ -7072,25 +7033,19 @@ class Engine:
                 # Preserve original inbound audio for local barge-in fallback checks (never run VAD on silence-substituted frames).
                 pcm_for_barge_in = pcm_16k
 
-                # Providers with native barge-in have server-side AEC — they MUST
-                # receive real audio during TTS so their AEC can detect user speech.
-                # Only gate providers that lack native barge-in.
-                has_native_bi = False
-                try:
-                    _caps = None
-                    if provider_caps_source and hasattr(provider_caps_source, 'get_capabilities'):
-                        _caps = provider_caps_source.get_capabilities()
-                    has_native_bi = bool(_caps and getattr(_caps, 'has_native_barge_in', False))
-                except Exception:
-                    pass
-                needs_gating = not has_native_bi and provider_name == "google_live"
+                # CRITICAL: Check if audio capture is disabled (TTS playing)
+                # For Google Live: Send silence frames to maintain stream continuity (like AudioSocket)
+                # For OpenAI/Deepgram: Can drop audio (they handle gaps gracefully)
+                needs_gating = provider_name == "google_live"
                 
                 if needs_gating and not session.audio_capture_enabled:
+                    # Send SILENCE instead of dropping to maintain Google Live's stream
                     logger.debug(
-                        "🔇 GATING ACTIVE - Sending silence frame (TTS playing)",
+                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
                         call_id=caller_channel_id,
                         provider=provider_name,
                     )
+                    # Replace audio with silence (zero-filled PCM16)
                     pcm_16k = b'\x00' * len(pcm_16k)
                 elif not needs_gating and not session.audio_capture_enabled:
                     # For other providers, do not forward audio during TTS, but still run
