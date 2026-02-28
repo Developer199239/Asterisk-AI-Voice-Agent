@@ -4350,6 +4350,26 @@ class Engine:
                 )
                 return
 
+            # Providers with server-side AEC handle their own barge-in
+            # detection.  Local TalkDetect sees acoustic echo from the
+            # phone handset and falsely triggers after the fixed
+            # protection window expires.  Suppress for the entire
+            # duration of active streaming playback.
+            _prov = getattr(session, "provider_name", None) or ""
+            _SERVER_AEC_PROVIDERS = {"google_live", "openai_realtime", "deepgram", "elevenlabs_agent"}
+            if _prov in _SERVER_AEC_PROVIDERS:
+                try:
+                    if self.streaming_playback_manager.is_stream_active(call_id):
+                        logger.debug(
+                            "TalkDetect suppressed (server-side AEC provider, TTS active)",
+                            call_id=call_id,
+                            provider=_prov,
+                            tts_elapsed_ms=tts_elapsed_ms,
+                        )
+                        return
+                except Exception:
+                    pass
+
             cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
             last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
             if last_barge_in_ts and (now - last_barge_in_ts) * 1000 < cooldown_ms:
@@ -6449,6 +6469,14 @@ class Engine:
             provider_name = getattr(session, "provider_name", None) or getattr(self.config, "default_provider", "")
             allow = set((getattr(cfg, "provider_fallback_providers", None) or []) or [])
             if allow and provider_name not in allow:
+                return
+
+            # Providers with server-side AEC handle their own barge-in
+            # detection.  The local VAD fallback sees acoustic echo from
+            # the phone handset on the ExternalMedia inbound stream and
+            # falsely triggers barge-in, cutting off responses.
+            _SERVER_AEC_PROVIDERS = {"google_live", "openai_realtime", "deepgram", "elevenlabs_agent"}
+            if provider_name in _SERVER_AEC_PROVIDERS:
                 return
 
             # Only relevant while streaming playback is active (agent is speaking).
