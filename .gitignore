@@ -208,7 +208,8 @@ config/ai-agent.local.yaml
 
 # Logs and archived folders (development artifacts, not for main)
 logs/
-archived/
+archived/**
+!archived/local-ai-server-improvements.md
 
 # IDE specific
 *.swp

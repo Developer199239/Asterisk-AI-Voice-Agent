@@ -90,6 +90,14 @@ class LocalAIConfig:
     kokoro_api_model: str = "model"
 
     stt_idle_ms: int = 5000
+    # Telephony-friendly utterance segmentation for batch STT backends (Whisper family).
+    # These are intentionally separate from stt_idle_ms (which is used by some streaming backends)
+    # so we can tune Whisper segmentation without affecting Vosk/Sherpa/Kroko behavior.
+    stt_segment_energy_threshold: int = 1200
+    stt_segment_preroll_ms: int = 200
+    stt_segment_min_ms: int = 250
+    stt_segment_silence_ms: int = 500
+    stt_segment_max_ms: int = 12000
 
     @classmethod
     def from_env(cls) -> "LocalAIConfig":
@@ -201,4 +209,9 @@ class LocalAIConfig:
             kokoro_api_key=(os.getenv("KOKORO_API_KEY", "") or "").strip(),
             kokoro_api_model=(os.getenv("KOKORO_API_MODEL", "model") or "model").strip(),
             stt_idle_ms=int(os.getenv("LOCAL_STT_IDLE_MS", "5000")),
+            stt_segment_energy_threshold=int(os.getenv("LOCAL_STT_SEGMENT_ENERGY_THRESHOLD", "1200")),
+            stt_segment_preroll_ms=int(os.getenv("LOCAL_STT_SEGMENT_PREROLL_MS", "200")),
+            stt_segment_min_ms=int(os.getenv("LOCAL_STT_SEGMENT_MIN_MS", "250")),
+            stt_segment_silence_ms=int(os.getenv("LOCAL_STT_SEGMENT_SILENCE_MS", "500")),
+            stt_segment_max_ms=int(os.getenv("LOCAL_STT_SEGMENT_MAX_MS", "12000")),
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import audioop
 import base64
 import json
 import logging
@@ -749,6 +750,8 @@ class LocalAIServer:
         self._llm_lock = asyncio.Lock()
         # Lock to serialize Faster-Whisper inference (CTranslate2 is NOT thread-safe)
         self._faster_whisper_lock = asyncio.Lock()
+        # Lock to serialize Whisper.cpp inference (avoid concurrent model access).
+        self._whisper_cpp_lock = asyncio.Lock()
         # Component -> last startup error (used for degraded mode status/logging)
         self.startup_errors: Dict[str, str] = {}
         # Track runtime fallbacks (e.g. CUDA -> CPU) for operator visibility.
@@ -2856,6 +2859,16 @@ class LocalAIServer:
         session.last_partial = ""
         session.partial_emitted = False
         session.audio_buffer = b""
+        # Batch STT segmentation state (Whisper family).
+        session.stt_segment_preroll = b""
+        session.stt_segment_buffer = b""
+        session.stt_segment_last_voice_mono = 0.0
+        session.stt_segment_in_speech = False
+        # Legacy per-backend buffers (kept for safety; segmenter no longer uses them).
+        if hasattr(session, "fw_audio_buffer"):
+            session.fw_audio_buffer = b""
+        if hasattr(session, "wcpp_audio_buffer"):
+            session.wcpp_audio_buffer = b""
         session.last_request_meta.clear()
         session.last_final_text = last_text
         session.last_final_norm = _normalize_text(last_text)
@@ -2922,72 +2935,13 @@ class LocalAIServer:
         audio_data: bytes,
         input_rate: int,
     ) -> List[Dict[str, Any]]:
-        """Feed audio into Faster-Whisper and return transcript updates."""
-        if not self.faster_whisper_backend:
-            logging.error("Faster-Whisper STT backend not initialized")
-            return []
-
-        # Buffer audio for Faster-Whisper (needs sufficient audio for transcription)
-        if not hasattr(session, 'fw_audio_buffer'):
-            session.fw_audio_buffer = b""
-        
-        # Resample to 16kHz if needed
-        if input_rate != PCM16_TARGET_RATE:
-            audio_bytes = await asyncio.to_thread(
-                self.audio_processor.resample_audio,
-                audio_data,
-                input_rate,
-                PCM16_TARGET_RATE,
-                "raw",
-                "raw",
-            )
-        else:
-            audio_bytes = audio_data
-
-        session.fw_audio_buffer += audio_bytes
-        
-        # Only process when we have enough audio (e.g., 1 second = 32000 bytes at 16kHz mono 16-bit)
-        MIN_BUFFER_SIZE = 32000  # 1 second of audio
-        if len(session.fw_audio_buffer) < MIN_BUFFER_SIZE:
-            return []
-
-        updates: List[Dict[str, Any]] = []
-        
-        try:
-            # Acquire lock to prevent concurrent access (CTranslate2 is NOT thread-safe)
-            async with self._faster_whisper_lock:
-                # Reset backend's internal buffer since we manage our own buffer
-                await asyncio.to_thread(self.faster_whisper_backend.reset)
-                
-                # Process buffered audio with Faster-Whisper
-                await asyncio.to_thread(
-                    self.faster_whisper_backend.process_audio,
-                    session.fw_audio_buffer
-                )
-                
-                # Call finalize() to get the final transcript
-                # (Whisper is a batch model, each chunk is effectively final)
-                result = await asyncio.to_thread(self.faster_whisper_backend.finalize)
-            
-            if result and result.get("text"):
-                transcript = result["text"].strip()
-                is_final = result.get("type") == "final"
-                logging.info("📝 STT RESULT - Faster-Whisper transcript: '%s' (final=%s)", transcript, is_final)
-                updates.append({
-                    "type": "stt_result",
-                    "is_final": is_final,
-                    "text": transcript,
-                    "transcript": transcript,
-                })
-            
-            # Clear buffer after processing
-            session.fw_audio_buffer = b""
-            
-        except Exception as exc:
-            logging.error("Faster-Whisper STT stream processing failed: %s", exc, exc_info=True)
-            session.fw_audio_buffer = b""
-
-        return updates
+        """Telephony-friendly utterance segmentation + one-shot Faster-Whisper decode."""
+        return await self._process_stt_stream_whisper_segmented(
+            session,
+            audio_data,
+            input_rate,
+            backend_name="faster_whisper",
+        )
 
     async def _process_stt_stream_whisper_cpp(
         self,
@@ -2995,18 +2949,45 @@ class LocalAIServer:
         audio_data: bytes,
         input_rate: int,
     ) -> List[Dict[str, Any]]:
-        """Feed audio into Whisper.cpp and return transcript updates."""
-        if not self.whisper_cpp_backend:
-            logging.error("Whisper.cpp STT backend not initialized")
+        """Telephony-friendly utterance segmentation + one-shot Whisper.cpp decode."""
+        return await self._process_stt_stream_whisper_segmented(
+            session,
+            audio_data,
+            input_rate,
+            backend_name="whisper_cpp",
+        )
+
+    async def _process_stt_stream_whisper_segmented(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+        *,
+        backend_name: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Segment telephony audio into utterances and run a one-shot transcription.
+
+        Whisper-family backends are batch models; emitting a "final" every 1s causes chopped
+        transcripts and incoherent turn-taking. We instead do simple energy-based segmentation
+        with preroll and silence endpointer, then decode the entire utterance in one shot.
+        """
+        if backend_name == "faster_whisper":
+            backend = self.faster_whisper_backend
+            lock = self._faster_whisper_lock
+        elif backend_name == "whisper_cpp":
+            backend = self.whisper_cpp_backend
+            lock = self._whisper_cpp_lock
+        else:  # pragma: no cover - defensive guard
+            logging.error("Unknown Whisper backend: %s", backend_name)
             return []
 
-        # Buffer audio for Whisper.cpp (needs sufficient audio for transcription)
-        if not hasattr(session, 'wcpp_audio_buffer'):
-            session.wcpp_audio_buffer = b""
-        
-        # Resample to 16kHz if needed
+        if not backend:
+            logging.error("%s STT backend not initialized", backend_name)
+            return []
+
         if input_rate != PCM16_TARGET_RATE:
-            audio_bytes = await asyncio.to_thread(
+            pcm16 = await asyncio.to_thread(
                 self.audio_processor.resample_audio,
                 audio_data,
                 input_rate,
@@ -3015,49 +2996,100 @@ class LocalAIServer:
                 "raw",
             )
         else:
-            audio_bytes = audio_data
+            pcm16 = audio_data
 
-        session.wcpp_audio_buffer += audio_bytes
-        
-        # Only process when we have enough audio (e.g., 1 second = 32000 bytes at 16kHz mono 16-bit)
-        MIN_BUFFER_SIZE = 32000  # 1 second of audio
-        if len(session.wcpp_audio_buffer) < MIN_BUFFER_SIZE:
+        if not pcm16:
             return []
 
-        updates: List[Dict[str, Any]] = []
-        
-        try:
-            # Reset backend's internal buffer since we manage our own buffer
-            await asyncio.to_thread(self.whisper_cpp_backend.reset)
-            
-            # Process buffered audio with Whisper.cpp
-            await asyncio.to_thread(
-                self.whisper_cpp_backend.process_audio,
-                session.wcpp_audio_buffer
-            )
-            
-            # Call finalize() to get the final transcript
-            result = await asyncio.to_thread(self.whisper_cpp_backend.finalize)
-            
-            if result and result.get("text"):
-                transcript = result["text"].strip()
-                is_final = result.get("type") == "final"
-                logging.info("📝 STT RESULT - Whisper.cpp transcript: '%s' (final=%s)", transcript, is_final)
-                updates.append({
-                    "type": "stt_result",
-                    "is_final": is_final,
-                    "text": transcript,
-                    "transcript": transcript,
-                })
-            
-            # Clear buffer after processing
-            session.wcpp_audio_buffer = b""
-            
-        except Exception as exc:
-            logging.error("Whisper.cpp STT stream processing failed: %s", exc, exc_info=True)
-            session.wcpp_audio_buffer = b""
+        # Keep a small preroll buffer so we don't clip initial phonemes.
+        preroll_max = int(PCM16_TARGET_RATE * 2 * (max(self.config.stt_segment_preroll_ms, 0) / 1000.0))
+        if preroll_max > 0:
+            session.stt_segment_preroll = (session.stt_segment_preroll + pcm16)[-preroll_max:]
+        else:
+            session.stt_segment_preroll = b""
 
-        return updates
+        try:
+            rms = int(audioop.rms(pcm16, 2))
+        except Exception:
+            rms = 0
+
+        now = monotonic()
+        is_voice = rms >= int(self.config.stt_segment_energy_threshold)
+
+        if is_voice:
+            session.stt_segment_last_voice_mono = now
+            if not session.stt_segment_in_speech:
+                session.stt_segment_in_speech = True
+                session.stt_segment_buffer = session.stt_segment_preroll + pcm16
+            else:
+                session.stt_segment_buffer += pcm16
+        elif session.stt_segment_in_speech:
+            # Keep buffering a bit of trailing silence while in-speech.
+            session.stt_segment_buffer += pcm16
+
+        if not session.stt_segment_in_speech:
+            return []
+
+        buf_len = len(session.stt_segment_buffer)
+        buf_ms = (float(buf_len) / float(PCM16_TARGET_RATE * 2)) * 1000.0
+        max_ms = float(max(250, int(self.config.stt_segment_max_ms)))
+        min_ms = float(max(0, int(self.config.stt_segment_min_ms)))
+        silence_ms = float(max(0, int(self.config.stt_segment_silence_ms)))
+        last_voice = float(session.stt_segment_last_voice_mono or 0.0)
+        since_voice_ms = (now - last_voice) * 1000.0 if last_voice > 0.0 else 0.0
+
+        end_due_to_silence = buf_ms >= min_ms and since_voice_ms >= silence_ms
+        end_due_to_max = buf_ms >= max_ms
+        if not (end_due_to_silence or end_due_to_max):
+            return []
+
+        # Finalize this utterance and reset segmenter state before decoding.
+        segment_pcm16 = session.stt_segment_buffer
+        session.stt_segment_preroll = b""
+        session.stt_segment_buffer = b""
+        session.stt_segment_last_voice_mono = 0.0
+        session.stt_segment_in_speech = False
+
+        if buf_ms < min_ms:
+            return []
+
+        request_mode = ((session.last_request_meta or {}).get("mode") or "").strip().lower()
+        started_ms = int(time() * 1000)
+        try:
+            async with lock:
+                text = await asyncio.to_thread(getattr(backend, "transcribe_pcm16"), segment_pcm16)
+        except Exception:
+            logging.error("Whisper segmented transcription failed backend=%s", backend_name, exc_info=True)
+            text = ""
+        took_ms = int(time() * 1000) - started_ms
+
+        transcript = (text or "").strip()
+        try:
+            has_alnum = any(ch.isalnum() for ch in transcript) if transcript else False
+        except Exception:
+            has_alnum = True
+        if transcript and not has_alnum:
+            transcript = ""
+
+        logging.info(
+            "📝 STT RESULT - %s segmented utterance ms=%.0f took=%dms text=%r",
+            backend_name,
+            buf_ms,
+            took_ms,
+            transcript[:120],
+        )
+
+        if request_mode != "stt" and not transcript:
+            return []
+
+        return [
+            {
+                "type": "stt_result",
+                "is_final": True,
+                "text": transcript,
+                "transcript": transcript,
+            }
+        ]
 
     async def _process_stt_stream_kroko(
         self,
