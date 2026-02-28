@@ -590,6 +590,8 @@ LLM_MODELS = [
     {"id": "qwen25_3b", "name": "Qwen 2.5-3B Instruct", "size_mb": 2100, "size_display": "2.1 GB",
      "description": "Excellent instruction following, multilingual",
      "chat_format": "chatml",
+     "tool_calling": "experimental",
+     "tool_calling_note": "Supports tool calls via ChatML; smaller size may produce inconsistent structured output in long conversations.",
      "download_url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
      "model_path": "qwen2.5-3b-instruct-q4_k_m.gguf", "recommended_ram_gb": 8},
     {"id": "gemma2_2b", "name": "Gemma 2-2B Instruct", "size_mb": 1800, "size_display": "1.8 GB",

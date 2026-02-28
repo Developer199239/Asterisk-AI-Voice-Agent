@@ -49,6 +49,7 @@ _LLM_CONFIG_MAP = {
     "gpu_layers": "llm_gpu_layers",
     "system_prompt": "llm_system_prompt",
     "use_mlock": "llm_use_mlock",
+    "chat_format": "llm_chat_format",
 }
 
 

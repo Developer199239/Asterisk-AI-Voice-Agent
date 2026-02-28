@@ -980,6 +980,14 @@ async def switch_model(request: SwitchModelRequest):
                 llm_cfg["context"] = int(request.llm_context)
             if request.llm_max_tokens is not None:
                 llm_cfg["max_tokens"] = int(request.llm_max_tokens)
+            # Resolve chat_format from catalog so hot-reload uses the correct template.
+            if request.model_path:
+                from api.models_catalog import LLM_MODELS as _LLM_CATALOG
+                _cat_by_path = {m.get("model_path", ""): m for m in _LLM_CATALOG if m.get("model_path")}
+                model_basename = os.path.basename(request.model_path)
+                cat_entry = _cat_by_path.get(model_basename, {})
+                catalog_chat_format = cat_entry.get("chat_format", "")
+                llm_cfg["chat_format"] = catalog_chat_format
             if llm_cfg:
                 payload["llm_config"] = llm_cfg
 

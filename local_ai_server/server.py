@@ -1686,20 +1686,39 @@ class LocalAIServer:
             "Do not add any other text."
         )
         try:
-            output = self.llm_model(
-                probe_prompt,
-                max_tokens=64,
-                stop=self.llm_stop_tokens,
-                echo=False,
-                temperature=0.0,
-                top_p=1.0,
-                repeat_penalty=self.llm_repeat_penalty,
-            )
-            raw = (
-                output.get("choices", [{}])[0].get("text", "").strip()
-                if isinstance(output, dict)
-                else ""
-            )
+            use_chat_path = bool(self.llm_chat_format)
+            if use_chat_path:
+                chat_output = self.llm_model.create_chat_completion(
+                    messages=[
+                        {"role": "system", "content": "You output tool calls in the exact format requested. No extra text."},
+                        {"role": "user", "content": probe_prompt},
+                    ],
+                    max_tokens=64,
+                    stop=self.llm_stop_tokens,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                raw = (
+                    chat_output.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if isinstance(chat_output, dict)
+                    else ""
+                )
+            else:
+                output = self.llm_model(
+                    probe_prompt,
+                    max_tokens=64,
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                raw = (
+                    output.get("choices", [{}])[0].get("text", "").strip()
+                    if isinstance(output, dict)
+                    else ""
+                )
             lowered = (raw or "").lower()
             has_primary_wrapper = "<tool_call" in lowered and "</tool_call>" in lowered
             has_named_wrapper = "<hangup_call" in lowered and "</hangup_call>" in lowered
