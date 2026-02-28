@@ -2983,7 +2983,7 @@ class LocalAIServer:
             return []
 
         if not backend:
-            logging.error("%s STT backend not initialized", backend_name)
+            logging.error("%s STT backend not initialized call_id=%s", backend_name, session.call_id)
             return []
 
         if input_rate != PCM16_TARGET_RATE:
@@ -3059,7 +3059,12 @@ class LocalAIServer:
             async with lock:
                 text = await asyncio.to_thread(getattr(backend, "transcribe_pcm16"), segment_pcm16)
         except Exception:
-            logging.error("Whisper segmented transcription failed backend=%s", backend_name, exc_info=True)
+            logging.error(
+                "Whisper segmented transcription failed backend=%s call_id=%s",
+                backend_name,
+                session.call_id,
+                exc_info=True,
+            )
             text = ""
         took_ms = int(time() * 1000) - started_ms
 
@@ -3072,8 +3077,10 @@ class LocalAIServer:
             transcript = ""
 
         logging.info(
-            "📝 STT RESULT - %s segmented utterance ms=%.0f took=%dms text=%r",
+            "📝 STT RESULT - %s segmented utterance call_id=%s mode=%s ms=%.0f took=%dms text=%r",
             backend_name,
+            session.call_id,
+            request_mode or "unknown",
             buf_ms,
             took_ms,
             transcript[:120],
