@@ -127,3 +127,29 @@ On `10.44.0.103`:
 ### Validation
 
 - `npm --prefix admin_ui/frontend run build` passed.
+
+## 2026-02-28 — Local AI WS Protocol Docs Refresh
+
+### Goal
+
+- Bring `docs/local-ai-server/PROTOCOL.md` in sync with latest Local AI Server behavior (barge-in, tool gateway, segmentation, status/switch payloads, env tuning).
+
+### Changes
+
+- `docs/local-ai-server/PROTOCOL.md`
+  - Updated source-of-truth references to `ws_protocol.py`, `server.py`, `control_plane.py`, `status_builder.py`, and `protocol_contract.py`.
+  - Added/expanded protocol coverage for:
+    - `barge_in` / `barge_in_ack`
+    - `llm_tool_request` / `llm_tool_response`
+    - `backends` / `backend_schema` introspection
+  - Updated `status_response` example to include modern fields (`gpu`, `config.runtime_mode`, LLM `prompt_fit`, `tool_capability`, etc.).
+  - Expanded `switch_model` docs to include nested `stt_config` / `tts_config` / `llm_config` payloads and `chat_format` hot-reload support.
+  - Corrected STT idle default to `LOCAL_STT_IDLE_MS=5000` and documented Whisper segmentation env knobs.
+  - Replaced outdated generic `type=error` envelope section with current behavior-specific error contract.
+  - Refreshed performance section using recent community GPU test references.
+- `docs/local-ai-server/protocol.schema.json`
+  - Regenerated from `local_ai_server/protocol_contract.py` to sync schema with current contract (including LLM tool gateway types).
+
+### Validation
+
+- `python3 local_ai_server/protocol_contract.py --write-schema docs/local-ai-server/protocol.schema.json` passed.
