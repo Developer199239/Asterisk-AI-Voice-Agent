@@ -2154,9 +2154,9 @@ class Engine:
                     )
 
     def _is_caller_channel(self, channel: dict) -> bool:
-        """Check if this is a caller channel (SIP, PJSIP, etc.)"""
+        """Check if this is a caller channel (SIP, PJSIP, DAHDI, Dongle, etc.)"""
         channel_name = channel.get('name', '')
-        return any(channel_name.startswith(prefix) for prefix in ['SIP/', 'PJSIP/', 'DAHDI/', 'IAX2/'])
+        return any(channel_name.startswith(prefix) for prefix in ['SIP/', 'PJSIP/', 'DAHDI/', 'IAX2/', 'Dongle/'])
 
     def _is_local_channel(self, channel: dict) -> bool:
         """Check if this is a Local channel"""
