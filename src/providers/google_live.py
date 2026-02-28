@@ -1513,10 +1513,14 @@ class GoogleLiveProvider(AIProviderInterface):
                     buffer_length=len(self._input_transcription_buffer),
                     in_audio_burst=self._in_audio_burst,
                 )
-                # Provider-native barge-in: if we're currently outputting audio and Google's
-                # server-side AEC detects real user speech, signal the engine to flush playback.
-                if self._in_audio_burst:
-                    await self._emit_provider_barge_in(event_type="inputTranscription")
+                # Provider-native barge-in: Google's server-side AEC detected real user
+                # speech — signal the engine to flush any buffered streaming playback.
+                # NOTE: We always emit here (not gated on _in_audio_burst) because Google
+                # stops sending new audio bytes BEFORE emitting inputTranscription, but
+                # the engine's StreamingPlaybackManager may still be pacing buffered audio.
+                # The engine's on_provider_event handler already checks is_stream_active
+                # and tts_playing before applying the barge-in action.
+                await self._emit_provider_barge_in(event_type="inputTranscription")
                 intent = self._detect_user_end_intent(self._input_transcription_buffer)
                 if intent and not self._user_end_intent:
                     self._user_end_intent = intent
