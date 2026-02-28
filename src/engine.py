@@ -6679,6 +6679,13 @@ class Engine:
                 return
 
             # Stop/flush streaming playback first (prevents tail audio).
+            # Mark end_reason so cleanup skips remainder flush (avoids oversized RTP packets).
+            try:
+                _sinfo = self.streaming_playback_manager.active_streams.get(call_id)
+                if _sinfo is not None:
+                    _sinfo['end_reason'] = 'barge-in'
+            except Exception:
+                pass
             try:
                 await self.streaming_playback_manager.stop_streaming_playback(call_id)
             except Exception:

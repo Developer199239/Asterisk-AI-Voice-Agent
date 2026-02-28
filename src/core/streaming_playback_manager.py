@@ -3467,7 +3467,17 @@ class StreamingPlaybackManager:
             # Flush any remainder bytes as a final frame
             try:
                 rem = self.frame_remainders.get(call_id, b"") or b""
-                if rem:
+                # Skip remainder flush when stream was interrupted (barge-in) — the
+                # caller spoke over the agent so sending leftover audio is wrong and
+                # dumping a large remainder as a single oversized RTP packet causes
+                # robotic audio artifacts on Asterisk.
+                end_reason = ""
+                try:
+                    end_reason = str((self.active_streams.get(call_id) or {}).get('end_reason', '') or '')
+                except Exception:
+                    pass
+                barge_in_end = any(k in end_reason for k in ("barge", "interrupt", "cancel"))
+                if rem and not barge_in_end:
                     self._decrement_buffered_bytes(call_id, len(rem))
                     if self.audio_transport == "audiosocket":
                         fmt = (
@@ -3494,7 +3504,25 @@ class StreamingPlaybackManager:
                         # small pacing to let Asterisk play the last frame
                         await asyncio.sleep(self.chunk_size_ms / 1000.0)
                     else:
-                        await self._send_audio_chunk(call_id, stream_id, rem)
+                        # ExternalMedia/RTP: flush at most one frame to avoid
+                        # sending oversized RTP packets that cause audio artifacts.
+                        frame_size = self._frame_size_bytes(call_id)
+                        filler_byte = b"\xFF" if self._is_mulaw(
+                            self._canonicalize_encoding(
+                                (self.active_streams.get(call_id) or {}).get('target_format')
+                            ) or "ulaw"
+                        ) else b"\x00"
+                        if len(rem) < frame_size:
+                            rem = rem + (filler_byte * (frame_size - len(rem)))
+                        await self._send_audio_chunk(call_id, stream_id, rem[:frame_size])
+                elif rem and barge_in_end:
+                    self._decrement_buffered_bytes(call_id, len(rem))
+                    logger.debug(
+                        "Skipped remainder flush (barge-in)",
+                        call_id=call_id,
+                        discarded_bytes=len(rem),
+                        end_reason=end_reason,
+                    )
             except Exception:
                 logger.debug("Remainder flush failed", call_id=call_id, stream_id=stream_id)
 
