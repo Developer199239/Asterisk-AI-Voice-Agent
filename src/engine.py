@@ -2943,7 +2943,12 @@ class Engine:
 
                         if attached and not session.provider_session_active:
                             await self._ensure_provider_session_started(caller_channel_id)
-                        elif not attached:
+                        if attached:
+                            try:
+                                await self._enable_pipeline_talk_detect(session)
+                            except Exception:
+                                logger.debug("TALK_DETECT enable failed after ExternalMedia attach", call_id=caller_channel_id, exc_info=True)
+                        if not attached:
                             logger.error(
                                 "🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge (direct attach)",
                                 external_media_id=external_media_id,
@@ -3005,6 +3010,10 @@ class Engine:
                 
                 # Start provider session now that media path is connected
                 await self._ensure_provider_session_started(caller_channel_id)
+                try:
+                    await self._enable_pipeline_talk_detect(session)
+                except Exception:
+                    logger.debug("TALK_DETECT enable failed after AudioSocket attach", call_id=caller_channel_id, exc_info=True)
             else:
                 logger.error("🎯 HYBRID ARI - Failed to add Local channel to bridge", 
                            local_channel_id=local_channel_id,
@@ -4217,14 +4226,16 @@ class Engine:
             logger.error("Error handling ChannelVarset", error=str(exc), exc_info=True)
 
     async def _enable_pipeline_talk_detect(self, session: CallSession) -> None:
-        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel for pipelines."""
+        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel.
+
+        Works for both pipeline calls and local-provider streaming calls so that
+        barge-in can trigger even while TTS gating disables RTP audio capture.
+        """
         try:
             cfg = getattr(self.config, "barge_in", None)
             if not cfg or not bool(getattr(cfg, "pipeline_talk_detect_enabled", False)):
                 return
             call_id = session.call_id
-            if not bool(self._pipeline_forced.get(call_id)):
-                return
             channel_id = getattr(session, "caller_channel_id", None)
             if not channel_id:
                 return
@@ -4249,14 +4260,15 @@ class Engine:
             await self._save_session(session)
             if ok:
                 logger.info(
-                    "Enabled TALK_DETECT for pipeline",
+                    "Enabled TALK_DETECT for barge-in",
                     call_id=call_id,
                     channel_id=channel_id,
                     silence_ms=silence_ms,
                     talking_threshold=talking_thr,
+                    is_pipeline=bool(self._pipeline_forced.get(call_id)),
                 )
             else:
-                logger.warning("Failed to enable TALK_DETECT for pipeline", call_id=call_id, channel_id=channel_id)
+                logger.warning("Failed to enable TALK_DETECT", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("Enable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
@@ -4290,7 +4302,10 @@ class Engine:
             logger.debug("Disable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
     async def _handle_channel_talking_started(self, event: dict) -> None:
-        """Trigger pipeline barge-in when Asterisk detects caller speech during TTS playback."""
+        """Trigger barge-in when Asterisk detects caller speech during TTS playback.
+
+        Works for both pipeline calls and local-provider streaming calls.
+        """
         try:
             channel = event.get("channel", {}) or {}
             channel_id = channel.get("id")
@@ -4301,9 +4316,6 @@ class Engine:
             if not session:
                 return
             call_id = session.call_id
-
-            if not bool(self._pipeline_forced.get(call_id)):
-                return
 
             # Only act when local playback/gating is active; otherwise this is just "caller is talking".
             if bool(getattr(session, "audio_capture_enabled", True)) and not bool(getattr(session, "tts_playing", False)):
@@ -4352,7 +4364,7 @@ class Engine:
             logger.debug("ChannelTalkingStarted handler failed", ari_event=event, exc_info=True)
 
     async def _handle_channel_talking_finished(self, event: dict) -> None:
-        """Informational handler for talk detection end events (pipelines)."""
+        """Informational handler for talk detection end events."""
         try:
             channel = event.get("channel", {}) or {}
             channel_id = channel.get("id")
@@ -4362,8 +4374,6 @@ class Engine:
             if not session:
                 return
             call_id = session.call_id
-            if not bool(self._pipeline_forced.get(call_id)):
-                return
             logger.debug("TalkDetect finished", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("ChannelTalkingFinished handler failed", ari_event=event, exc_info=True)
