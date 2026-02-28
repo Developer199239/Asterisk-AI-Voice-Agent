@@ -4350,25 +4350,27 @@ class Engine:
                 )
                 return
 
-            # Providers with server-side AEC handle their own barge-in
-            # detection.  Local TalkDetect sees acoustic echo from the
-            # phone handset and falsely triggers after the fixed
-            # protection window expires.  Suppress for the entire
-            # duration of active streaming playback.
-            _prov = getattr(session, "provider_name", None) or ""
-            _SERVER_AEC_PROVIDERS = {"google_live", "openai_realtime", "deepgram", "elevenlabs_agent"}
-            if _prov in _SERVER_AEC_PROVIDERS:
-                try:
-                    if self.streaming_playback_manager.is_stream_active(call_id):
-                        logger.debug(
-                            "TalkDetect suppressed (server-side AEC provider, TTS active)",
-                            call_id=call_id,
-                            provider=_prov,
-                            tts_elapsed_ms=tts_elapsed_ms,
-                        )
-                        return
-                except Exception:
-                    pass
+            # Providers with native barge-in handle their own interruption
+            # detection via server-side AEC.  Local TalkDetect sees acoustic
+            # echo from the phone handset and falsely triggers after the fixed
+            # protection window expires.  Suppress for the entire duration of
+            # active streaming playback; the provider will emit ProviderBargeIn
+            # or equivalent when it detects real user speech.
+            try:
+                provider = self._call_providers.get(call_id)
+                if provider and hasattr(provider, "get_capabilities"):
+                    caps = provider.get_capabilities()
+                    if caps and getattr(caps, "has_native_barge_in", False):
+                        if self.streaming_playback_manager.is_stream_active(call_id):
+                            logger.debug(
+                                "TalkDetect suppressed (native barge-in provider, TTS active)",
+                                call_id=call_id,
+                                provider=getattr(session, "provider_name", ""),
+                                tts_elapsed_ms=tts_elapsed_ms,
+                            )
+                            return
+            except Exception:
+                pass
 
             cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
             last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
@@ -6471,13 +6473,18 @@ class Engine:
             if allow and provider_name not in allow:
                 return
 
-            # Providers with server-side AEC handle their own barge-in
-            # detection.  The local VAD fallback sees acoustic echo from
-            # the phone handset on the ExternalMedia inbound stream and
-            # falsely triggers barge-in, cutting off responses.
-            _SERVER_AEC_PROVIDERS = {"google_live", "openai_realtime", "deepgram", "elevenlabs_agent"}
-            if provider_name in _SERVER_AEC_PROVIDERS:
-                return
+            # Skip local VAD fallback for providers that handle their own barge-in
+            # natively (has_native_barge_in=True).  These providers emit ProviderBargeIn
+            # or equivalent events through on_provider_event, so local VAD is redundant
+            # and can false-trigger on acoustic echo from speakerphone.
+            try:
+                provider = self._call_providers.get(call_id)
+                if provider and hasattr(provider, "get_capabilities"):
+                    caps = provider.get_capabilities()
+                    if caps and getattr(caps, "has_native_barge_in", False):
+                        return
+            except Exception:
+                pass
 
             # Only relevant while streaming playback is active (agent is speaking).
             try:

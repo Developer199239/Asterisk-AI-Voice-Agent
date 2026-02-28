@@ -163,6 +163,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._assistant_farewell_intent: Optional[str] = None
         self._turn_has_assistant_output: bool = False
         self._hangup_ready_emitted: bool = False
+        self._last_barge_in_emit_ts: float = 0.0  # Debounce ProviderBargeIn emissions
         # If the model calls hangup_call but does not produce any audio shortly after, prompt it
         # to speak the farewell message (keeps the goodbye in the model's voice, avoids engine-side canned audio).
         self._force_farewell_task: Optional[asyncio.Task] = None
@@ -411,6 +412,30 @@ class GoogleLiveProvider(AIProviderInterface):
         if timeout_sec <= 0.0:
             return False
         return (now - armed_at) < timeout_sec
+
+    async def _emit_provider_barge_in(self, *, event_type: str) -> None:
+        """Notify the engine that Google's server-side VAD detected user interruption.
+
+        Google Live has native AEC and sends inputTranscription when the user speaks.
+        During active audio output (_in_audio_burst), this is a reliable barge-in signal
+        that the engine should use to flush local streaming playback.
+        """
+        try:
+            now = time.time()
+            if now - self._last_barge_in_emit_ts < 0.25:
+                return
+            self._last_barge_in_emit_ts = now
+            if self.on_event:
+                await self.on_event(
+                    {
+                        "type": "ProviderBargeIn",
+                        "call_id": self._call_id,
+                        "provider": "google_live",
+                        "event": event_type,
+                    }
+                )
+        except Exception:
+            logger.debug("Failed to emit ProviderBargeIn", call_id=self._call_id, exc_info=True)
 
     async def _flush_pending_user_transcription(self, *, reason: str) -> bool:
         pending = (self._input_transcription_buffer or "").strip()
@@ -697,6 +722,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._ws_unavailable_logged = False
         self._ws_send_close_logged = False
         self._hangup_ready_emitted = False
+        self._last_barge_in_emit_ts = 0.0
         self._input_transcription_buffer = ""
         self._output_transcription_buffer = ""
         self._model_text_buffer = ""
@@ -1485,7 +1511,12 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     fragment=text,
                     buffer_length=len(self._input_transcription_buffer),
+                    in_audio_burst=self._in_audio_burst,
                 )
+                # Provider-native barge-in: if we're currently outputting audio and Google's
+                # server-side AEC detects real user speech, signal the engine to flush playback.
+                if self._in_audio_burst:
+                    await self._emit_provider_barge_in(event_type="inputTranscription")
                 intent = self._detect_user_end_intent(self._input_transcription_buffer)
                 if intent and not self._user_end_intent:
                     self._user_end_intent = intent
