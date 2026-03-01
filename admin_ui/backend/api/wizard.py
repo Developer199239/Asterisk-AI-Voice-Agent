@@ -870,12 +870,7 @@ async def setup_media_paths_endpoint():
     can read for playback. Creates directories and symlinks as needed.
     """
     result = setup_media_paths()
-    return {
-        "job_id": result.get("job_id"),
-        "backend": result.get("backend"),
-        "estimated_seconds": result.get("estimated_seconds"),
-        "message": result.get("message"),
-    }
+    return result
 
 
 @router.post("/start-engine")
@@ -3316,7 +3311,12 @@ async def enable_backend(request: EnableBackendRequest):
             }
         raise HTTPException(status_code=409, detail=result["error"])
     
-    return result
+    return {
+        "job_id": result.get("job_id"),
+        "backend": result.get("backend"),
+        "estimated_seconds": result.get("estimated_seconds"),
+        "message": result.get("message"),
+    }
 
 
 @router.get("/local/backends/rebuild-status")
