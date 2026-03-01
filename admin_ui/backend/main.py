@@ -229,6 +229,7 @@ async def health_check():
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
+from pathlib import Path
 
 # Mount static files if directory exists (production/docker)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -241,10 +242,12 @@ if os.path.exists(static_dir):
         if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
             raise HTTPException(status_code=404, detail="Not found")
             
-        # Check if the file exists in the static root (like mascot_transparent.png or favicon.ico)
-        potential_file = os.path.join(static_dir, full_path)
-        if full_path and os.path.isfile(potential_file):
-            return FileResponse(potential_file)
+        # Serve direct files only when the resolved path stays inside static_dir.
+        if full_path:
+            candidate = Path(static_dir, full_path).resolve()
+            static_root = Path(static_dir).resolve()
+            if static_root in candidate.parents and candidate.is_file():
+                return FileResponse(str(candidate))
             
         # Serve index.html for all other routes (SPA)
         response = FileResponse(os.path.join(static_dir, "index.html"))

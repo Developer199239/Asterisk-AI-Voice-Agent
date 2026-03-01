@@ -135,6 +135,11 @@ def apply_switch_model_request(
         new_config = replace(new_config, kroko_model_path=value)
         changed.append(f"kroko_model_path={os.path.basename(value)}")
 
+    if "whisper_cpp_model_path" in data:
+        value = data["whisper_cpp_model_path"]
+        new_config = replace(new_config, whisper_cpp_model_path=value)
+        changed.append(f"whisper_cpp_model_path={os.path.basename(value)}")
+
     if "kroko_language" in data:
         value = data["kroko_language"]
         new_config = replace(new_config, kroko_language=value)

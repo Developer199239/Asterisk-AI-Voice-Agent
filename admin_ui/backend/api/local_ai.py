@@ -752,7 +752,14 @@ async def switch_model(request: SwitchModelRequest):
                     requires_restart=False,
                 )
         except Exception:
-            pass  # Best-effort check; proceed only if the check itself crashes unexpectedly
+            return SwitchModelResponse(
+                success=False,
+                message=(
+                    "Cannot switch model: unable to verify active calls (internal error). "
+                    "Ensure ai_engine is running, or set force_incompatible_apply=true to override."
+                ),
+                requires_restart=False,
+            )
 
     request = _normalize_switch_request(request)
     env_file = os.path.join(PROJECT_ROOT, ".env")
@@ -986,8 +993,9 @@ async def switch_model(request: SwitchModelRequest):
                 _cat_by_path = {m.get("model_path", ""): m for m in _LLM_CATALOG if m.get("model_path")}
                 model_basename = os.path.basename(request.model_path)
                 cat_entry = _cat_by_path.get(model_basename, {})
-                catalog_chat_format = cat_entry.get("chat_format", "")
-                llm_cfg["chat_format"] = catalog_chat_format
+                catalog_chat_format = (cat_entry.get("chat_format") or "").strip()
+                if catalog_chat_format:
+                    llm_cfg["chat_format"] = catalog_chat_format
             if llm_cfg:
                 payload["llm_config"] = llm_cfg
 

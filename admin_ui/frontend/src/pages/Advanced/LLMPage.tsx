@@ -85,15 +85,28 @@ const LLMPage = () => {
         setSaving(true);
         try {
             const sanitized = sanitizeConfigForSave(config);
-            await Promise.all([
+            const [yamlSave, envSave] = await Promise.allSettled([
                 axios.post('/api/config/yaml', { content: yaml.dump(sanitized) }),
                 axios.post('/api/config/env', env),
             ]);
-            setPendingRestart(true);
+
+            const yamlOk = yamlSave.status === 'fulfilled';
+            const envOk = envSave.status === 'fulfilled';
+            if (yamlOk || envOk) {
+                setPendingRestart(true);
+            }
+            if (!yamlOk || !envOk) {
+                const yamlState = yamlOk ? 'ok' : 'failed';
+                const envState = envOk ? 'ok' : 'failed';
+                throw new Error(`Partial save detected (yaml=${yamlState}, env=${envState})`);
+            }
+
             toast.success('LLM configuration saved');
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to save config', err);
-            toast.error('Failed to save configuration');
+            toast.error('Failed to save configuration', {
+                description: err?.message || 'Unknown error',
+            });
         } finally {
             setSaving(false);
         }

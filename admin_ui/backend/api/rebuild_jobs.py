@@ -388,11 +388,17 @@ def _verify_backend_loaded(job_id: str, backend: str, timeout: int = 60) -> bool
     while time.time() - start < timeout:
         try:
             # Check container health
+            docker_bin = shutil.which("docker") or "docker"
             result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Health.Status}}", "local_ai_server"],
+                [docker_bin, "inspect", "--format", "{{.State.Health.Status}}", "local_ai_server"],
                 capture_output=True,
                 text=True,
+                timeout=5,
             )
+            if result.returncode != 0:
+                _job_output(job_id, f"Health probe inspect failed: {(result.stderr or '').strip()}")
+                time.sleep(3)
+                continue
             status = result.stdout.strip()
             
             if status == "healthy":
@@ -436,6 +442,9 @@ def _verify_backend_loaded(job_id: str, backend: str, timeout: int = 60) -> bool
                 except Exception as e:
                     _job_output(job_id, f"Capabilities probe failed: {e}")
             
+            time.sleep(3)
+        except subprocess.TimeoutExpired:
+            _job_output(job_id, "Health probe timed out; retrying...")
             time.sleep(3)
         except Exception as e:
             _job_output(job_id, f"Health check error: {e}")
@@ -539,7 +548,11 @@ def _rebuild_worker(job_id: str, backend: str) -> None:
             _job_output(job_id, "Rolling back configuration...")
             if _restore_env_backup(backup_path):
                 _job_output(job_id, "Configuration restored from backup")
-                rolled_back = True
+                _job_output(job_id, "Re-applying restored configuration...")
+                if _run_docker_up(job_id):
+                    rolled_back = True
+                else:
+                    _job_output(job_id, "⚠️ Rollback config restored, but service recreate failed")
             else:
                 _job_output(job_id, "⚠️ Failed to restore backup - manual intervention may be needed")
         

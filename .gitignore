@@ -300,5 +300,5 @@ data/*.db-shm
 !data/.gitkeep
 
 # Secrets directory (Vertex AI credentials, API keys — never commit actual secrets)
-secrets/*
+secrets/**
 !secrets/.gitkeep

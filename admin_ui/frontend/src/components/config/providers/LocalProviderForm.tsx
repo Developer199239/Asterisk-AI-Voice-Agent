@@ -239,7 +239,7 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                     </div>
                 </div>
             )}
-            {statusLoading && (
+            {statusLoading && !currentStatus && (
                 <div className="bg-muted/50 p-4 rounded-md animate-pulse">
                     <div className="h-4 bg-muted rounded w-1/3 mb-2"></div>
                     <div className="h-3 bg-muted rounded w-full"></div>

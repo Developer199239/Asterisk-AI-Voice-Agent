@@ -2213,12 +2213,16 @@ async def start_local_ai_server():
 
         for backend, arg_name in BACKEND_BUILD_ARGS.items():
             raw = env.get(arg_name)
-            if raw is not None:
-                enabled_in_env = _is_truthy(raw)
-                default_val = bool(defaults.get(backend, False))
-                if enabled_in_env and not default_val:
-                    print(f"DEBUG: Rebuild needed — {arg_name}=true but default is false")
-                    return True
+            if raw is None:
+                continue
+            enabled_in_env = _is_truthy(raw)
+            default_val = bool(defaults.get(backend, False))
+            if enabled_in_env != default_val:
+                print(
+                    f"DEBUG: Rebuild needed — {arg_name}={str(enabled_in_env).lower()} "
+                    f"but default is {str(default_val).lower()}"
+                )
+                return True
         return False
 
     try:
