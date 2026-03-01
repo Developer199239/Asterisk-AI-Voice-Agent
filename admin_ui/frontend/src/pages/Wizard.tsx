@@ -2469,13 +2469,30 @@ exten => s,1,NoOp(AI Agent Call)
 
                 {step === 5 && (
                     <div className="space-y-6 text-center">
-                        <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <CheckCircle className="w-8 h-8" />
-                        </div>
-                        <h2 className="text-2xl font-bold">Setup Complete!</h2>
-                        <p className="text-muted-foreground">
-                            Your AI Agent is configured and ready.
-                        </p>
+                        {/* Show different header based on local server readiness */}
+                        {config.provider === 'local' && !localAIStatus.serverReady ? (
+                            <>
+                                <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <Loader2 className="w-8 h-8 animate-spin" />
+                                </div>
+                                <h2 className="text-2xl font-bold">Setting Up Local AI Server...</h2>
+                                <p className="text-muted-foreground">
+                                    {localAIStatus.serverPhase === 'building' 
+                                        ? 'Building GPU-accelerated Docker image. This may take 10-30 minutes on first run.'
+                                        : 'Starting server and loading AI models...'}
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <CheckCircle className="w-8 h-8" />
+                                </div>
+                                <h2 className="text-2xl font-bold">Setup Complete!</h2>
+                                <p className="text-muted-foreground">
+                                    Your AI Agent is configured and ready.
+                                </p>
+                            </>
+                        )}
 
                         {/* Local AI Server Setup - Only for Local provider */}
                         {config.provider === 'local' && (
