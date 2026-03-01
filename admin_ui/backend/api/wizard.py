@@ -2354,18 +2354,24 @@ async def get_local_server_logs():
                 line = line.strip()
                 if not line:
                     continue
-                # Match Docker build step patterns: "Step X/Y :", "#XX [stage N/M]", etc.
-                if re.match(r'^(Step \d+/\d+|#\d+\s+\[)', line):
-                    # Truncate long lines for UI display
-                    if len(line) > 120:
-                        line = line[:117] + "..."
-                    progress_lines.append(line)
-                elif "Building" in line or "Starting" in line or "Created" in line:
-                    progress_lines.append(line)
-                elif "Successfully" in line or "DONE" in line:
-                    progress_lines.append(line)
+                # Remove ANSI escape codes
+                clean_line = re.sub(r'\x1b\[[0-9;]*m', '', line)
+                # Match Docker build step patterns: "Step X/Y", "#XX [stage", buildx output
+                if re.search(r'Step \d+/\d+|#\d+\s*\[|CACHED|Pulling|Downloading|Extracting', clean_line, re.IGNORECASE):
+                    if len(clean_line) > 120:
+                        clean_line = clean_line[:117] + "..."
+                    progress_lines.append(clean_line)
+                elif any(kw in clean_line for kw in ["Building", "Starting", "Created", "Successfully", "DONE", "Image", "Sending build"]):
+                    if len(clean_line) > 120:
+                        clean_line = clean_line[:117] + "..."
+                    progress_lines.append(clean_line)
             
-            return progress_lines[-20:] if progress_lines else None
+            # If filtering produced nothing, return last 15 raw lines as fallback
+            if not progress_lines:
+                fallback = [l.strip() for l in lines if l.strip()][-15:]
+                return fallback if fallback else None
+            
+            return progress_lines[-20:]
         except Exception:
             return None
     
