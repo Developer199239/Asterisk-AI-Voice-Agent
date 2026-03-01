@@ -387,7 +387,7 @@ def _run_docker_up(job_id: str, service: str = "local_ai_server") -> bool:
 
 def _verify_backend_loaded(job_id: str, backend: str, timeout: int = 60) -> bool:
     """Wait for container to be healthy and verify backend is available."""
-    _job_output(job_id, f"Waiting for local_ai_server to be healthy...")
+    _job_output(job_id, "Waiting for local_ai_server to be healthy...")
     
     start = time.time()
     while time.time() - start < timeout:
@@ -455,7 +455,7 @@ def _verify_backend_loaded(job_id: str, backend: str, timeout: int = 60) -> bool
             _job_output(job_id, f"Health check error: {e}")
             time.sleep(3)
     
-    _job_output(job_id, f"⚠️ Timeout waiting for backend verification")
+    _job_output(job_id, "⚠️ Timeout waiting for backend verification")
     return False
 
 
@@ -486,7 +486,7 @@ def start_rebuild_job(backend: str) -> Dict[str, Any]:
     except Exception as e:
         _job_output(job.id, f"❌ ERROR: failed to start rebuild worker: {e}")
         _job_finish(job.id, completed=False, error=f"Failed to start rebuild worker: {e}")
-        return {"error": "Failed to start rebuild worker", "details": str(e)}
+        return {"error": "Failed to start rebuild worker"}
     
     return {
         "job_id": job.id,
