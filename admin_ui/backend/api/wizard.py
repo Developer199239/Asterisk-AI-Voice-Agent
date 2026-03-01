@@ -870,7 +870,12 @@ async def setup_media_paths_endpoint():
     can read for playback. Creates directories and symlinks as needed.
     """
     result = setup_media_paths()
-    return result
+    return {
+        "job_id": result.get("job_id"),
+        "backend": result.get("backend"),
+        "estimated_seconds": result.get("estimated_seconds"),
+        "message": result.get("message"),
+    }
 
 
 @router.post("/start-engine")

@@ -5,6 +5,7 @@ Handles Docker container rebuilds with progress tracking, error capture, and rol
 Similar pattern to download jobs in wizard.py.
 """
 
+import copy
 import logging
 import os
 import shlex
@@ -251,11 +252,12 @@ def _create_rebuild_job_locked(backend: str) -> RebuildJob:
 def get_rebuild_job(job_id: Optional[str] = None) -> Optional[RebuildJob]:
     """Return the requested job, or the most recent job if job_id is None."""
     with _rebuild_jobs_lock:
+        job: Optional[RebuildJob] = None
         if job_id:
-            return _rebuild_jobs.get(job_id)
-        if _latest_rebuild_job_id:
-            return _rebuild_jobs.get(_latest_rebuild_job_id)
-        return None
+            job = _rebuild_jobs.get(job_id)
+        elif _latest_rebuild_job_id:
+            job = _rebuild_jobs.get(_latest_rebuild_job_id)
+        return copy.deepcopy(job) if job else None
 
 
 def _job_output(job_id: str, line: str) -> None:
@@ -499,12 +501,16 @@ def start_rebuild_job(backend: str) -> Dict[str, Any]:
 def _rebuild_worker(job_id: str, backend: str) -> None:
     """Background worker that performs the rebuild."""
     backup_path = None
+    env_path = os.path.join(PROJECT_ROOT, ".env")
+    env_preexisting = os.path.exists(env_path)
     
     try:
         # Phase 1: Backup
         _job_set_progress(job_id, phase="backup", percent=5, message="Creating backup...")
         _job_output(job_id, "Creating backup of .env...")
         backup_path = _backup_env_file()
+        if env_preexisting and not backup_path:
+            raise RuntimeError("Failed to back up existing .env; aborting rebuild")
         if backup_path:
             _job_output(job_id, f"Backup created: {backup_path}")
         
@@ -568,5 +574,12 @@ def _rebuild_worker(job_id: str, backend: str) -> None:
                     _job_output(job_id, "⚠️ Rollback config restored, but service recreate failed")
             else:
                 _job_output(job_id, "⚠️ Failed to restore backup - manual intervention may be needed")
+        elif not env_preexisting:
+            try:
+                if os.path.exists(env_path):
+                    os.remove(env_path)
+                    _job_output(job_id, "Removed auto-created .env after failed rebuild")
+            except OSError as cleanup_err:
+                _job_output(job_id, f"⚠️ Failed to remove auto-created .env: {cleanup_err}")
         
         _job_finish(job_id, completed=False, error=error_msg, rolled_back=rolled_back)
