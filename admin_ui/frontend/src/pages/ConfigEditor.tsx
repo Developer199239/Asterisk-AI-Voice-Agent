@@ -6,6 +6,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { Save, Download, AlertCircle, Settings, Server, Trash2, RefreshCw, Loader2 } from 'lucide-react';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
+import { usePendingChanges } from '../hooks/usePendingChanges';
 
 // Import Config Components
 import GeneralConfig from '../components/config/GeneralConfig';
@@ -30,7 +31,7 @@ const ConfigEditor = () => {
     const [activeTab, setActiveTab] = useState<'general' | 'asterisk' | 'contexts' | 'providers' | 'pipelines' | 'vad' | 'streaming' | 'llm' | 'tools' | 'audiosocket' | 'yaml'>('general');
     const [yamlContent, setYamlContent] = useState('');
     const [parsedConfig, setParsedConfig] = useState<any>({});
-    
+
     // UI State
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -38,9 +39,7 @@ const ConfigEditor = () => {
     const [error, setError] = useState<string | null>(null);
     const [warning, setWarning] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
-    const [pendingApply, setPendingApply] = useState(false);
-    const [applyMethod, setApplyMethod] = useState<'hot_reload' | 'restart'>('restart');
-    const [applyPlan, setApplyPlan] = useState<Array<{ service: string; method: string; endpoint: string }>>([]);
+    const { pendingRestart: pendingApply, applyMethod, applyPlan, setPendingChanges, clearPendingChanges } = usePendingChanges();
 
     // Provider Editing State
     const [editingProvider, setEditingProvider] = useState<string | null>(null);
@@ -124,16 +123,11 @@ const ConfigEditor = () => {
             const plan = Array.isArray(response.data?.apply_plan) ? response.data.apply_plan : [];
             const recommended = response.data?.recommended_apply_method;
             if (plan.length > 0) {
-                setApplyPlan(plan);
-                setApplyMethod(recommended === 'hot_reload' ? 'hot_reload' : 'restart');
-                setPendingApply(true);
+                setPendingChanges(recommended === 'hot_reload' ? 'hot_reload' : 'restart', plan);
             } else if (response.data?.restart_required) {
-                setApplyPlan([{ service: 'ai_engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
-                setApplyMethod('restart');
-                setPendingApply(true);
+                setPendingChanges('restart', [{ service: 'ai_engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
             } else {
-                setApplyPlan([]);
-                setPendingApply(false);
+                clearPendingChanges();
             }
         } catch (err: any) {
             console.error(err);
@@ -170,18 +164,17 @@ const ConfigEditor = () => {
             return;
         }
 
-        setPendingApply(false);
-        setApplyPlan([]);
+        clearPendingChanges();
         setSuccess('Changes applied: AI Engine restarted.');
         setTimeout(() => setSuccess(null), 5000);
     };
 
     const handleApplyChanges = async () => {
-        if (!pendingApply || applyPlan.length === 0) return;
+        if (!pendingApply) return;
         setApplying(true);
         try {
             setError(null);
-            const item = applyPlan[0];
+            const item = applyPlan[0] || {};
             const method = (item?.method || applyMethod) as string;
 
             if (method === 'hot_reload') {
@@ -190,14 +183,11 @@ const ConfigEditor = () => {
                 if (resp.data?.restart_required || resp.data?.status === 'partial') {
                     setWarning('Hot reload completed but some changes still require an AI Engine restart.');
                     setTimeout(() => setWarning(null), 15000);
-                    setApplyPlan([{ service: 'ai_engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
-                    setApplyMethod('restart');
-                    setPendingApply(true);
+                    setPendingChanges('restart', [{ service: 'ai_engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
                     return;
                 }
 
-                setPendingApply(false);
-                setApplyPlan([]);
+                clearPendingChanges();
                 setSuccess('Changes applied: AI Engine hot reloaded.');
                 setTimeout(() => setSuccess(null), 5000);
                 return;
@@ -269,12 +259,12 @@ const ConfigEditor = () => {
 
         // Remove name from the config object itself as it's the key
         const { name, ...providerData } = providerForm;
-        
+
         // A3: Persist provider type when saving new providers
         if (isNewProvider && newProviderType) {
             providerData.type = newProviderType;
         }
-        
+
         newConfig.providers[providerName] = providerData;
 
         setParsedConfig(newConfig);
@@ -452,14 +442,14 @@ const ConfigEditor = () => {
                     <button onClick={() => setWarning(null)} className="hover:opacity-70">×</button>
                 </div>
             )}
-            
+
             {success && (
                 <div className="p-4 bg-green-500/10 text-green-600 dark:text-green-400 rounded-md border border-green-500/20 flex justify-between items-center">
                     <span>{success}</span>
                     <button onClick={() => setSuccess(null)} className="hover:opacity-70">×</button>
                 </div>
             )}
-            
+
             {pendingApply && (
                 <div className={`${pendingApply ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
                     <div className="flex items-center">
@@ -471,11 +461,10 @@ const ConfigEditor = () => {
                     <button
                         onClick={handleApplyChanges}
                         disabled={applying || !pendingApply}
-                        className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
-                            pendingApply
+                        className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${pendingApply
                                 ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium'
                                 : 'bg-yellow-500/20 hover:bg-yellow-500/30'
-                        } disabled:opacity-50`}
+                            } disabled:opacity-50`}
                     >
                         {applying ? (
                             <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />

@@ -1,8 +1,12 @@
 <div align="center">
 
-# Asterisk AI Voice Agent
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner_dark_mode.png?v=9">
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner_light_mode.png?v=9">
+  <img alt="Asterisk AI Voice Agent" src="assets/banner_light_mode.png?v=9" width="100%">
+</picture>
 
-![Version](https://img.shields.io/badge/version-6.2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-6.3.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -21,7 +25,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v611)
+- [🎉 What's New](#-whats-new-in-v631)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -79,6 +83,8 @@ Follow the **Setup Wizard** to configure your providers and make a test call.
 
 ### 4. Verify Installation
 
+> **GPU users:** If you have an NVIDIA GPU for local AI inference, see **[docs/LOCAL_ONLY_SETUP.md](docs/LOCAL_ONLY_SETUP.md)** for the GPU compose overlay (`docker-compose.gpu.yml`) before building.
+
 ```bash
 # Start ai_engine (required for health checks)
 docker compose -p asterisk-ai-voice-agent up -d --build ai_engine
@@ -110,7 +116,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.2.0.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.3.1.
 
 ### Option B: Manual Setup
 ```bash
@@ -153,48 +159,26 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v6.2.0
+## 🎉 What's New in v6.3.1
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🔊 Audio Quality Fix (v6.2.0)
-- Replaced legacy `audioop.ratecv` with NumPy linear interpolation resampler at all 19 call sites
-- Eliminates audio crackling artifacts that affected some deployments
-- Community contribution by [@turgutguvercin](https://github.com/turgutguvercin) (PR [#204](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/204))
+### 🛠️ Local AI Server Improvements (v6.3.1)
+- **Backend enable/rebuild flow**: One-click backend enable with progress tracking for optional backends (Faster-Whisper, Whisper.cpp, MeloTTS)
+- **Model lifecycle UX**: Expanded model catalog, safer archive extraction, GGUF magic-byte validation, checksum sidecars
+- **GPU ergonomics**: `LOCAL_LLM_GPU_LAYERS=-1` auto-detection, preflight warnings, GPU compose overlay improvements
+- **CPU-first onboarding**: Defaults to `runtime_mode=minimal` on CPU-only hosts
+- **Security hardening**: Path traversal protection on all model paths, concurrent rebuild race condition fix, active-call guard on model switch
 
-### 🤖 Google Live Provider Hardening (v6.2.0)
-- Support for Google's **native audio latest** model (`gemini-2.5-flash-native-audio-latest`) — true audio-native understanding, not just transcription
-- VAD tuning via `realtimeInputConfig` for reliable short utterance detection
-- TTS gating prevents echo-induced delays on AudioSocket transport
-- Farewell/hangup race condition fixes — eliminates duplicate farewells and premature hangups
-- Keepalive expert knobs and smoother config updates
-- Provider input gain normalization for consistent audio levels
+### 🛡️ Guardrails (v6.3.1)
+- **Structured local tool gateway**: Allowlist-driven tool execution with repair/structured-decision fallbacks
+- **Hangup guardrails**: Blocks hallucinated `hangup_call` without end-of-call intent (configurable policy modes)
+- **Tool-call parsing robustness**: Hardened extraction against malformed wrappers/markdown/control-token leaks
 
-### � Call Termination Hardening (v6.2.0)
-- 13 fixes across all providers, engine, and AudioSocket for reliable call endings
-- Prevents verbal farewell before `hangup_call` tool invocation
-- Pipeline tool calls now recorded in session for Call History visibility
-
-### 🩺 Agent CLI: `check --fix` (v6.2.0)
-- New `agent check --fix` auto-repairs common configuration issues
-- Ships minimal production baseline config for recovery scenarios
-- Hardened restore logic to avoid partial writes
-
-### 🖥️ Admin UI Improvements (v6.2.0)
-- Read-only **Tool Catalog** page showing all available built-in and MCP tools
-- Google Live VAD tuning exposed as advanced settings
-- Hangup fallback tuning tooltips
-
-### 🌐 Telnyx AI Inference LLM (v6.2.0)
-- New modular `telnyx_llm` pipeline provider — OpenAI-compatible Chat Completions via Telnyx AI Inference
-- Access to 53+ models (GPT-4o, Claude, Llama, Mistral) through a single `TELNYX_API_KEY`
-- Golden baseline config, Admin UI integration, and setup guide included
-- Community contribution by Abhishek @ Telnyx ([PR #219](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/pull/219))
-
-### �️ Preflight & Security (v6.2.0)
-- `preflight.sh --force` flag to bypass unsupported OS check
-- CodeQL SSRF fix for Google API key handling
+### 🩺 CLI Verification (v6.3.1)
+- `agent check --local` / `--remote` for Local AI Server STT/LLM/TTS validation
+- WS protocol contract + smoke test utilities
 
 For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -296,10 +280,18 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 ### Fully Local (Optional)
 
-AVA also supports a **Fully Local** mode (100% on-premises, no cloud APIs). This is **not** one of the golden baselines because performance depends heavily on your hardware (especially the local LLM).
+AVA also supports a **Fully Local** mode (100% on-premises, no cloud APIs). Three topologies are supported:
 
-- See: `docs/LOCAL_ONLY_SETUP.md`
-- Hardware guidance: `docs/HARDWARE_REQUIREMENTS.md`
+| Topology | Latency | Best For |
+|----------|---------|----------|
+| **CPU-Only** | 5-15s/turn | Privacy, testing |
+| **GPU (same box)** | 0.5-2s/turn | Production local |
+| **Split-Server** (remote GPU) | 1-3s/turn | PBX on VPS + GPU box |
+
+GPU setup uses `docker-compose.gpu.yml` overlay with CUDA-enabled llama.cpp. Community-validated: RTX 4090 achieves ~1.0s E2E.
+
+- See: **[docs/LOCAL_ONLY_SETUP.md](docs/LOCAL_ONLY_SETUP.md)** (canonical guide for all local topologies)
+- Hardware guidance: **[docs/HARDWARE_REQUIREMENTS.md](docs/HARDWARE_REQUIREMENTS.md)**
 
 ### 🏠 Self-Hosted LLM with Ollama (No API Key Required)
 
@@ -472,6 +464,8 @@ curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/mai
 ```bash
 agent setup               # Interactive setup wizard (recommended)
 agent check               # Standard diagnostics report (share this output when asking for help)
+agent check --local       # Verify local AI server (STT, LLM, TTS) on this host
+agent check --remote <ip> # Verify local AI server on a remote GPU machine
 agent update              # Pull latest code + rebuild/restart as needed
 agent rca --call <call_id> # Post-call RCA (use Call History to find call_id)
 agent version             # Version information
@@ -505,7 +499,7 @@ Per-call debugging is handled via **Admin UI → Call History**.
 Two-container architecture for performance and scalability:
 
 1. **`ai_engine`** (Lightweight orchestrator): Connects to Asterisk via ARI, manages call lifecycle.
-2. **`local_ai_server`** (Optional): Runs local STT/LLM/TTS models (Vosk, Sherpa, Kroko, Piper, Kokoro, llama.cpp).
+2. **`local_ai_server`** (Optional): Runs local STT/LLM/TTS models (Vosk, Faster Whisper, Whisper.cpp, Sherpa, Kroko, Piper, Kokoro, MeloTTS, llama.cpp).
 
 ```mermaid
 graph LR
@@ -535,10 +529,12 @@ graph LR
 
 ### Minimum System Requirements
 
-| Type | CPU | RAM | Disk |
-|------|-----|-----|------|
-| **Cloud** (OpenAI/Deepgram) | 2+ cores | 4GB | 1GB |
-| **Local Hybrid** | 4+ cores | 8GB+ | 2GB |
+| Type | CPU | RAM | GPU | Disk |
+|------|-----|-----|-----|------|
+| **Cloud** (OpenAI/Deepgram) | 2+ cores | 4GB | None | 1GB |
+| **Local Hybrid** (cloud LLM) | 4+ cores | 8GB+ | None | 2GB |
+| **Fully Local** (CPU) | 4+ cores (2020+) | 8-16GB | None | 5GB |
+| **Fully Local** (GPU) | 4+ cores | 8-16GB | RTX 3060+ | 10GB |
 
 ### Software Requirements
 
@@ -630,6 +626,10 @@ Then open in [Windsurf](https://codeium.com/windsurf) and type: **"I want to con
 <td align="center"><a href="https://github.com/turgutguvercin"><img src="https://github.com/turgutguvercin.png" width="60" alt="turgutguvercin"><br><sub><b>turgutguvercin</b></sub></a><br>NumPy Resampler</td>
 <td align="center"><a href="https://github.com/Scarjit"><img src="https://github.com/Scarjit.png" width="60" alt="Scarjit"><br><sub><b>Scarjit</b></sub></a><br>Code</td>
 <td align="center"><a href="https://github.com/egorky"><img src="https://github.com/egorky.png" width="60" alt="egorky"><br><sub><b>egorky</b></sub></a><br>Bug Fix</td>
+</tr>
+<tr>
+<td align="center"><a href="https://github.com/alemstrom"><img src="https://github.com/alemstrom.png" width="60" alt="alemstrom"><br><sub><b>alemstrom</b></sub></a><br>Docs — PBX Setup</td>
+<td align="center"><a href="https://github.com/gcsuri"><img src="https://github.com/gcsuri.png" width="60" alt="gcsuri"><br><sub><b>gcsuri</b></sub></a><br>Code — Google Calendar</td>
 </tr>
 </table>
 

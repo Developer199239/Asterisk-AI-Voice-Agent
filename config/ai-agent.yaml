@@ -16,13 +16,14 @@ barge_in:
   pipeline_energy_threshold: 300
   pipeline_talk_detect_enabled: true
   pipeline_talk_detect_silence_ms: 1200
-  pipeline_talk_detect_talking_threshold: 128
+  pipeline_talk_detect_talking_threshold: 256
   post_tts_end_protection_ms: 250
   greeting_protection_ms: 0
   provider_fallback_enabled: true
   provider_fallback_providers:
     - google_live
     - deepgram
+    - local
   provider_output_suppress_ms: 1200
   provider_output_suppress_extend_ms: 600
   provider_output_suppress_chunk_extend_ms: 250
@@ -37,7 +38,8 @@ contexts:
 
 
       CALL ENDING:
-      - When the caller indicates they are done, say a brief farewell and use the hangup_call tool to end the call.
+      - When the caller indicates they are done, say a brief farewell, then use the hangup_call tool to end the call.
+      - NEVER mention tools or the word "hangup_call" to the caller.
     provider: local
     tools:
       - hangup_call
@@ -81,7 +83,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -255,7 +257,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -501,7 +503,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -722,7 +724,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -887,7 +889,7 @@ contexts:
 
       - No external telephony providers needed - works with your existing Asterisk or FreePBX installation
 
-      - GitHub: github.com/hkjarral/Asterisk-AI-Voice-Agent
+      - GitHub: github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 
       - Demo Videos: Search for Asterisk AI Voice Agent on YouTube
 
@@ -1175,7 +1177,7 @@ contexts:
 
       - MCP tools can be extended to do customer lookups, calendar scheduling, database queries, and more
 
-      - For more info, visit github.com/hkjarral/Asterisk-AI-Voice-Agent or join Discord at discord.gg/ysg8fphxUe
+      - For more info, visit github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk or join Discord at discord.gg/ysg8fphxUe
 
 
       CALL ENDING:
@@ -1393,6 +1395,8 @@ providers:
     enabled: false
     farewell_mode: ${LOCAL_FAREWELL_MODE:=asterisk}
     farewell_timeout_sec: ${LOCAL_FAREWELL_TIMEOUT:=30.0}
+    tool_call_policy: ${LOCAL_TOOL_CALL_POLICY:=auto}
+    tool_gateway_enabled: ${LOCAL_TOOL_GATEWAY_ENABLED:=true}
     greeting: Hello! I'm your local AI assistant running entirely on-premises.
     instructions: >-
       You are a helpful voice assistant running locally. Be concise and
@@ -1969,7 +1973,7 @@ mcp:
       env:
         METNO_USER_AGENT: >-
           Asterisk-AI-Voice-Agent
-          (+https://github.com/hkjarral/Asterisk-AI-Voice-Agent)
+          (+https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk)
       defaults:
         timeout_ms: 15000
         slow_response_threshold_ms: 3000

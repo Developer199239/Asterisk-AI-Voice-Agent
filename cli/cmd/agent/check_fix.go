@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/check"
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/configmerge"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/check"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/configmerge"
 )
 
 type fixSummary struct {

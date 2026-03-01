@@ -6,6 +6,7 @@ import os
 import logging
 import secrets
 from pathlib import Path
+import shutil
 
 
 def _ensure_outbound_prompt_assets() -> None:
@@ -53,6 +54,47 @@ load_dotenv(settings.ENV_PATH)
 # NOTE: DB permission alignment is handled by install/preflight steps (host-side),
 # keeping runtime code minimal and CI security scanners happy.
 _ensure_outbound_prompt_assets()
+
+def _cleanup_orphaned_model_downloads() -> None:
+    """
+    Clean up orphaned .part files and .extract_* directories in the local AI models directory
+    that may have been left behind by interrupted downloads/extractions.
+    """
+    try:
+        models_dir = Path(os.getenv("AAVA_MODELS_DIR") or "/mnt/asterisk_models")
+        if not models_dir.exists():
+            return
+        
+        cleaned_up = 0
+        
+        # Clean up files matching *.part
+        for part_file in models_dir.rglob("*.part"):
+            try:
+                if part_file.is_file():
+                    part_file.unlink()
+                    cleaned_up += 1
+            except Exception:
+                pass
+                
+        # Clean up directories matching .extract_*
+        for root, dirs, files in os.walk(models_dir):
+            for d in list(dirs):  # Use list to safely modify while iterating
+                if d.startswith(".extract_"):
+                    extract_path = Path(root) / d
+                    try:
+                        shutil.rmtree(extract_path)
+                        cleaned_up += 1
+                        dirs.remove(d) # Remove to prevent os.walk from entering it
+                    except Exception:
+                        pass
+        
+        if cleaned_up > 0:
+            logging.getLogger(__name__).info("Cleaned up %d orphaned model download temp file(s)/dir(s).", cleaned_up)
+            
+    except Exception as e:
+        logging.getLogger(__name__).warning("Failed to clean up orphaned model downloads: %s", e)
+
+_cleanup_orphaned_model_downloads()
 
 # SECURITY: Admin UI binds to 0.0.0.0 by default (DX-first).
 # If JWT_SECRET is missing/placeholder, generate an ephemeral secret so tokens
@@ -191,7 +233,9 @@ import os
 # Mount static files if directory exists (production/docker)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
+    static_files = StaticFiles(directory=static_dir, html=False)
     app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+    index_file = os.path.join(static_dir, "index.html")
     
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
@@ -199,8 +243,14 @@ if os.path.exists(static_dir):
         if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
             raise HTTPException(status_code=404, detail="Not found")
             
+        # Use Starlette's safe static path lookup to prevent traversal.
+        if full_path:
+            resolved_path, stat_result = static_files.lookup_path(full_path.lstrip("/"))
+            if stat_result and os.path.isfile(resolved_path):
+                return FileResponse(resolved_path)
+            
         # Serve index.html for all other routes (SPA)
-        response = FileResponse(os.path.join(static_dir, "index.html"))
+        response = FileResponse(index_file)
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"

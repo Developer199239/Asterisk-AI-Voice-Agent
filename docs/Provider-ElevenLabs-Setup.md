@@ -650,4 +650,4 @@ Fix: Ensure your context uses `profile: telephony_ulaw_8k` and the provider has 
 
 **ElevenLabs Provider Setup - Complete** ✅
 
-For questions or issues, see the [GitHub repository](https://github.com/hkjarral/Asterisk-AI-Voice-Agent).
+For questions or issues, see the [GitHub repository](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk).

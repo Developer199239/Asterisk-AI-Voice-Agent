@@ -47,4 +47,12 @@ elif [ -d /mnt/asterisk_media ]; then
   ensure_user_in_gid appuser "$media_gid" asteriskmedia
 fi
 
+# Ensure appuser can write to the secrets directory (Vertex AI credentials, etc.)
+if [ -d /app/project/secrets ]; then
+  chown -R appuser:appuser /app/project/secrets
+elif [ -d /app/project ]; then
+  mkdir -p /app/project/secrets
+  chown -R appuser:appuser /app/project/secrets
+fi
+
 exec gosu appuser "$@"

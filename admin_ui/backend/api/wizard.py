@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
 import os
+import re
 import yaml
 import subprocess
 import stat
@@ -28,6 +29,10 @@ from api.models_catalog import (
     get_full_catalog, get_models_by_language, get_available_languages,
     LANGUAGE_NAMES, REGION_NAMES, VOSK_STT_MODELS, SHERPA_STT_MODELS,
     KROKO_STT_MODELS, PIPER_TTS_MODELS, KOKORO_TTS_MODELS, LLM_MODELS
+)
+from api.rebuild_jobs import (
+    start_rebuild_job, get_rebuild_job, get_enabled_backends,
+    is_rebuild_in_progress, BACKEND_BUILD_ARGS, BUILD_TIME_ESTIMATES
 )
 
 router = APIRouter()
@@ -348,11 +353,53 @@ def _write_sha256_sidecar(path: str, sha256_hex: str) -> None:
     atomic_write_text(f"{path}.sha256", f"{sha256_hex}  {os.path.basename(path)}\n")
 
 
+GGUF_MAGIC = b"GGUF"
+
+
+def _validate_gguf_magic(path: str) -> bool:
+    """Check that a .gguf file starts with the GGUF magic bytes."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(4)
+        return header == GGUF_MAGIC
+    except Exception:
+        return False
+
+
 def _is_within_directory(base_dir: str, candidate_path: str) -> bool:
     """Return True when `candidate_path` resolves under `base_dir`."""
     base = os.path.abspath(base_dir)
     cand = os.path.abspath(candidate_path)
     return cand == base or cand.startswith(base + os.sep)
+
+
+_FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _safe_filename(name: str, *, default: str = "download") -> str:
+    """
+    Sanitize a user/catlog-provided label into a filename-ish token.
+
+    This is used only for temporary download filenames (not final paths).
+    """
+    raw = (name or "").strip()
+    raw = _FILENAME_SAFE_RE.sub("_", raw)
+    raw = raw.strip("._-")
+    return raw or default
+
+
+def _safe_join_under_dir(base_dir: str, rel_path: str) -> str:
+    """Join `rel_path` under `base_dir`, blocking absolute/.. traversal."""
+    rel = (rel_path or "").strip()
+    if not rel:
+        raise RuntimeError("Unsafe path: empty relative path")
+    pp = PurePosixPath(rel)
+    if pp.is_absolute() or ".." in pp.parts:
+        raise RuntimeError(f"Unsafe path: {rel_path}")
+    out_path = os.path.join(base_dir, *pp.parts)
+    if not _is_within_directory(base_dir, out_path):
+        raise RuntimeError(f"Unsafe path: {rel_path}")
+    return out_path
 
 
 def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
@@ -363,6 +410,7 @@ def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
     staging = tempfile.mkdtemp(prefix=".extract_", dir=dest_dir)
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
+            safe_members: List[str] = []
             for info in zf.infolist():
                 name = info.filename
                 if not name:
@@ -376,8 +424,9 @@ def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
                 out_path = os.path.join(staging, *pp.parts)
                 if not _is_within_directory(staging, out_path):
                     raise RuntimeError(f"Unsafe zip extraction path: {name}")
+                safe_members.append(name)
 
-            zf.extractall(staging)
+            zf.extractall(staging, members=safe_members)
 
         moved: List[str] = []
         for entry in os.listdir(staging):
@@ -406,6 +455,7 @@ def _safe_extract_tar(tar_path: str, dest_dir: str) -> List[str]:
     staging = tempfile.mkdtemp(prefix=".extract_", dir=dest_dir)
     try:
         with tarfile.open(tar_path, "r:*") as tf:
+            safe_members: list = []
             for member in tf.getmembers():
                 name = member.name
                 if not name:
@@ -420,8 +470,9 @@ def _safe_extract_tar(tar_path: str, dest_dir: str) -> List[str]:
                 out_path = os.path.join(staging, *pp.parts)
                 if not _is_within_directory(staging, out_path):
                     raise RuntimeError(f"Unsafe tar extraction path: {name}")
+                safe_members.append(member)
 
-            tf.extractall(staging)
+            tf.extractall(staging, members=safe_members)
 
         moved: List[str] = []
         for entry in os.listdir(staging):
@@ -1147,24 +1198,24 @@ async def detect_local_tier():
                 "download_size": "~1.5 GB"
             },
             "MEDIUM_CPU": {
-                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Piper Medium",
-                "performance": "20-30 seconds per turn",
+                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Kokoro",
+                "performance": "15-25 seconds per turn",
                 "download_size": "~3.5 GB"
             },
             "HEAVY_CPU": {
-                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Piper Medium",
-                "performance": "25-35 seconds per turn",
-                "download_size": "~3.5 GB"
+                "models": "Qwen 2.5-3B + Vosk 0.22 + Kokoro",
+                "performance": "12-20 seconds per turn",
+                "download_size": "~4.5 GB"
             },
             "MEDIUM_GPU": {
-                "models": "Phi-3-mini 3.8B + Vosk 0.22 + Piper Medium (GPU)",
-                "performance": "8-12 seconds per turn",
-                "download_size": "~3.5 GB"
+                "models": "Qwen 2.5-3B + Faster-Whisper Base + Kokoro (GPU)",
+                "performance": "3-6 seconds per turn",
+                "download_size": "~4.5 GB"
             },
             "HEAVY_GPU": {
-                "models": "Llama-2 13B + Vosk 0.22 + Piper High (GPU)",
-                "performance": "10-15 seconds per turn",
-                "download_size": "~10 GB"
+                "models": "Qwen 2.5-7B + Faster-Whisper Base + Kokoro (GPU)",
+                "performance": "4-8 seconds per turn",
+                "download_size": "~7 GB"
             }
         }
         
@@ -1337,8 +1388,9 @@ async def download_single_model(request: SingleModelDownload):
                 ext = os.path.splitext(request.download_url)[1] or ''
                 is_archive = False
             
-            # Download to temp file
-            temp_file = os.path.join(target_dir, f".{request.model_id}.{uuid.uuid4().hex}.download{ext}.part")
+            # Download to temp file (sanitize label to avoid path traversal in filenames)
+            temp_label = _safe_filename(request.model_id, default="model")
+            temp_file = os.path.join(target_dir, f".{temp_label}.{uuid.uuid4().hex}.download{ext}.part")
             start_time = time.time()
             last_update_time = start_time
             
@@ -1423,12 +1475,24 @@ async def download_single_model(request: SingleModelDownload):
                     os.makedirs(kokoro_dir, exist_ok=True)
                     final_path = os.path.join(kokoro_dir, "kokoro-v1_0.pth")
                 elif request.model_path:
-                    final_path = os.path.join(target_dir, request.model_path)
+                    final_path = _safe_join_under_dir(target_dir, request.model_path)
                 else:
                     final_path = os.path.join(target_dir, os.path.basename(request.download_url))
                 
                 os.makedirs(os.path.dirname(final_path), exist_ok=True)
                 shutil.move(temp_file, final_path)
+
+                # Validate GGUF magic bytes for LLM models to catch truncated/corrupt downloads
+                if final_path.endswith(".gguf") and not _validate_gguf_magic(final_path):
+                    try:
+                        os.remove(final_path)
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"GGUF validation failed: {os.path.basename(final_path)} does not have valid GGUF magic header. "
+                        "The file may be corrupt or truncated. Please retry the download."
+                    )
+
                 _write_sha256_sidecar(final_path, sha)
                 _job_output(job.id, f"✅ Saved to {final_path} (sha256={sha[:12]}...)")
                 
@@ -1459,7 +1523,8 @@ async def download_single_model(request: SingleModelDownload):
                     _job_output(job.id, f"📥 Downloading voice files...")
                     for voice_name, voice_url in request.voice_files.items():
                         try:
-                            voice_dest = os.path.join(voices_dir, f"{voice_name}.pt")
+                            safe_voice = _safe_filename(voice_name, default="voice")
+                            voice_dest = os.path.join(voices_dir, f"{safe_voice}.pt")
                             tmp_voice = voice_dest + f".{uuid.uuid4().hex}.part"
                             urllib.request.urlretrieve(voice_url, tmp_voice)
                             v_sha = _sha256_file(tmp_voice)
@@ -1588,7 +1653,14 @@ async def download_selected_models(selection: ModelSelection):
         filename = (selection.llm_model_path or "").strip()
         if not filename:
             filename = os.path.basename(url.split("?", 1)[0])
-        if not filename.endswith(".gguf"):
+        # Require a simple filename to avoid path traversal under models/llm
+        pp = PurePosixPath(filename)
+        if pp.name != filename or pp.is_absolute() or ".." in pp.parts:
+            return {
+                "status": "error",
+                "message": "Custom LLM filename must be a simple filename (no directories, no '..')",
+            }
+        if not filename.lower().endswith(".gguf"):
             return {"status": "error", "message": "Custom LLM filename must end with .gguf"}
         llm_model = {
             "id": "custom_gguf_url",
@@ -1783,12 +1855,12 @@ async def download_selected_models(selection: ModelSelection):
                     # Kroko embedded ONNX models go to models/kroko/
                     kroko_dir = os.path.join(models_dir, "kroko")
                     os.makedirs(kroko_dir, exist_ok=True)
-                    dest = os.path.join(kroko_dir, stt_model["model_path"])
+                    dest = _safe_join_under_dir(kroko_dir, stt_model["model_path"])
                     if not download_file(stt_model["download_url"], dest, "Kroko Embedded STT Model", stt_model.get("sha256")):
                         success = False
                 else:
                     # Single file model
-                    dest = os.path.join(stt_dir, stt_model["model_path"])
+                    dest = _safe_join_under_dir(stt_dir, stt_model["model_path"])
                     if not download_file(stt_model["download_url"], dest, "STT Model", stt_model.get("sha256")):
                         success = False
             else:
@@ -1799,7 +1871,7 @@ async def download_selected_models(selection: ModelSelection):
                 if llm_model.get("download_url"):
                     llm_dir = os.path.join(models_dir, "llm")
                     os.makedirs(llm_dir, exist_ok=True)
-                    dest = os.path.join(llm_dir, llm_model["model_path"])
+                    dest = _safe_join_under_dir(llm_dir, llm_model["model_path"])
                     if not download_file(llm_model["download_url"], dest, "LLM Model", llm_model.get("sha256")):
                         success = False
                 else:
@@ -1835,11 +1907,12 @@ async def download_selected_models(selection: ModelSelection):
                     # Download voice files
                     if tts_model.get("voice_files"):
                         for voice_name, voice_url in tts_model["voice_files"].items():
-                            voice_dest = os.path.join(voices_dir, f"{voice_name}.pt")
+                            safe_voice = _safe_filename(voice_name, default="voice")
+                            voice_dest = os.path.join(voices_dir, f"{safe_voice}.pt")
                             download_file(voice_url, voice_dest, f"Kokoro Voice: {voice_name}")
                 else:
                     # Standard single-file TTS model (Piper)
-                    dest = os.path.join(tts_dir, tts_model["model_path"])
+                    dest = _safe_join_under_dir(tts_dir, tts_model["model_path"])
                     if not download_file(tts_model["download_url"], dest, "TTS Model", tts_model.get("sha256")):
                         success = False
                     
@@ -1855,12 +1928,34 @@ async def download_selected_models(selection: ModelSelection):
             env_updates = []
             
             # Persist backend selections (even if no download needed)
-            env_updates.append(f"LOCAL_STT_BACKEND={stt_model.get('backend') or selection.stt}")
-            env_updates.append(f"LOCAL_TTS_BACKEND={tts_model.get('backend') or selection.tts}")
+            resolved_stt_backend = (stt_model.get("backend") or selection.stt or "").lower()
+            resolved_tts_backend = (tts_model.get("backend") or selection.tts or "").lower()
+            env_updates.append(f"LOCAL_STT_BACKEND={resolved_stt_backend}")
+            env_updates.append(f"LOCAL_TTS_BACKEND={resolved_tts_backend}")
             if skip_llm_download:
                 env_updates.append("LOCAL_AI_MODE=minimal")
             else:
                 env_updates.append("LOCAL_AI_MODE=full")
+
+            # ── INCLUDE_* build-arg flags ──────────────────────────────────
+            # Set the corresponding Docker build-arg flag so that a
+            # subsequent `docker compose up --build` will include the
+            # selected backend's Python package in the image.
+            _BACKEND_TO_INCLUDE = {
+                "faster_whisper": "INCLUDE_FASTER_WHISPER",
+                "whisper_cpp":    "INCLUDE_WHISPER_CPP",
+                "melotts":        "INCLUDE_MELOTTS",
+                "sherpa":         "INCLUDE_SHERPA",
+                "vosk":           "INCLUDE_VOSK",
+                "piper":          "INCLUDE_PIPER",
+                "kokoro":         "INCLUDE_KOKORO",
+            }
+            for backend_key, include_flag in _BACKEND_TO_INCLUDE.items():
+                if resolved_stt_backend == backend_key or resolved_tts_backend == backend_key:
+                    env_updates.append(f"{include_flag}=true")
+            # Kroko embedded requires its own build flag
+            if resolved_stt_backend == "kroko" and selection.kroko_embedded:
+                env_updates.append("INCLUDE_KROKO_EMBEDDED=true")
 
             # Kroko toggle (embedded vs cloud)
             if (stt_model.get("backend") or selection.stt) == "kroko":
@@ -1873,31 +1968,31 @@ async def download_selected_models(selection: ModelSelection):
             if stt_model.get("model_path"):
                 stt_backend = (stt_model.get("backend") or selection.stt or "").lower()
                 if stt_backend == "sherpa":
-                    stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
+                    stt_path = _safe_join_under_dir("/app/models/stt", stt_model["model_path"])
                     env_updates.append(f"SHERPA_MODEL_PATH={stt_path}")
                 elif stt_backend == "kroko":
                     if selection.kroko_embedded:
-                        stt_path = os.path.join("/app/models/kroko", stt_model["model_path"])
+                        stt_path = _safe_join_under_dir("/app/models/kroko", stt_model["model_path"])
                         env_updates.append(f"KROKO_MODEL_PATH={stt_path}")
                 elif stt_backend == "faster_whisper":
                     env_updates.append(f"FASTER_WHISPER_MODEL={stt_model['model_path']}")
                 else:
-                    stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
+                    stt_path = _safe_join_under_dir("/app/models/stt", stt_model["model_path"])
                     env_updates.append(f"LOCAL_STT_MODEL_PATH={stt_path}")
             
             if not skip_llm_download and llm_model and llm_model.get("model_path") and llm_model.get("download_url"):
-                llm_path = os.path.join("/app/models/llm", llm_model["model_path"])
+                llm_path = _safe_join_under_dir("/app/models/llm", llm_model["model_path"])
                 env_updates.append(f"LOCAL_LLM_MODEL_PATH={llm_path}")
             
             if tts_model.get("model_path"):
                 tts_backend = (tts_model.get("backend") or selection.tts or "").lower()
                 if tts_backend == "kokoro":
-                    tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
+                    tts_path = _safe_join_under_dir("/app/models/tts", tts_model["model_path"])
                     env_updates.append(f"KOKORO_MODEL_PATH={tts_path}")
                 elif tts_backend == "melotts":
                     env_updates.append(f"MELOTTS_VOICE={tts_model['model_path']}")
                 elif tts_model.get("download_url"):
-                    tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
+                    tts_path = _safe_join_under_dir("/app/models/tts", tts_model["model_path"])
                     env_updates.append(f"LOCAL_TTS_MODEL_PATH={tts_path}")
 
             # Kokoro mode: local vs api/hf (no local files required)
@@ -2078,74 +2173,102 @@ async def start_local_ai_server():
     """Start the local-ai-server container.
     
     Also sets up media paths for audio playback to work correctly.
-    Uses --no-build when possible (fast), falls back to background build if needed.
+    Uses the updater-runner pattern (like system.py) so that compose bind mounts
+    resolve correctly on the host filesystem — fixes AAVA-193/AAVA-200.
+    
+    If any INCLUDE_* flag in .env differs from the Dockerfile default (e.g.
+    INCLUDE_FASTER_WHISPER=true when the default is false), we force a rebuild
+    so the selected backend library is actually baked into the image.
     """
-    import subprocess
-    from settings import PROJECT_ROOT
+    from api.system import (
+        _compose_files_flags_for_service,
+        _project_host_root_from_admin_ui_container,
+        _run_updater_ephemeral,
+    )
     
     # Setup media paths first (same as start_engine)
     print("DEBUG: Setting up media paths for local AI server...")
     media_setup = setup_media_paths()
     print(f"DEBUG: Media setup result: {media_setup}")
-    
-    try:
-        # Use preflight-derived flag to decide compose override.
-        # Do not infer from runtime nvidia-smi here because passthrough may be unavailable.
-        gpu_available = _gpu_override_enabled_from_preflight()
 
-        # Build docker compose command - use GPU override file if GPU detected
-        cmd_base = ["docker", "compose", "-p", "asterisk-ai-voice-agent"]
-        if gpu_available:
-            print("DEBUG: GPU override enabled (GPU_AVAILABLE=true), using docker-compose.gpu.yml")
-            cmd_base += ["-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml"]
-
-        # Fast path: start from existing image (avoid triggering a rebuild on every click)
-        cmd_no_build = cmd_base + ["up", "-d", "--no-build", "local_ai_server"]
-        result = subprocess.run(
-            cmd_no_build,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=60,
+    def _compose_up_cmd(svc: str, *, build: bool) -> str:
+        flag = "--build" if build else "--no-build"
+        compose_files = _compose_files_flags_for_service(svc)
+        compose_prefix = f"{compose_files} " if compose_files else ""
+        return (
+            "set -euo pipefail; "
+            "cd \"$PROJECT_ROOT\"; "
+            f"docker compose {compose_prefix}-p asterisk-ai-voice-agent up -d {flag} {svc}"
         )
-        if result.returncode == 0:
+
+    def _needs_rebuild() -> bool:
+        """Check if any INCLUDE_* flag in .env differs from the CPU defaults,
+        meaning the user selected a non-default backend that requires a rebuild."""
+        from settings import PROJECT_ROOT as _pr
+        from api.rebuild_jobs import _read_env_file, _is_truthy, BACKEND_BUILD_ARGS, _DEFAULT_INCLUDE_BASE, _DEFAULT_INCLUDE_GPU
+        env_path = os.path.join(_pr, ".env")
+        env = _read_env_file(env_path)
+        gpu_available = _is_truthy(env.get("GPU_AVAILABLE"))
+        defaults = _DEFAULT_INCLUDE_GPU if gpu_available else _DEFAULT_INCLUDE_BASE
+
+        for backend, arg_name in BACKEND_BUILD_ARGS.items():
+            raw = env.get(arg_name)
+            if raw is None:
+                continue
+            enabled_in_env = _is_truthy(raw)
+            default_val = bool(defaults.get(backend, False))
+            if enabled_in_env != default_val:
+                print(
+                    f"DEBUG: Rebuild needed — {arg_name}={str(enabled_in_env).lower()} "
+                    f"but default is {str(default_val).lower()}"
+                )
+                return True
+        return False
+
+    try:
+        host_root = _project_host_root_from_admin_ui_container()
+        print(f"DEBUG: Using host project root: {host_root}")
+
+        rebuild_required = _needs_rebuild()
+
+        if rebuild_required:
+            # Backend was changed — must rebuild to include new libraries
+            print("DEBUG: Non-default INCLUDE_* flags detected, forcing build+up...")
+            code, out = _run_updater_ephemeral(
+                host_root,
+                env={"PROJECT_ROOT": host_root},
+                command=_compose_up_cmd("local_ai_server", build=True),
+                timeout_sec=1800,  # 30 min for GPU builds
+            )
+            if code == 0:
+                return {
+                    "success": True,
+                    "message": "Local AI Server built and started (new backends installed).",
+                    "media_setup": media_setup,
+                    "building": True,
+                }
+            return {
+                "success": False,
+                "message": f"Failed to build/start local_ai_server: {(out or '').strip()[:800]}",
+                "media_setup": media_setup,
+                "building": True,
+            }
+
+        # Fast path: start without build if the image already exists.
+        code, out = _run_updater_ephemeral(
+            host_root,
+            env={"PROJECT_ROOT": host_root},
+            command=_compose_up_cmd("local_ai_server", build=False),
+            timeout_sec=120,
+        )
+        if code == 0:
             return {
                 "success": True,
                 "message": "Local AI Server started.",
                 "media_setup": media_setup,
             }
 
-        stderr = (result.stderr or result.stdout or "").strip()
-
-        # If a stale container name is blocking startup, remove and retry once.
-        if "Conflict" in stderr and "local_ai_server" in stderr:
-            try:
-                client = docker.from_env()
-                try:
-                    old_container = client.containers.get("local_ai_server")
-                    print(f"DEBUG: Removing conflicting local_ai_server container ({old_container.status})")
-                    old_container.remove(force=True)
-                except docker.errors.NotFound:
-                    pass
-            except Exception as e:
-                print(f"DEBUG: Error removing conflicting container: {e}")
-
-            retry = subprocess.run(
-                cmd_no_build,
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if retry.returncode == 0:
-                return {
-                    "success": True,
-                    "message": "Local AI Server started.",
-                    "media_setup": media_setup,
-                }
-            stderr = (retry.stderr or retry.stdout or "").strip()
-
-        # Slow path: image missing or needs build; kick off build+up in background.
+        err = (out or "").strip()
         needs_build_markers = [
             "No such image",
             "pull access denied",
@@ -2153,38 +2276,36 @@ async def start_local_ai_server():
             "unable to find image",
             "requires build",
         ]
-        if any(m.lower() in stderr.lower() for m in needs_build_markers):
-            log_path = os.path.join(PROJECT_ROOT, "logs", "local_ai_server_start.log")
-            os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            logf = open(log_path, "a")
-            logf.write("\n\n=== local_ai_server start (wizard) ===\n")
-            logf.flush()
-
-            cmd_build = cmd_base + ["up", "-d", "--build", "local_ai_server"]
-            subprocess.Popen(
-                cmd_build,
-                cwd=PROJECT_ROOT,
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+        if any(m.lower() in err.lower() for m in needs_build_markers):
+            # Slow path: build required
+            print("DEBUG: Image needs build, starting build+up (this may take several minutes)...")
+            code2, out2 = _run_updater_ephemeral(
+                host_root,
+                env={"PROJECT_ROOT": host_root},
+                command=_compose_up_cmd("local_ai_server", build=True),
+                timeout_sec=1800,  # 30 min for GPU builds
             )
-            logf.close()
-
+            if code2 == 0:
+                return {
+                    "success": True,
+                    "message": "Local AI Server built and started.",
+                    "media_setup": media_setup,
+                    "building": True,
+                }
             return {
-                "success": True,
-                "building": True,
-                "message": f"Local AI Server image is being built in the background (this can take 10-60 minutes for GPU builds). See {log_path} or container logs once created.",
+                "success": False,
+                "message": f"Failed to build/start local_ai_server: {(out2 or '').strip()[:800]}",
                 "media_setup": media_setup,
+                "building": True,
             }
 
         return {
             "success": False,
-            "message": f"Failed to start local_ai_server: {stderr or 'Unknown error'}",
+            "message": f"Failed to start local_ai_server: {err[:800] or 'Unknown error'}",
             "media_setup": media_setup,
         }
-    except FileNotFoundError as e:
-        return {"success": False, "message": f"Failed to start: {e}", "media_setup": media_setup}
     except Exception as e:
+        print(f"DEBUG: Error starting local_ai_server: {e}")
         return {"success": False, "message": str(e), "media_setup": media_setup}
 
 
@@ -2750,8 +2871,13 @@ async def save_setup_config(config: SetupConfig):
             tts_model = tts_by_id.get(config.local_tts_model or "")
             llm_model = llm_by_id.get(config.local_llm_model or "")
 
-            stt_backend = (config.local_stt_backend or (stt_model or {}).get("backend") or "").strip().lower()
-            tts_backend = (config.local_tts_backend or (tts_model or {}).get("backend") or "").strip().lower()
+            # Prefer the model's own backend from catalog (authoritative) over
+            # the frontend's local_stt_backend which can be stale due to React
+            # useEffect auto-selection resetting it after the user chose a
+            # different backend.  Fall back to frontend value only when there
+            # is no resolved catalog model.
+            stt_backend = ((stt_model or {}).get("backend") or config.local_stt_backend or "").strip().lower()
+            tts_backend = ((tts_model or {}).get("backend") or config.local_tts_backend or "").strip().lower()
 
             if stt_backend:
                 env_updates["LOCAL_STT_BACKEND"] = stt_backend
@@ -2759,19 +2885,36 @@ async def save_setup_config(config: SetupConfig):
                 env_updates["LOCAL_TTS_BACKEND"] = tts_backend
             env_updates["LOCAL_AI_MODE"] = "minimal" if config.provider == "local_hybrid" else "full"
 
+            # Set INCLUDE_* build-arg flags so Docker builds include the
+            # selected backend's library (mirrors download-selected-models).
+            _BACKEND_INCLUDE_MAP = {
+                "faster_whisper": "INCLUDE_FASTER_WHISPER",
+                "whisper_cpp": "INCLUDE_WHISPER_CPP",
+                "melotts": "INCLUDE_MELOTTS",
+                "sherpa": "INCLUDE_SHERPA",
+                "vosk": "INCLUDE_VOSK",
+                "piper": "INCLUDE_PIPER",
+                "kokoro": "INCLUDE_KOKORO",
+            }
+            for bk, inc_flag in _BACKEND_INCLUDE_MAP.items():
+                if stt_backend == bk or tts_backend == bk:
+                    env_updates[inc_flag] = "true"
+            if stt_backend == "kroko" and config.kroko_embedded:
+                env_updates["INCLUDE_KROKO_EMBEDDED"] = "true"
+
             stt_model_path = (stt_model or {}).get("model_path")
             if stt_backend == "sherpa" and stt_model_path:
-                env_updates["SHERPA_MODEL_PATH"] = os.path.join("/app/models/stt", stt_model_path)
+                env_updates["SHERPA_MODEL_PATH"] = _safe_join_under_dir("/app/models/stt", stt_model_path)
             elif stt_backend == "kroko":
                 env_updates["KROKO_EMBEDDED"] = "1" if config.kroko_embedded else "0"
                 if config.kroko_api_key:
                     env_updates["KROKO_API_KEY"] = config.kroko_api_key
                 if config.kroko_embedded and stt_model_path:
-                    env_updates["KROKO_MODEL_PATH"] = os.path.join("/app/models/kroko", stt_model_path)
+                    env_updates["KROKO_MODEL_PATH"] = _safe_join_under_dir("/app/models/kroko", stt_model_path)
             elif stt_backend == "faster_whisper" and stt_model_path:
                 env_updates["FASTER_WHISPER_MODEL"] = stt_model_path
             elif stt_model_path:
-                env_updates["LOCAL_STT_MODEL_PATH"] = os.path.join("/app/models/stt", stt_model_path)
+                env_updates["LOCAL_STT_MODEL_PATH"] = _safe_join_under_dir("/app/models/stt", stt_model_path)
 
             tts_model_path = (tts_model or {}).get("model_path")
             if tts_backend == "kokoro":
@@ -2781,7 +2924,7 @@ async def save_setup_config(config: SetupConfig):
                 env_updates["KOKORO_MODE"] = mode
                 env_updates["KOKORO_VOICE"] = (config.kokoro_voice or "af_heart").strip()
                 if tts_model_path:
-                    env_updates["KOKORO_MODEL_PATH"] = os.path.join("/app/models/tts", tts_model_path)
+                    env_updates["KOKORO_MODEL_PATH"] = _safe_join_under_dir("/app/models/tts", tts_model_path)
                 if mode == "api":
                     if config.kokoro_api_base_url:
                         env_updates["KOKORO_API_BASE_URL"] = config.kokoro_api_base_url
@@ -2791,15 +2934,27 @@ async def save_setup_config(config: SetupConfig):
                 if tts_model_path:
                     env_updates["MELOTTS_VOICE"] = tts_model_path
             elif tts_model_path:
-                env_updates["LOCAL_TTS_MODEL_PATH"] = os.path.join("/app/models/tts", tts_model_path)
+                env_updates["LOCAL_TTS_MODEL_PATH"] = _safe_join_under_dir("/app/models/tts", tts_model_path)
+
+            # Auto-set chat_format from LLM catalog entry
+            if llm_model and llm_model.get("chat_format"):
+                env_updates["LOCAL_LLM_CHAT_FORMAT"] = llm_model["chat_format"]
 
             if config.provider == "local":
                 if config.local_llm_model == "custom_gguf_url":
                     custom_name = (config.local_llm_custom_filename or "").strip()
                     if custom_name:
-                        env_updates["LOCAL_LLM_MODEL_PATH"] = os.path.join("/app/models/llm", custom_name)
+                        pp = PurePosixPath(custom_name)
+                        if pp.name != custom_name or pp.is_absolute() or ".." in pp.parts:
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Invalid custom LLM filename (must be a simple filename with no directories or '..')",
+                            )
+                        if not custom_name.lower().endswith(".gguf"):
+                            raise HTTPException(status_code=400, detail="Custom LLM filename must end with .gguf")
+                        env_updates["LOCAL_LLM_MODEL_PATH"] = _safe_join_under_dir("/app/models/llm", custom_name)
                 elif llm_model and llm_model.get("model_path"):
-                    env_updates["LOCAL_LLM_MODEL_PATH"] = os.path.join("/app/models/llm", llm_model["model_path"])
+                    env_updates["LOCAL_LLM_MODEL_PATH"] = _safe_join_under_dir("/app/models/llm", llm_model["model_path"])
 
         upsert_env_vars(ENV_PATH, env_updates, header="Setup Wizard")
 
@@ -3100,3 +3255,88 @@ async def skip_setup():
         return {"status": "success", "message": "Setup skipped successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Backend Rebuild Endpoints ==============
+
+@router.get("/local/backends")
+async def get_backend_status():
+    """Get status of all backends - which are enabled and available."""
+    enabled = get_enabled_backends()
+    rebuild_active = is_rebuild_in_progress()
+    
+    backends = []
+    for backend, arg_name in BACKEND_BUILD_ARGS.items():
+        backends.append({
+            "id": backend,
+            "name": backend.replace("_", " ").title(),
+            "build_arg": arg_name,
+            "enabled": enabled.get(backend, False),
+            "estimated_build_seconds": BUILD_TIME_ESTIMATES.get(backend, BUILD_TIME_ESTIMATES["default"]),
+        })
+    
+    return {
+        "backends": backends,
+        "rebuild_in_progress": rebuild_active,
+    }
+
+
+class EnableBackendRequest(BaseModel):
+    backend: str
+
+
+@router.post("/local/backends/enable")
+async def enable_backend(request: EnableBackendRequest):
+    """Start a rebuild job to enable a backend."""
+    result = start_rebuild_job(request.backend)
+    
+    if "error" in result:
+        if result.get("already_enabled"):
+            backend = request.backend.strip().lower()
+            if backend in {"piper", "kokoro", "melotts"}:
+                location_hint = "Local AI Server → TTS model selector"
+            elif backend in {"vosk", "sherpa", "faster_whisper", "whisper_cpp", "kroko_embedded", "kroko"}:
+                location_hint = "Local AI Server → STT model selector"
+            elif backend in {"llama", "llm"}:
+                location_hint = "Local AI Server → LLM model selector"
+            else:
+                location_hint = "Local AI Server model selector"
+            return {
+                "already_enabled": True,
+                "backend": backend,
+                "message": (
+                    f"Backend '{backend}' is already enabled. "
+                    f"It is available to load under {location_hint}."
+                ),
+            }
+        raise HTTPException(status_code=409, detail=result["error"])
+    
+    return {
+        "job_id": result.get("job_id"),
+        "backend": result.get("backend"),
+        "estimated_seconds": result.get("estimated_seconds"),
+        "message": result.get("message"),
+    }
+
+
+@router.get("/local/backends/rebuild-status")
+async def get_rebuild_status(job_id: Optional[str] = None):
+    """Get status of a rebuild job."""
+    job = get_rebuild_job(job_id)
+    
+    if not job:
+        return {"job": None, "active": is_rebuild_in_progress()}
+    
+    return {
+        "job": {
+            "id": job.id,
+            "backend": job.backend,
+            "running": job.running,
+            "completed": job.completed,
+            "error": job.error,
+            "rolled_back": job.rolled_back,
+            "output": job.output[-50:],  # Last 50 lines
+            "progress": job.progress,
+        },
+        "active": is_rebuild_in_progress(),
+    }

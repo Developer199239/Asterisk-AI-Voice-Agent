@@ -28,8 +28,8 @@ This document outlines the plan to make Asterisk AI Voice Agent (AAVA) work seam
 
 ```bash
 # The dream user experience:
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-cd Asterisk-AI-Voice-Agent
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
+cd AVA-AI-Voice-Agent-for-Asterisk
 ./preflight.sh          # ← NEW: Detects, fixes, prepares everything
 docker compose up -d
 # Open http://localhost:3003 → Clean UI, no errors, ready to configure
@@ -102,8 +102,8 @@ docker compose up -d admin_ui
 ### New Flow (UI-First)
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-cd Asterisk-AI-Voice-Agent
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
+cd AVA-AI-Voice-Agent-for-Asterisk
 ./preflight.sh              # ← Single command handles everything
 docker compose up -d
 # User opens http://localhost:3003
@@ -156,7 +156,7 @@ After running these commands, run ./preflight.sh again.
 ### 3.1 Script Location and Naming
 
 ```text
-Asterisk-AI-Voice-Agent/
+AVA-AI-Voice-Agent-for-Asterisk/
 ├── preflight.sh          # ← NEW: Main entry point (bash)
 ├── install.sh            # Existing: Calls preflight + docker compose
 ├── docker-compose.yml

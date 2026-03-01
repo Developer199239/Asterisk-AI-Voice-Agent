@@ -63,7 +63,12 @@ from .core.models import CallSession
 from .core.outbound_store import get_outbound_store
 from .utils.audio_capture import AudioCaptureManager
 from src.pipelines.base import LLMResponse
-from src.tools.telephony.hangup_policy import resolve_hangup_policy, text_contains_marker_word, normalize_marker_list
+from src.tools.telephony.hangup_policy import (
+    resolve_hangup_policy,
+    text_contains_end_call_intent,
+    text_is_short_polite_closing,
+    normalize_marker_list,
+)
 
 logger = get_logger(__name__)
 
@@ -2149,9 +2154,9 @@ class Engine:
                     )
 
     def _is_caller_channel(self, channel: dict) -> bool:
-        """Check if this is a caller channel (SIP, PJSIP, etc.)"""
+        """Check if this is a caller channel (SIP, PJSIP, DAHDI, Dongle, etc.)"""
         channel_name = channel.get('name', '')
-        return any(channel_name.startswith(prefix) for prefix in ['SIP/', 'PJSIP/', 'DAHDI/', 'IAX2/'])
+        return any(channel_name.startswith(prefix) for prefix in ['SIP/', 'PJSIP/', 'DAHDI/', 'IAX2/', 'Dongle/'])
 
     def _is_local_channel(self, channel: dict) -> bool:
         """Check if this is a Local channel"""
@@ -2938,7 +2943,12 @@ class Engine:
 
                         if attached and not session.provider_session_active:
                             await self._ensure_provider_session_started(caller_channel_id)
-                        elif not attached:
+                        if attached:
+                            try:
+                                await self._enable_pipeline_talk_detect(session)
+                            except Exception:
+                                logger.debug("TALK_DETECT enable failed after ExternalMedia attach", call_id=caller_channel_id, exc_info=True)
+                        if not attached:
                             logger.error(
                                 "🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge (direct attach)",
                                 external_media_id=external_media_id,
@@ -3000,6 +3010,10 @@ class Engine:
                 
                 # Start provider session now that media path is connected
                 await self._ensure_provider_session_started(caller_channel_id)
+                try:
+                    await self._enable_pipeline_talk_detect(session)
+                except Exception:
+                    logger.debug("TALK_DETECT enable failed after AudioSocket attach", call_id=caller_channel_id, exc_info=True)
             else:
                 logger.error("🎯 HYBRID ARI - Failed to add Local channel to bridge", 
                            local_channel_id=local_channel_id,
@@ -3499,6 +3513,36 @@ class Engine:
             return None
         finally:
             self._attended_transfer_dtmf_waiters.pop(agent_channel_id, None)
+
+    @staticmethod
+    def _resolve_local_farewell_settings(local_config: Any) -> Tuple[str, float]:
+        mode = "asterisk"
+        timeout_sec = 30.0
+
+        if local_config is None:
+            return mode, timeout_sec
+
+        if isinstance(local_config, dict):
+            raw_mode = local_config.get("farewell_mode")
+            raw_timeout = local_config.get("farewell_timeout_sec")
+        else:
+            raw_mode = getattr(local_config, "farewell_mode", None)
+            raw_timeout = getattr(local_config, "farewell_timeout_sec", None)
+
+        if raw_mode is not None:
+            parsed_mode = str(raw_mode).strip().lower()
+            if parsed_mode in ("asterisk", "tts"):
+                mode = parsed_mode
+
+        if raw_timeout is not None:
+            try:
+                parsed_timeout = float(raw_timeout)
+                if parsed_timeout > 0:
+                    timeout_sec = parsed_timeout
+            except (TypeError, ValueError):
+                pass
+
+        return mode, timeout_sec
 
     async def _local_ai_server_tts(self, *, call_id: str, text: str, timeout_sec: float) -> Optional[bytes]:
         """Synthesize μ-law 8k audio via local-ai-server (hard requirement for attended transfer)."""
@@ -4182,14 +4226,16 @@ class Engine:
             logger.error("Error handling ChannelVarset", error=str(exc), exc_info=True)
 
     async def _enable_pipeline_talk_detect(self, session: CallSession) -> None:
-        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel for pipelines."""
+        """Enable Asterisk talk detection (TALK_DETECT) on the caller channel.
+
+        Works for both pipeline calls and local-provider streaming calls so that
+        barge-in can trigger even while TTS gating disables RTP audio capture.
+        """
         try:
             cfg = getattr(self.config, "barge_in", None)
             if not cfg or not bool(getattr(cfg, "pipeline_talk_detect_enabled", False)):
                 return
             call_id = session.call_id
-            if not bool(self._pipeline_forced.get(call_id)):
-                return
             channel_id = getattr(session, "caller_channel_id", None)
             if not channel_id:
                 return
@@ -4214,14 +4260,15 @@ class Engine:
             await self._save_session(session)
             if ok:
                 logger.info(
-                    "Enabled TALK_DETECT for pipeline",
+                    "Enabled TALK_DETECT for barge-in",
                     call_id=call_id,
                     channel_id=channel_id,
                     silence_ms=silence_ms,
                     talking_threshold=talking_thr,
+                    is_pipeline=bool(self._pipeline_forced.get(call_id)),
                 )
             else:
-                logger.warning("Failed to enable TALK_DETECT for pipeline", call_id=call_id, channel_id=channel_id)
+                logger.warning("Failed to enable TALK_DETECT", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("Enable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
@@ -4255,7 +4302,10 @@ class Engine:
             logger.debug("Disable TALK_DETECT failed", call_id=getattr(session, "call_id", None), exc_info=True)
 
     async def _handle_channel_talking_started(self, event: dict) -> None:
-        """Trigger pipeline barge-in when Asterisk detects caller speech during TTS playback."""
+        """Trigger barge-in when Asterisk detects caller speech during TTS playback.
+
+        Works for both pipeline calls and local-provider streaming calls.
+        """
         try:
             channel = event.get("channel", {}) or {}
             channel_id = channel.get("id")
@@ -4266,9 +4316,6 @@ class Engine:
             if not session:
                 return
             call_id = session.call_id
-
-            if not bool(self._pipeline_forced.get(call_id)):
-                return
 
             # Only act when local playback/gating is active; otherwise this is just "caller is talking".
             if bool(getattr(session, "audio_capture_enabled", True)) and not bool(getattr(session, "tts_playing", False)):
@@ -4286,7 +4333,7 @@ class Engine:
             except Exception:
                 tts_elapsed_ms = 0
 
-            initial_protect = int(getattr(cfg, "initial_protection_ms", 200))
+            initial_protect = int(getattr(cfg, "talk_detect_initial_protection_ms", 1500))
             try:
                 if getattr(session, "conversation_state", None) == "greeting":
                     greet_ms = int(getattr(cfg, "greeting_protection_ms", 0))
@@ -4295,6 +4342,12 @@ class Engine:
             except Exception:
                 pass
             if tts_elapsed_ms < initial_protect:
+                logger.debug(
+                    "TalkDetect suppressed (echo protection)",
+                    call_id=call_id,
+                    tts_elapsed_ms=tts_elapsed_ms,
+                    protection_ms=initial_protect,
+                )
                 return
 
             cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
@@ -4317,7 +4370,7 @@ class Engine:
             logger.debug("ChannelTalkingStarted handler failed", ari_event=event, exc_info=True)
 
     async def _handle_channel_talking_finished(self, event: dict) -> None:
-        """Informational handler for talk detection end events (pipelines)."""
+        """Informational handler for talk detection end events."""
         try:
             channel = event.get("channel", {}) or {}
             channel_id = channel.get("id")
@@ -4327,8 +4380,6 @@ class Engine:
             if not session:
                 return
             call_id = session.call_id
-            if not bool(self._pipeline_forced.get(call_id)):
-                return
             logger.debug("TalkDetect finished", call_id=call_id, channel_id=channel_id)
         except Exception:
             logger.debug("ChannelTalkingFinished handler failed", ari_event=event, exc_info=True)
@@ -5404,7 +5455,13 @@ class Engine:
                     cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
                     last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
                     in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
-                    min_ms = int(getattr(cfg, "pipeline_min_ms", 0) or getattr(cfg, "min_ms", 250))
+                    provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                    min_ms = self._resolve_barge_in_min_ms(
+                        session,
+                        cfg,
+                        pipeline_mode=True,
+                        provider_name=provider_name,
+                    )
                     if not in_cooldown and int(getattr(session, "barge_in_candidate_ms", 0)) >= min_ms:
                         try:
                             try:
@@ -5424,7 +5481,7 @@ class Engine:
                         except Exception:
                             logger.error("Error triggering AudioSocket pipeline barge-in", call_id=caller_channel_id, exc_info=True)
                     else:
-                        if energy > 0 and self.conversation_coordinator:
+                        if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                             try:
                                 self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                             except Exception:
@@ -5935,7 +5992,13 @@ class Engine:
                 last_barge_in_ts = float(getattr(session, 'last_barge_in_ts', 0.0) or 0.0)
                 in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
 
-                min_ms = int(getattr(cfg, 'min_ms', 250))
+                provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                min_ms = self._resolve_barge_in_min_ms(
+                    session,
+                    cfg,
+                    pipeline_mode=False,
+                    provider_name=provider_name,
+                )
                 should_trigger = not in_cooldown and session.barge_in_candidate_ms >= min_ms
                 
                 # CRITICAL FIX #2: Skip engine-level barge-in for OpenAI Realtime
@@ -6001,7 +6064,7 @@ class Engine:
                     # After barge-in, fall through to forward this frame to provider
                 else:
                     # Not yet triggered; drop inbound frame while TTS is active
-                    if energy > 0 and self.conversation_coordinator:
+                    if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                         try:
                             self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                         except Exception:
@@ -6400,8 +6463,12 @@ class Engine:
                 return
 
             # Only when we can reasonably assume inbound is caller-isolated.
-            if not await self._is_inbound_isolated_for_barge_in_fallback(session):
-                return
+            # For ExternalMedia RTP, the inbound stream is expected to already be caller-isolated
+            # (bridge mix excludes the ExternalMedia channel's own transmitted audio), so we skip
+            # the playback/MOH isolation heuristic which would otherwise prevent barge-in during TTS.
+            if source != "externalmedia":
+                if not await self._is_inbound_isolated_for_barge_in_fallback(session):
+                    return
 
             import time
 
@@ -6565,6 +6632,30 @@ class Engine:
             return bytes([0xFF]) * length  # μ-law silence
         return b"\x00" * length  # PCM16 silence (zeroed samples)
 
+    @staticmethod
+    def _resolve_barge_in_min_ms(
+        session: CallSession,
+        cfg,
+        *,
+        pipeline_mode: bool,
+        provider_name: Optional[str] = None,
+    ) -> int:
+        """Resolve effective barge-in min duration with local/pipeline-only first-turn fast path."""
+        base_min = int(getattr(cfg, "pipeline_min_ms", 0) or getattr(cfg, "min_ms", 250)) if pipeline_mode else int(getattr(cfg, "min_ms", 250))
+
+        scope_applies = pipeline_mode or (provider_name == "local")
+        if not scope_applies:
+            return base_min
+
+        if getattr(session, "conversation_state", None) != "greeting":
+            return base_min
+
+        if int(getattr(session, "barge_in_count", 0) or 0) > 0:
+            return base_min
+
+        first_barge_min = int(getattr(cfg, "local_first_barge_min_ms", 80) or 80)
+        return max(40, min(base_min, first_barge_min))
+
     async def _apply_barge_in_action(self, call_id: str, *, source: str, reason: str) -> None:
         """Apply platform-owned barge-in actions (flush local output only).
 
@@ -6588,6 +6679,13 @@ class Engine:
                 return
 
             # Stop/flush streaming playback first (prevents tail audio).
+            # Mark end_reason so cleanup skips remainder flush (avoids oversized RTP packets).
+            try:
+                _sinfo = self.streaming_playback_manager.active_streams.get(call_id)
+                if _sinfo is not None:
+                    _sinfo['end_reason'] = 'barge-in'
+            except Exception:
+                pass
             try:
                 await self.streaming_playback_manager.stop_streaming_playback(call_id)
             except Exception:
@@ -6656,6 +6754,16 @@ class Engine:
                 await self._save_session(session)
             except Exception:
                 logger.debug("Failed to record barge-in state", call_id=call_id, exc_info=True)
+
+            # Local provider only: clear Whisper-family STT suppression window on the
+            # Local AI Server immediately after barge-in so first caller speech turn
+            # is captured without requiring a second attempt.
+            try:
+                provider = (getattr(self, "_call_providers", {}) or {}).get(call_id)
+                if isinstance(provider, LocalProvider):
+                    await provider.notify_barge_in(call_id)
+            except Exception:
+                logger.debug("Failed to notify local provider about barge-in", call_id=call_id, exc_info=True)
 
             logger.info("🎧 BARGE-IN action applied", call_id=call_id, source=source, reason=reason)
         except Exception:
@@ -6844,7 +6952,13 @@ class Engine:
                     cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
                     last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
                     in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
-                    min_ms = int(getattr(cfg, "pipeline_min_ms", 0) or getattr(cfg, "min_ms", 250))
+                    provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                    min_ms = self._resolve_barge_in_min_ms(
+                        session,
+                        cfg,
+                        pipeline_mode=True,
+                        provider_name=provider_name,
+                    )
                     if not in_cooldown and int(getattr(session, "barge_in_candidate_ms", 0)) >= min_ms:
                         try:
                             try:
@@ -6864,7 +6978,7 @@ class Engine:
                         except Exception:
                             logger.error("Error triggering RTP pipeline barge-in", call_id=caller_channel_id, exc_info=True)
                     else:
-                        if energy > 0 and self.conversation_coordinator:
+                        if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                             try:
                                 self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                             except Exception:
@@ -6934,12 +7048,27 @@ class Engine:
                     # Replace audio with silence (zero-filled PCM16)
                     pcm_16k = b'\x00' * len(pcm_16k)
                 elif not needs_gating and not session.audio_capture_enabled:
-                    # For other providers, can safely drop audio during TTS
+                    # For other providers, do not forward audio during TTS, but still run
+                    # local barge-in detection on the real inbound frames so interruptions work.
                     logger.debug(
                         "Dropping RTP audio for continuous provider during TTS playback",
                         call_id=caller_channel_id,
                         provider=provider_name,
                     )
+                    try:
+                        await self._maybe_provider_barge_in_fallback(
+                            session,
+                            pcm16=pcm_for_barge_in,
+                            pcm_rate_hz=int(getattr(self.rtp_server, 'sample_rate', 16000) if self.rtp_server else 16000),
+                            audiosocket_wire=None,
+                            source="externalmedia",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Provider barge-in fallback check failed (ExternalMedia/continuous gated)",
+                            call_id=caller_channel_id,
+                            exc_info=True,
+                        )
                     return
                 if not getattr(session, "provider_session_active", False):
                     return
@@ -7057,7 +7186,13 @@ class Engine:
                 last_barge_in_ts = float(getattr(session, 'last_barge_in_ts', 0.0) or 0.0)
                 in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
 
-                min_ms = int(getattr(cfg, 'min_ms', 250))
+                provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                min_ms = self._resolve_barge_in_min_ms(
+                    session,
+                    cfg,
+                    pipeline_mode=False,
+                    provider_name=provider_name,
+                )
                 if not in_cooldown and session.barge_in_candidate_ms >= min_ms:
                     try:
                         try:
@@ -7077,7 +7212,7 @@ class Engine:
                         logger.error("Error triggering RTP barge-in", call_id=caller_channel_id, exc_info=True)
                 else:
                     # Not yet triggered; drop inbound frame while TTS is active
-                    if energy > 0 and self.conversation_coordinator:
+                    if int(getattr(session, "barge_in_candidate_ms", 0) or 0) > 0 and self.conversation_coordinator:
                         try:
                             self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                         except Exception:
@@ -7504,7 +7639,6 @@ class Engine:
                     try:
                         cfg = getattr(self.config, "barge_in", None)
                         cooldown_ms = int(getattr(cfg, "cooldown_ms", 500)) if cfg else 500
-                        import time
                         now = time.time()
                         last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
                         if last_barge_in_ts and (now - last_barge_in_ts) * 1000 < cooldown_ms:
@@ -7662,8 +7796,6 @@ class Engine:
                 # If barge-in fired, suppress provider audio locally for a short window so streaming
                 # doesn't immediately restart with the remainder of the previous sentence.
                 try:
-                    import time
-
                     now = time.time()
                     sup = session.vad_state.get("output_suppression") or {}
                     until_ts = float(sup.get("until_ts", 0.0) or 0.0)
@@ -7869,6 +8001,26 @@ class Engine:
                         if call_id not in self._segment_tts_active:
                             await self.streaming_playback_manager.start_segment_gating(call_id)
                             self._segment_tts_active.add(call_id)
+                            # Safety net: verify gating was actually set; if not, apply directly
+                            try:
+                                _seg_session = await self.session_store.get_by_call_id(call_id)
+                                if _seg_session and _seg_session.audio_capture_enabled:
+                                    _seg_token = None
+                                    try:
+                                        _seg_info = self.streaming_playback_manager.active_streams.get(call_id)
+                                        if _seg_info:
+                                            _seg_token = str(_seg_info.get('stream_id') or '')
+                                    except Exception:
+                                        pass
+                                    if not _seg_token:
+                                        _seg_token = f"tts_segment:{call_id}"
+                                    if self.conversation_coordinator:
+                                        await self.conversation_coordinator.on_tts_start(call_id, _seg_token)
+                                    else:
+                                        await self.session_store.set_gating_token(call_id, _seg_token)
+                                    logger.info("Segment gating fallback applied", call_id=call_id, token=_seg_token)
+                            except Exception:
+                                logger.debug("Segment gating fallback failed", call_id=call_id, exc_info=True)
                 except Exception:
                     logger.debug("Failed to start segment gating", call_id=call_id, exc_info=True)
                 if coalesce_enabled and q is None and not isinstance(out_chunk, list):
@@ -8054,7 +8206,23 @@ class Engine:
                         # Track provider bytes
                         try:
                             if call_id not in self._provider_segment_start_ts:
-                                self._provider_segment_start_ts[call_id] = time.time()
+                                seg_start_ts = time.time()
+                                self._provider_segment_start_ts[call_id] = seg_start_ts
+                                # Latency instrumentation (Milestone 21): compute turn latency for
+                                # providers that stream audio directly (e.g., local_ai_server).
+                                try:
+                                    t0 = float(getattr(session, "last_transcription_ts", 0.0) or 0.0)
+                                    if t0 > 0.0 and seg_start_ts >= t0:
+                                        latency_ms = (seg_start_ts - t0) * 1000.0
+                                        # Ignore extreme values to avoid polluting call history due to clock jumps.
+                                        if 0.0 <= latency_ms <= 120_000.0:
+                                            session.turn_latencies_ms.append(latency_ms)
+                                            session.last_turn_latency_s = float(latency_ms) / 1000.0
+                                            session.last_response_start_ts = float(seg_start_ts)
+                                            # Clear so subsequent segments aren't counted as new turns.
+                                            session.last_transcription_ts = 0.0
+                                except Exception:
+                                    logger.debug("Provider latency instrumentation failed", call_id=call_id, exc_info=True)
                         except Exception:
                             pass
                         self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else sum(len(f) for f in (out_chunk if isinstance(out_chunk, list) else [out_chunk])))
@@ -8097,16 +8265,28 @@ class Engine:
                         await self.streaming_playback_manager.end_segment_gating(call_id)
                     except Exception:
                         logger.debug("Failed to end segment gating", call_id=call_id, exc_info=True)
+                    # Also clear fallback gating token if direct gating was applied
+                    try:
+                        _fallback_token = f"tts_segment:{call_id}"
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.on_tts_end(call_id, _fallback_token, reason="segment-end-fallback")
+                        else:
+                            await self.session_store.clear_gating_token(call_id, _fallback_token)
+                    except Exception:
+                        pass
                     # CRITICAL FIX #1: Do NOT discard call_id for providers with server-side AEC
-                    # (OpenAI, Deepgram, etc.) — discarding causes 20+ re-gating interruptions.
-                    # BUT google_live lacks server-side echo cancellation, so we MUST re-arm
-                    # gating at each segment boundary so silence frames replace echo during
-                    # the next model response.
-                    _SELF_GATING_PROVIDERS = {'google_live'}
+                    # (OpenAI, Deepgram, etc.) — discarding causes repeated re-gating interruptions.
+                    # Re-arm only for providers/backends that need self-echo suppression.
                     _prov = getattr(session, 'provider_name', None)
-                    if _prov in _SELF_GATING_PROVIDERS:
+                    should_rearm_segment_gating = _prov in ("google_live", "local")
+                    if should_rearm_segment_gating:
                         try:
                             self._segment_tts_active.discard(call_id)
+                            logger.debug(
+                                "Re-armed segment gating after AgentAudioDone",
+                                call_id=call_id,
+                                provider=_prov,
+                            )
                         except Exception:
                             pass
                 else:
@@ -8400,14 +8580,38 @@ class Engine:
                 # Handle tool calls from local LLM (parsed from text response)
                 tool_calls = event.get("tool_calls", [])
                 text_response = event.get("text")
-                
+
                 logger.info(
                     "🔧 Tool calls parsed from local LLM",
                     call_id=call_id,
                     tools=[tc.get("name") for tc in tool_calls],
                     has_text=bool(text_response),
                 )
-                
+
+                # Guardrail: local LLMs can hallucinate terminal tool calls (especially hangup_call).
+                # Require explicit end-of-call intent in the *user's* transcript before honoring hangup_call.
+                if tool_calls and any((tc.get("name") or "").strip() == "hangup_call" for tc in tool_calls):
+                    hangup_policy = resolve_hangup_policy(getattr(self.config, "tools", None))
+                    policy_mode = str(hangup_policy.get("mode") or "normal").strip().lower()
+                    if policy_mode != "relaxed":
+                        end_markers = (hangup_policy.get("markers") or {}).get("end_call", [])
+                        user_text = (getattr(session, "last_transcript", None) or "").strip()
+                        has_end_intent = (
+                            text_contains_end_call_intent(user_text, end_markers)
+                            or text_is_short_polite_closing(user_text)
+                        )
+                        if not has_end_intent:
+                            before_count = len(tool_calls)
+                            tool_calls = [tc for tc in tool_calls if (tc.get("name") or "").strip() != "hangup_call"]
+                            dropped = before_count - len(tool_calls)
+                            if dropped:
+                                logger.warning(
+                                    "Dropping hangup_call tool call from local LLM (no end-of-call intent detected)",
+                                    call_id=call_id,
+                                    guardrail_mode=policy_mode,
+                                    transcript_preview=user_text[:160],
+                                )
+
                 # Execute each tool call
                 for tool_call in tool_calls:
                     tool_name = tool_call.get("name")
@@ -8444,15 +8648,9 @@ class Engine:
                             )
                             
                             # Get farewell mode from config
-                            farewell_mode = "asterisk"  # default
-                            farewell_timeout = 30.0
-                            try:
-                                local_config = self.config.providers.get("local")
-                                if local_config:
-                                    farewell_mode = getattr(local_config, 'farewell_mode', 'asterisk') or 'asterisk'
-                                    farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 30.0) or 30.0)
-                            except Exception:
-                                pass
+                            providers_cfg = getattr(self.config, "providers", {}) or {}
+                            local_config = providers_cfg.get("local") if isinstance(providers_cfg, dict) else None
+                            farewell_mode, farewell_timeout = self._resolve_local_farewell_settings(local_config)
                             
                             logger.info(
                                 "🎤 Farewell mode",
@@ -8462,14 +8660,40 @@ class Engine:
                             )
                             
                             if farewell_mode == "tts":
-                                # Use TTS farewell - best for fast hardware
-                                # Wait for TTS from LLM response to complete
+                                # Use TTS farewell: rely on cleanup_after_tts + AgentAudioDone to hang up
+                                # after the local provider finishes speaking. This avoids fixed sleeps and
+                                # keeps behavior consistent across LLMs/voices.
                                 logger.info(
-                                    "⏳ Waiting for TTS farewell",
+                                    "⏳ Farewell mode=tts: waiting for AgentAudioDone (cleanup_after_tts)",
                                     call_id=call_id,
                                     timeout_sec=farewell_timeout,
                                 )
-                                await asyncio.sleep(farewell_timeout)
+                                # Fallback: if no audio is ever emitted (tool-only response / silent TTS),
+                                # force a hangup after the configured timeout.
+                                async def _hangup_fallback() -> None:
+                                    try:
+                                        await asyncio.sleep(max(0.5, float(farewell_timeout)))
+                                        current = await self.session_store.get_by_call_id(call_id)
+                                        if current and getattr(current, "cleanup_after_tts", False):
+                                            logger.warning(
+                                                "Farewell timeout reached; forcing hangup",
+                                                call_id=call_id,
+                                                timeout_sec=farewell_timeout,
+                                            )
+                                            try:
+                                                await self.ari_client.hangup_channel(current.caller_channel_id)
+                                            except Exception:
+                                                logger.debug(
+                                                    "Forced hangup failed (may already be hung up)",
+                                                    call_id=call_id,
+                                                )
+                                    except asyncio.CancelledError:
+                                        return
+                                    except Exception:
+                                        logger.debug("Farewell fallback task failed", call_id=call_id, exc_info=True)
+
+                                asyncio.create_task(_hangup_fallback())
+                                break
                             else:
                                 # Use Asterisk's built-in goodbye sound - reliable for slow hardware
                                 try:
@@ -8489,8 +8713,8 @@ class Engine:
                                     await asyncio.sleep(1.0)
                             
                             logger.info("✅ Farewell wait complete", call_id=call_id)
-                            
-                            # Explicitly hang up after farewell TTS
+
+                            # Explicitly hang up after farewell playback (asterisk mode only)
                             try:
                                 await self.ari_client.hangup_channel(session.caller_channel_id)
                                 logger.info("✅ Call hung up after farewell", call_id=call_id)
@@ -8513,6 +8737,20 @@ class Engine:
                 # User speech transcript from provider (ElevenLabs, etc.)
                 text = event.get("text", "").strip()
                 if text and text != "...":
+                    # Keep a quick-access copy for guardrails (e.g., hangup intent) and observability.
+                    try:
+                        session.last_transcript = text
+                    except Exception:
+                        pass
+                    # Latency instrumentation: record when the final transcript arrived.
+                    try:
+                        now_ts = time.time()
+                        session.last_transcription_ts = float(now_ts)
+                        # For providers that don't report precise VAD end timestamps, treat transcript time
+                        # as the best-available proxy for "user finished speaking".
+                        session.last_user_speech_end_ts = float(now_ts)
+                    except Exception:
+                        logger.debug("Failed to stamp transcript latency timestamps", call_id=call_id, exc_info=True)
                     # Add to conversation history
                     if not hasattr(session, 'conversation_history') or session.conversation_history is None:
                         session.conversation_history = []
@@ -9257,7 +9495,10 @@ class Engine:
                                 error=str(e),
                                 exc_info=True,
                             )
-                        has_end_intent = text_contains_marker_word(normalized_user_text, end_markers)
+                        has_end_intent = (
+                            text_contains_end_call_intent(normalized_user_text, end_markers)
+                            or text_is_short_polite_closing(normalized_user_text)
+                        )
                         before_count = len(tool_calls)
                         if not has_end_intent:
                             tool_calls = [tc for tc in tool_calls if tc.get("name") != "hangup_call"]
@@ -11439,9 +11680,10 @@ class Engine:
                         # - Combine global tools with context-specific tools (Milestone 24),
                         #   respecting context opt-outs.
                         # - Also include per-context in-call HTTP tool wrappers.
-                        allowed = list(getattr(context_config, "tools", None) or [])
+                        explicit_context_tools = list(getattr(context_config, "tools", None) or [])
                         if allowed_in_call_http_tool_names:
-                            allowed.extend(allowed_in_call_http_tool_names)
+                            explicit_context_tools.extend(allowed_in_call_http_tool_names)
+                        allowed = list(explicit_context_tools)
                         try:
                             from src.tools.base import ToolPhase
                             from src.tools.registry import tool_registry
@@ -11455,6 +11697,9 @@ class Engine:
                             provider_context["tools"] = [t.definition.name for t in tools]
                         except Exception:
                             provider_context["tools"] = allowed
+                        # Local provider can choose strict context-only tools while other providers
+                        # keep effective (global+context) tools in provider_context["tools"].
+                        provider_context["context_tools"] = list(explicit_context_tools)
                         try:
                             # Persist tool allowlist on session so provider-agnostic tools (e.g., hangup_call)
                             # can decide whether follow-up tools like request_transcript are actually available.

@@ -13,6 +13,8 @@ Thanks to all the people who have contributed to the Asterisk AI Voice Agent!
 | <img src="https://github.com/turgutguvercin.png" width="50" alt="turgutguvercin"> | **[turgutguvercin](https://github.com/turgutguvercin)** | Code — NumPy Audio Resampler |
 | <img src="https://github.com/Scarjit.png" width="50" alt="Scarjit"> | **[Scarjit](https://github.com/Scarjit)** | Code |
 | <img src="https://github.com/egorky.png" width="50" alt="egorky"> | **[egorky](https://github.com/egorky)** | Bug Fix — OpenAI Realtime modalities |
+| <img src="https://github.com/alemstrom.png" width="50" alt="alemstrom"> | **[alemstrom](https://github.com/alemstrom)** | Docs — PBX Setup |
+| <img src="https://github.com/gcsuri.png" width="50" alt="gcsuri"> | **[gcsuri](https://github.com/gcsuri)** | Code — Google Calendar Tool |
 
 <!-- markdownlint-restore -->
 <!-- prettier-ignore-end -->
@@ -24,8 +26,8 @@ Thanks to all the people who have contributed to the Asterisk AI Voice Agent!
 
 Your name is added here when your first PR is merged. All contribution types are recognized — code, docs, tests, configs, case studies, ideas, and bug reports.
 
-See [Recognition Program](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/RECOGNITION.md) for details.
+See [Recognition Program](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/develop/docs/contributing/RECOGNITION.md) for details.
 
 ## Want to Contribute?
 
-See the [Operator Contributor Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE.md) — no coding or GitHub experience needed.
+See the [Operator Contributor Guide](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/develop/docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE.md) — no coding or GitHub experience needed.

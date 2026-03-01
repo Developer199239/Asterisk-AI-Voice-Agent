@@ -21,8 +21,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/check"
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/configmerge"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/check"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/configmerge"
 	"github.com/spf13/cobra"
 )
 
@@ -525,7 +525,7 @@ func maybeSelfUpdateAndReexec() {
 		return
 	}
 
-	latest, err := fetchLatestReleaseTag(context.Background(), "hkjarral/Asterisk-AI-Voice-Agent")
+	latest, err := fetchLatestReleaseTag(context.Background(), "hkjarral/AVA-AI-Voice-Agent-for-Asterisk")
 	if err != nil || latest == "" {
 		return
 	}
@@ -592,7 +592,7 @@ func selfUpdateFromGitHubRelease(tag string, binName string, installPath string)
 		return err
 	}
 
-	base := fmt.Sprintf("https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/download/%s", tag)
+	base := fmt.Sprintf("https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/download/%s", tag)
 	binURL := base + "/" + binName
 	sumsURL := base + "/SHA256SUMS"
 
@@ -686,7 +686,7 @@ func ensureWritableDir(dir string) error {
 }
 
 func printSelfUpdateHint() {
-	latest, err := fetchLatestReleaseTag(context.Background(), "hkjarral/Asterisk-AI-Voice-Agent")
+	latest, err := fetchLatestReleaseTag(context.Background(), "hkjarral/AVA-AI-Voice-Agent-for-Asterisk")
 	if err != nil || latest == "" {
 		return
 	}
@@ -699,7 +699,7 @@ func printSelfUpdateHint() {
 		return
 	}
 	fmt.Printf("Notice: a newer agent CLI is available (%s -> %s). Update with:\n", current, latest)
-	fmt.Printf("  curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash\n")
+	fmt.Printf("  curl -sSL https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/main/scripts/install-cli.sh | bash\n")
 }
 
 func fetchLatestReleaseTag(ctx context.Context, repo string) (string, error) {

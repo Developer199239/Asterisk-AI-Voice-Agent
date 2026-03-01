@@ -9,13 +9,25 @@ import { ConfigCard } from '../../components/ui/ConfigCard';
 import { FormInput } from '../../components/ui/FormComponents';
 import { sanitizeConfigForSave } from '../../utils/configSanitizers';
 
+const CHAT_FORMAT_OPTIONS = [
+    { value: '', label: '(Legacy Phi-style — no chat template)' },
+    { value: 'chatml', label: 'ChatML (Phi-3, Qwen, Hermes, TinyLlama, Command-R)' },
+    { value: 'llama-3', label: 'Llama 3 (Llama 3.x family)' },
+    { value: 'mistral-instruct', label: 'Mistral Instruct (Mistral, Nemo)' },
+    { value: 'gemma', label: 'Gemma (Google Gemma 2)' },
+    { value: 'functionary-v2', label: 'Functionary v2 (tool-calling tuned)' },
+];
+
 const LLMPage = () => {
     const [config, setConfig] = useState<any>({});
+    const [env, setEnv] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(true);
     const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
     const [pendingRestart, setPendingRestart] = useState(false);
     const [restartingEngine, setRestartingEngine] = useState(false);
+    const [localCapability, setLocalCapability] = useState<any>(null);
+    const [localConnected, setLocalConnected] = useState(false);
 
     useEffect(() => {
         fetchConfig();
@@ -23,7 +35,17 @@ const LLMPage = () => {
 
     const fetchConfig = async () => {
         try {
-            const res = await axios.get('/api/config/yaml');
+            const [yamlRes, healthRes, envRes] = await Promise.allSettled([
+                axios.get('/api/config/yaml'),
+                axios.get('/api/system/health'),
+                axios.get('/api/config/env'),
+            ]);
+
+            if (yamlRes.status !== 'fulfilled') {
+                throw new Error('Failed to load yaml');
+            }
+
+            const res = yamlRes.value;
             if (res.data.yaml_error) {
                 setYamlError(res.data.yaml_error);
                 setConfig({});
@@ -32,24 +54,59 @@ const LLMPage = () => {
                 setConfig(parsed || {});
                 setYamlError(null);
             }
+
+            if (envRes.status === 'fulfilled') {
+                setEnv(envRes.value.data || {});
+            }
+
+            if (healthRes.status === 'fulfilled') {
+                const localDetails = healthRes.value.data?.local_ai_server?.details || {};
+                setLocalConnected(healthRes.value.data?.local_ai_server?.status === 'connected');
+                setLocalCapability(localDetails?.models?.llm?.tool_capability || null);
+            } else {
+                setLocalConnected(false);
+                setLocalCapability(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             setYamlError(null);
+            setLocalConnected(false);
+            setLocalCapability(null);
         } finally {
             setLoading(false);
         }
+    };
+
+    const updateEnv = (key: string, value: string) => {
+        setEnv(prev => ({ ...prev, [key]: value }));
     };
 
     const handleSave = async () => {
         setSaving(true);
         try {
             const sanitized = sanitizeConfigForSave(config);
-            await axios.post('/api/config/yaml', { content: yaml.dump(sanitized) });
-            setPendingRestart(true);
+            const [yamlSave, envSave] = await Promise.allSettled([
+                axios.post('/api/config/yaml', { content: yaml.dump(sanitized) }),
+                axios.post('/api/config/env', env),
+            ]);
+
+            const yamlOk = yamlSave.status === 'fulfilled';
+            const envOk = envSave.status === 'fulfilled';
+            if (yamlOk || envOk) {
+                setPendingRestart(true);
+            }
+            if (!yamlOk || !envOk) {
+                const yamlState = yamlOk ? 'ok' : 'failed';
+                const envState = envOk ? 'ok' : 'failed';
+                throw new Error(`Partial save detected (yaml=${yamlState}, env=${envState})`);
+            }
+
             toast.success('LLM configuration saved');
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to save config', err);
-            toast.error('Failed to save configuration');
+            toast.error('Failed to save configuration', {
+                description: err?.message || 'Unknown error',
+            });
         } finally {
             setSaving(false);
         }
@@ -101,6 +158,21 @@ const LLMPage = () => {
         });
     };
 
+    const updateLocalProviderConfig = (field: string, value: any) => {
+        const providers = config.providers || {};
+        const local = providers.local || {};
+        setConfig({
+            ...config,
+            providers: {
+                ...providers,
+                local: {
+                    ...local,
+                    [field]: value
+                }
+            }
+        });
+    };
+
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
 
     if (yamlError) return (
@@ -110,6 +182,17 @@ const LLMPage = () => {
     );
 
     const llmConfig = config.llm || {};
+    const localProviderConfig = config.providers?.local || {};
+    const configuredToolPolicy = String(localProviderConfig.tool_call_policy || 'auto').trim().toLowerCase();
+    const toolCapabilityLevel = String(localCapability?.level || 'unknown').trim().toLowerCase();
+    const resolvedToolPolicy = configuredToolPolicy !== 'auto'
+        ? configuredToolPolicy
+        : (toolCapabilityLevel === 'strict' ? 'strict' : toolCapabilityLevel === 'none' ? 'off' : 'compatible');
+    const policyMismatchWarning = (
+        configuredToolPolicy !== 'auto' &&
+        ((configuredToolPolicy === 'strict' && toolCapabilityLevel === 'none') ||
+            (configuredToolPolicy === 'off' && toolCapabilityLevel === 'strict'))
+    );
 
     return (
         <div className="space-y-6">
@@ -177,6 +260,113 @@ const LLMPage = () => {
                                 The core personality and instructions for the AI.
                             </p>
                         </div>
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            <ConfigSection title="Local LLM Prompting" description="Chat template and voice preamble for the local LLM (llama-cpp). Requires local_ai_server restart.">
+                <ConfigCard>
+                    <div className="space-y-6">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium leading-none">Chat Format</label>
+                            <select
+                                className="w-full p-2 rounded border border-input bg-background text-sm"
+                                value={env['LOCAL_LLM_CHAT_FORMAT'] || ''}
+                                onChange={(e) => updateEnv('LOCAL_LLM_CHAT_FORMAT', e.target.value)}
+                            >
+                                {CHAT_FORMAT_OPTIONS.map(opt => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-muted-foreground">
+                                Determines the prompt template used by <code>create_chat_completion()</code>.
+                                Auto-set when selecting a model on the Models page. Leave empty for legacy Phi-style raw prompting.
+                            </p>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium leading-none">Voice Preamble</label>
+                            <textarea
+                                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                value={env['LOCAL_LLM_VOICE_PREAMBLE'] || ''}
+                                onChange={(e) => updateEnv('LOCAL_LLM_VOICE_PREAMBLE', e.target.value)}
+                                placeholder="You are a voice assistant on a phone call. Keep responses short and conversational. Do not use markdown, bullet points, numbered lists, or any visual formatting. Speak naturally as if talking to someone on the phone."
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Meta-instructions prepended to the system prompt so local LLMs produce voice-friendly output
+                                (no markdown, concise, natural speech). Applied to every call.
+                            </p>
+                        </div>
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            <ConfigSection title="Local Tool Calling" description="Full-local provider tool execution policy and structured gateway controls.">
+                <ConfigCard>
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Tool Policy Override</label>
+                                <select
+                                    className="w-full p-2 rounded border border-input bg-background"
+                                    value={configuredToolPolicy || 'auto'}
+                                    onChange={(e) => updateLocalProviderConfig('tool_call_policy', e.target.value)}
+                                >
+                                    <option value="auto">Auto (recommended)</option>
+                                    <option value="strict">Strict</option>
+                                    <option value="compatible">Compatible</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <p className="text-xs text-muted-foreground">
+                                    Auto resolves from model capability. Override only when testing model-specific behavior.
+                                </p>
+                                <div className="rounded border border-border bg-muted/20 p-2 text-xs text-muted-foreground space-y-1">
+                                    <p><span className="font-medium text-foreground">Auto:</span> Uses capability probe result (`strict`, `partial`, `none`).</p>
+                                    <p><span className="font-medium text-foreground">Strict:</span> Requires structured tool decision path for full-local calls.</p>
+                                    <p><span className="font-medium text-foreground">Compatible:</span> Structured decision with parser/repair fallback for weaker models.</p>
+                                    <p><span className="font-medium text-foreground">Off:</span> Disables model tool execution for full-local provider.</p>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Structured Tool Gateway</label>
+                                <label className="flex items-center gap-2 p-2 rounded border border-input bg-background">
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(localProviderConfig.tool_gateway_enabled ?? true)}
+                                        onChange={(e) => updateLocalProviderConfig('tool_gateway_enabled', e.target.checked)}
+                                    />
+                                    <span className="text-sm">Enable for full-local provider only</span>
+                                </label>
+                                <p className="text-xs text-muted-foreground">
+                                    Enables a dedicated full-local tool decision pass (separate from spoken response parsing).
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    STT-only and TTS-only modular paths are not changed by this switch.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="rounded-md border border-border bg-muted/20 p-3 text-xs space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Local AI Server</span>
+                                <span className={`font-mono ${localConnected ? 'text-green-600' : 'text-yellow-600'}`}>
+                                    {localConnected ? 'connected' : 'not-connected'}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Capability</span>
+                                <span className="font-mono">{toolCapabilityLevel || 'unknown'}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Resolved policy</span>
+                                <span className="font-mono">{resolvedToolPolicy}</span>
+                            </div>
+                        </div>
+
+                        {policyMismatchWarning && (
+                            <div className="text-xs rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-yellow-700 dark:text-yellow-300">
+                                Current override may not match detected model capability. Use Auto unless you are intentionally forcing this mode.
+                            </div>
+                        )}
                     </div>
                 </ConfigCard>
             </ConfigSection>

@@ -1,6 +1,6 @@
 # Hardware Requirements
 
-System specifications and performance characteristics for Asterisk AI Voice Agent v5.1.7.
+System specifications and performance characteristics for Asterisk AI Voice Agent.
 
 ## Overview
 
@@ -17,7 +17,8 @@ Hardware requirements vary significantly based on your chosen configuration. Thi
 | **Google Live** | 2+ cores | 4GB | 1GB | Stable internet | Varies |
 | **ElevenLabs Agent** | 2+ cores | 4GB | 1GB | Stable internet | Varies |
 | **Local Hybrid** | 4+ cores (2020+) | 8-16GB | 2GB | Stable internet | ~$0.002 |
-| **Fully Local** (optional) | 8+ cores recommended (or GPU) | 16GB+ recommended | 10GB+ | No internet required | $0 |
+| **Fully Local CPU** (optional) | 8+ cores recommended | 16GB+ recommended | 10GB+ | No internet required | $0 |
+| **Fully Local GPU** (optional) | 4+ cores + GPU | 8-16GB + RTX 3060+ | 10GB+ | No internet required | $0 |
 
 ## Configuration-Specific Requirements
 
@@ -161,7 +162,7 @@ Fully Local mode runs **STT + LLM + TTS** on your own hardware with **no cloud A
 
 ## GPU Acceleration (Optional)
 
-### Local Hybrid with GPU
+### Local Hybrid / Fully Local with GPU
 
 **GPU Requirements**:
 - **Minimum**: NVIDIA RTX 3060 (12GB VRAM)
@@ -171,16 +172,31 @@ Fully Local mode runs **STT + LLM + TTS** on your own hardware with **no cloud A
 
 **Performance Improvements**:
 - **LLM Inference**: 10-30x faster (if using local LLM instead of OpenAI)
-- **Response Time**: 1-3 seconds (with local LLM)
+- **Response Time**: 0.5-2 seconds (with local LLM on GPU)
 - **Concurrent Calls**: 20-40 (GPU-accelerated)
 
-**Note**: The default `local_ai_server` image runs CPU-only. GPU acceleration is available via the GPU override compose file (`docker-compose.gpu.yml`), which builds `local_ai_server/Dockerfile.gpu` for CUDA-enabled llama.cpp. Tune `LOCAL_LLM_GPU_LAYERS` and verify with `docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec local_ai_server nvidia-smi`.
+**Community-Validated Results (RTX 4090 24GB)**:
+- **STT**: Faster Whisper (base) — CUDA accelerated
+- **LLM**: Phi-3 Mini Q4_K_M (n_ctx=4096, all layers on GPU)
+- **TTS**: Kokoro (af_heart, HF mode)
+- **E2E Latency**: ~665ms
+- **LLM Latency**: ~261ms avg
+- See [Community Test Matrix](COMMUNITY_TEST_MATRIX.md) for full results
 
-Implementation checks without a GPU host:
+**Setup**: The default `local_ai_server` image runs CPU-only. GPU acceleration is available via the GPU override compose file (`docker-compose.gpu.yml`), which builds `local_ai_server/Dockerfile.gpu` for CUDA-enabled llama.cpp.
 
-- Verify compose wiring: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml config | rg -n "Dockerfile.gpu|local-ai-server-gpu|driver: nvidia|capabilities:"`
-- Verify CUDA build recipe: `rg -n "GGML_CUDA=on|llama-cpp-python==0.3.16" local_ai_server/Dockerfile.gpu`
-- Verify auto-detect fallback no longer depends only on torch: `rg -n "nvidia-smi|NVIDIA_VISIBLE_DEVICES|LOCAL_LLM_GPU_LAYERS_AUTO_DEFAULT" local_ai_server/server.py`
+For **step-by-step GPU setup** (including nvidia-container-toolkit install, split-server topology, and `.env` configuration), see **[LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md)**.
+
+Quick start:
+```bash
+# Build with GPU support
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build local_ai_server
+
+# Verify GPU is visible
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec local_ai_server nvidia-smi
+```
+
+Tune `LOCAL_LLM_GPU_LAYERS=-1` (all layers) in `.env`. See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for topology-specific configuration.
 
 ---
 

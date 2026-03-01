@@ -140,7 +140,6 @@ cython_debug/
 !.windsurf/rules/asterisk_ai_voice_agent.md
 
 # Archives and old documentation
-Archived/
 "Project Requirement Documents"/
 
 # Taskmaster-AI
@@ -209,7 +208,8 @@ config/ai-agent.local.yaml
 
 # Logs and archived folders (development artifacts, not for main)
 logs/
-archived/*
+archived/**
+!archived/local-ai-server-improvements.md
 
 # IDE specific
 *.swp
@@ -237,6 +237,7 @@ venv/
 # (Allow these specific artifacts to track on `develop` when needed.)
 !Agents.md
 !Gemini.md
+!CLAUDE.md
 
 # Local diagnostics bundles
 server_diagnostics/
@@ -297,3 +298,7 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 !data/.gitkeep
+
+# Secrets directory (Vertex AI credentials, API keys — never commit actual secrets)
+secrets/**
+!secrets/.gitkeep

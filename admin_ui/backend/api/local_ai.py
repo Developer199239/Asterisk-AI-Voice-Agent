@@ -23,6 +23,7 @@ router = APIRouter()
 
 DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 DISK_BUILD_BLOCK_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB (hard stop for image builds)
+DISK_BUILD_BLOCK_BYTES_MELOTTS = 12 * 1024 * 1024 * 1024  # 12 GB (MeloTTS rebuilds pull larger deps)
 
 
 def _auto_detect_kroko_model() -> Optional[str]:
@@ -65,23 +66,30 @@ def _format_bytes(num_bytes: int) -> str:
     return f"{size:.1f} {units[unit]}"
 
 
-def _disk_build_preflight(path: str) -> tuple[bool, Optional[str]]:
+def _disk_build_preflight(
+    path: str,
+    *,
+    min_free_bytes: int = DISK_BUILD_BLOCK_BYTES,
+    warn_free_bytes: int = DISK_WARNING_BYTES,
+) -> tuple[bool, Optional[str]]:
     """
     Returns (ok, warning_or_error_message).
-    - Warns when free space < DISK_WARNING_BYTES.
-    - Blocks when free space < DISK_BUILD_BLOCK_BYTES.
+    - Warns when free space < warn_free_bytes.
+    - Blocks when free space < min_free_bytes.
     """
     try:
-        total, used, free = shutil.disk_usage(path)
+        _, _, free = shutil.disk_usage(path)
     except Exception:
         return True, None
 
-    if free < DISK_BUILD_BLOCK_BYTES:
+    if free < min_free_bytes:
         return (
             False,
-            f"Insufficient disk space for rebuild: free={_format_bytes(free)} required={_format_bytes(DISK_BUILD_BLOCK_BYTES)} (path={path}).",
+            "Insufficient disk space for rebuild: "
+            f"free={_format_bytes(free)} required={_format_bytes(min_free_bytes)} (path={path}). "
+            "Free disk space (for example: docker system prune -af) and retry.",
         )
-    if free < DISK_WARNING_BYTES:
+    if free < warn_free_bytes:
         return True, f"Low disk space: only {_format_bytes(free)} free (path={path})."
     return True, None
 
@@ -120,6 +128,7 @@ class ModelInfo(BaseModel):
     backend: Optional[str] = None  # vosk, sherpa, kroko, piper, kokoro
     size_mb: Optional[float] = None
     voice_files: Optional[Dict[str, str]] = None  # For Kokoro voices
+    chat_format: Optional[str] = None  # llama-cpp-python chat template (LLM only)
 
 
 class AvailableModels(BaseModel):
@@ -142,12 +151,17 @@ class SwitchModelRequest(BaseModel):
     kroko_url: Optional[str] = None
     # Sherpa explicit path (optional; preferred over model_path)
     sherpa_model_path: Optional[str] = None
+    # Whisper.cpp explicit path (optional; preferred over model_path)
+    whisper_cpp_model_path: Optional[str] = None
     # Kokoro mode/model controls (optional)
     kokoro_mode: Optional[str] = None  # local|api|hf
     kokoro_model_path: Optional[str] = None
     kokoro_api_base_url: Optional[str] = None
     kokoro_api_key: Optional[str] = None
     kokoro_api_model: Optional[str] = None
+    # LLM tuning (optional)
+    llm_context: Optional[int] = None
+    llm_max_tokens: Optional[int] = None
     # Allow intentional override for incompatible runtime/device combinations.
     force_incompatible_apply: Optional[bool] = False
 
@@ -157,6 +171,50 @@ class SwitchModelResponse(BaseModel):
     success: bool
     message: str
     requires_restart: bool = False
+
+
+def _infer_kroko_embedded(backend: str, model_path: Optional[str], kroko_url: Optional[str], explicit: Optional[bool]) -> Optional[bool]:
+    """
+    Infer whether Kroko should run in embedded mode for hot-switch requests.
+
+    Rationale:
+    - In the UI, selecting a Kroko "installed model" implies embedded mode.
+    - Historically, the UI did not pass kroko_embedded=true, so hot-switch would
+      update KROKO_MODEL_PATH but keep kroko_embedded=false, leading to confusing
+      "loaded" status while actually targeting the cloud endpoint (and failing without an API key).
+    """
+    if backend != "kroko":
+        return explicit
+    if explicit is not None:
+        return bool(explicit)
+    if model_path:
+        # Installed/embedded Kroko models are mounted under /app/models/kroko (preferred)
+        # and sometimes under /app/models/stt (legacy).
+        if model_path.startswith("/app/models/kroko/") or model_path.startswith("/app/models/stt/"):
+            return True
+        # Fallback heuristic: if operator provided a model file path, treat as embedded.
+        low = model_path.lower()
+        if low.endswith(".onnx") or low.endswith(".data"):
+            return True
+    if kroko_url and "app.kroko.ai" in kroko_url:
+        return False
+    return explicit
+
+
+def _normalize_switch_request(request: SwitchModelRequest) -> SwitchModelRequest:
+    backend = (request.backend or "").strip().lower()
+    if request.model_type == "stt" and backend == "kroko":
+        inferred = _infer_kroko_embedded(
+            backend=backend,
+            model_path=request.model_path,
+            kroko_url=request.kroko_url,
+            explicit=request.kroko_embedded,
+        )
+        if inferred is not None and request.kroko_embedded is None:
+            updater = getattr(request, "model_copy", None) or getattr(request, "copy", None)
+            if updater:
+                return updater(update={"kroko_embedded": bool(inferred)})
+    return request
 
 
 def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[Dict[str, str], Dict[str, Any]]:
@@ -178,6 +236,12 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 env_updates["LOCAL_STT_MODEL_PATH"] = request.model_path
                 yaml_updates["stt_model"] = request.model_path
             elif request.backend == "kroko":
+                effective_embedded = _infer_kroko_embedded(
+                    backend="kroko",
+                    model_path=request.model_path,
+                    kroko_url=request.kroko_url,
+                    explicit=request.kroko_embedded,
+                )
                 if request.language:
                     env_updates["KROKO_LANGUAGE"] = request.language
                     yaml_updates["kroko_language"] = request.language
@@ -186,16 +250,16 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 # For embedded mode: set KROKO_EMBEDDED=1 and auto-detect model if not provided
                 if request.model_path:
                     env_updates["KROKO_MODEL_PATH"] = request.model_path
-                    env_updates["KROKO_EMBEDDED"] = "1"
+                    env_updates["KROKO_EMBEDDED"] = "1" if effective_embedded is not False else "0"
                     yaml_updates["kroko_model_path"] = request.model_path
-                elif request.kroko_embedded:
+                elif effective_embedded:
                     # Auto-detect Kroko model file when embedded=true but no path specified
                     env_updates["KROKO_EMBEDDED"] = "1"
                     detected_path = _auto_detect_kroko_model()
                     if detected_path:
                         env_updates["KROKO_MODEL_PATH"] = detected_path
                         yaml_updates["kroko_model_path"] = detected_path
-                elif request.kroko_embedded is not None:
+                elif effective_embedded is not None:
                     env_updates["KROKO_EMBEDDED"] = "0"  # Cloud mode
                 if request.kroko_port is not None:
                     env_updates["KROKO_PORT"] = str(request.kroko_port)
@@ -204,6 +268,11 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 if sherpa_path:
                     env_updates["SHERPA_MODEL_PATH"] = sherpa_path
                     yaml_updates["sherpa_model_path"] = sherpa_path
+            elif request.backend == "whisper_cpp":
+                whisper_path = request.whisper_cpp_model_path or request.model_path
+                if whisper_path:
+                    env_updates["WHISPER_CPP_MODEL_PATH"] = whisper_path
+                    yaml_updates["whisper_cpp_model_path"] = whisper_path
             elif request.backend == "faster_whisper":
                 if request.model_path:
                     env_updates["FASTER_WHISPER_MODEL"] = request.model_path
@@ -244,6 +313,10 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
     elif request.model_type == "llm":
         if request.model_path:
             env_updates["LOCAL_LLM_MODEL_PATH"] = request.model_path
+        if request.llm_context is not None:
+            env_updates["LOCAL_LLM_CONTEXT"] = str(int(request.llm_context))
+        if request.llm_max_tokens is not None:
+            env_updates["LOCAL_LLM_MAX_TOKENS"] = str(int(request.llm_max_tokens))
 
     return env_updates, yaml_updates
 
@@ -267,17 +340,27 @@ def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[D
             sherpa_path = request.sherpa_model_path or request.model_path
             if sherpa_path:
                 payload["sherpa_model_path"] = sherpa_path
+        if request.backend == "whisper_cpp":
+            whisper_path = request.whisper_cpp_model_path or request.model_path
+            if whisper_path:
+                payload["stt_model_path"] = whisper_path
         if request.backend == "faster_whisper" and request.model_path:
             payload["stt_config"] = {"model": request.model_path}
         if request.backend == "kroko":
+            effective_embedded = _infer_kroko_embedded(
+                backend="kroko",
+                model_path=request.model_path,
+                kroko_url=request.kroko_url,
+                explicit=request.kroko_embedded,
+            )
             if request.language:
                 payload["kroko_language"] = request.language
             if request.kroko_url:
                 payload["kroko_url"] = request.kroko_url
             if request.kroko_port is not None:
                 payload["kroko_port"] = request.kroko_port
-            if request.kroko_embedded is not None:
-                payload["kroko_embedded"] = request.kroko_embedded
+            if effective_embedded is not None:
+                payload["kroko_embedded"] = bool(effective_embedded)
             if request.model_path:
                 payload["kroko_model_path"] = request.model_path
         return payload
@@ -344,7 +427,8 @@ async def list_available_models():
         "vosk": [],
         "sherpa": [],
         "kroko": [],
-        "faster_whisper": []
+        "faster_whisper": [],
+        "whisper_cpp": [],
     }
     tts_models: Dict[str, List[ModelInfo]] = {
         "piper": [],
@@ -385,6 +469,17 @@ async def list_available_models():
                         type="stt",
                         backend="kroko",
                         size_mb=get_dir_size_mb(item_path)
+                    ))
+            elif os.path.isfile(item_path):
+                lower = item.lower()
+                if lower.endswith(".bin") and (lower.startswith("ggml-") or "whisper" in lower):
+                    stt_models["whisper_cpp"].append(ModelInfo(
+                        id=f"whisper_cpp_{item}",
+                        name=f"Whisper.cpp ({item})",
+                        path=f"/app/models/stt/{item}",
+                        type="stt",
+                        backend="whisper_cpp",
+                        size_mb=get_file_size_mb(item_path),
                     ))
 
     # Scan Kroko embedded models (recommended location: models/kroko/*.data or *.onnx)
@@ -444,18 +539,22 @@ async def list_available_models():
                     voice_files=voice_files
                 ))
     
-    # Scan LLM models
+    # Scan LLM models — enrich with chat_format from catalog
+    from api.models_catalog import LLM_MODELS as _LLM_CATALOG
+    _catalog_by_path = {m.get("model_path", ""): m for m in _LLM_CATALOG if m.get("model_path")}
     llm_dir = os.path.join(models_dir, "llm")
     if os.path.exists(llm_dir):
         for item in os.listdir(llm_dir):
             if item.endswith(".gguf"):
                 item_path = os.path.join(llm_dir, item)
+                catalog_entry = _catalog_by_path.get(item, {})
                 llm_models.append(ModelInfo(
                     id=item.replace(".gguf", ""),
                     name=item.replace(".gguf", ""),
                     path=f"/app/models/llm/{item}",
                     type="llm",
-                    size_mb=get_file_size_mb(item_path)
+                    size_mb=get_file_size_mb(item_path),
+                    chat_format=catalog_entry.get("chat_format") or None
                 ))
     
     return AvailableModels(
@@ -488,7 +587,8 @@ async def get_backend_capabilities():
             "sherpa": {"available": False, "reason": ""},
             "kroko_embedded": {"available": False, "reason": ""},
             "kroko_cloud": {"available": True, "reason": "Cloud API (requires KROKO_API_KEY)"},
-            "faster_whisper": {"available": False, "reason": ""}
+            "faster_whisper": {"available": False, "reason": ""},
+            "whisper_cpp": {"available": False, "reason": ""},
         },
         "tts": {
             "piper": {"available": False, "reason": ""},
@@ -533,6 +633,10 @@ async def get_backend_capabilities():
                     capabilities["stt"]["faster_whisper"] = {"available": True, "reason": "Faster-Whisper installed"}
                 else:
                     capabilities["stt"]["faster_whisper"]["reason"] = "Rebuild with INCLUDE_FASTER_WHISPER=true"
+                if server_caps.get("whisper_cpp"):
+                    capabilities["stt"]["whisper_cpp"] = {"available": True, "reason": "Whisper.cpp installed"}
+                else:
+                    capabilities["stt"]["whisper_cpp"]["reason"] = "Rebuild with INCLUDE_WHISPER_CPP=true"
 
                 # TTS backends
                 if server_caps.get("piper"):
@@ -551,13 +655,26 @@ async def get_backend_capabilities():
                 # Fallback: assume basic capabilities based on what we can detect
                 capabilities["stt"]["vosk"] = {"available": True, "reason": "Default backend"}
                 capabilities["tts"]["piper"] = {"available": True, "reason": "Default backend"}
-                capabilities["llm"] = {"available": True, "reason": "Default backend"}
+                # Only claim LLM available if GPU is present or user forced full mode;
+                # CPU-only defaults to runtime_mode=minimal which skips LLM preload.
+                _gpu = os.getenv("GPU_AVAILABLE", "false").strip().lower() in ("1", "true", "yes")
+                _forced_full = (os.getenv("LOCAL_AI_MODE") or "").strip().lower() == "full"
+                if _gpu or _forced_full:
+                    capabilities["llm"] = {"available": True, "reason": "Default backend"}
+                else:
+                    capabilities["llm"] = {"available": False, "reason": "CPU minimal mode — LLM not preloaded. Set LOCAL_AI_MODE=full or add GPU."}
                 
     except Exception as e:
         # Server not reachable - return minimal capabilities
         capabilities["stt"]["vosk"] = {"available": True, "reason": "Default backend"}
         capabilities["tts"]["piper"] = {"available": True, "reason": "Default backend"}
-        capabilities["llm"] = {"available": True, "reason": "Default backend"}
+        # Same GPU/mode check as above — don't mislead the UI about LLM on CPU minimal.
+        _gpu = os.getenv("GPU_AVAILABLE", "false").strip().lower() in ("1", "true", "yes")
+        _forced_full = (os.getenv("LOCAL_AI_MODE") or "").strip().lower() == "full"
+        if _gpu or _forced_full:
+            capabilities["llm"] = {"available": True, "reason": "Default backend"}
+        else:
+            capabilities["llm"] = {"available": False, "reason": "CPU minimal mode — LLM not preloaded. Set LOCAL_AI_MODE=full or add GPU."}
         capabilities["error"] = str(e)
     
     return capabilities
@@ -610,8 +727,41 @@ async def switch_model(request: SwitchModelRequest):
     """
     from settings import PROJECT_ROOT, get_setting, CONFIG_PATH
     from api.config import update_yaml_provider_field
-    from api.system import _recreate_via_compose
+    from api.system import _recreate_via_compose, _check_active_calls
 
+    # Guard: warn if there are active calls (model switch can disrupt in-flight audio)
+    if not request.force_incompatible_apply:
+        try:
+            call_status = await _check_active_calls()
+            if not call_status.get("reachable", False):
+                return SwitchModelResponse(
+                    success=False,
+                    message=(
+                        "Cannot switch model: unable to verify active calls (AI Engine sessions API unreachable). "
+                        "Ensure ai_engine is running, or set force_incompatible_apply=true to override."
+                    ),
+                    requires_restart=False,
+                )
+            if call_status.get("active_calls", 0) > 0:
+                return SwitchModelResponse(
+                    success=False,
+                    message=(
+                        f"Cannot switch model: {call_status['active_calls']} active call(s) in progress. "
+                        "Wait for calls to complete or set force_incompatible_apply=true to override."
+                    ),
+                    requires_restart=False,
+                )
+        except Exception:
+            return SwitchModelResponse(
+                success=False,
+                message=(
+                    "Cannot switch model: unable to verify active calls (internal error). "
+                    "Ensure ai_engine is running, or set force_incompatible_apply=true to override."
+                ),
+                requires_restart=False,
+            )
+
+    request = _normalize_switch_request(request)
     env_file = os.path.join(PROJECT_ROOT, ".env")
     env_updates: Dict[str, str] = {}
     yaml_updates: Dict[str, Any] = {}  # Track YAML updates for sync
@@ -667,9 +817,14 @@ async def switch_model(request: SwitchModelRequest):
         kokoro = data.get("kokoro") or {}
 
         if request.model_type == "llm":
-            if not request.model_path:
-                return True
-            return bool(llm.get("loaded")) and llm.get("path") == request.model_path
+            if request.model_path and not (bool(llm.get("loaded")) and llm.get("path") == request.model_path):
+                return False
+            cfg = llm.get("config") or {}
+            if request.llm_context is not None and int(cfg.get("context") or 0) != int(request.llm_context):
+                return False
+            if request.llm_max_tokens is not None and int(cfg.get("max_tokens") or 0) != int(request.llm_max_tokens):
+                return False
+            return True
 
         if request.model_type == "stt":
             if request.backend and data.get("stt_backend") != request.backend:
@@ -683,6 +838,9 @@ async def switch_model(request: SwitchModelRequest):
                 return (not expected) or stt.get("path") == expected
             if request.backend == "faster_whisper" and request.model_path:
                 return stt.get("path") == request.model_path
+            if request.backend == "whisper_cpp":
+                expected = request.whisper_cpp_model_path or request.model_path
+                return (not expected) or stt.get("path") == expected
             if request.backend == "kroko":
                 if request.kroko_embedded is not None and bool(kroko.get("embedded")) != bool(request.kroko_embedded):
                     return False
@@ -758,13 +916,13 @@ async def switch_model(request: SwitchModelRequest):
     
     # 1. Save current config for potential rollback
     previous_env = _read_env_values(env_file, [
-        "LOCAL_STT_BACKEND", "LOCAL_STT_MODEL_PATH", "SHERPA_MODEL_PATH",
+        "LOCAL_STT_BACKEND", "LOCAL_STT_MODEL_PATH", "SHERPA_MODEL_PATH", "WHISPER_CPP_MODEL_PATH",
         "KROKO_LANGUAGE", "KROKO_EMBEDDED", "KROKO_PORT", "KROKO_URL", "KROKO_MODEL_PATH",
         "LOCAL_TTS_BACKEND", "LOCAL_TTS_MODEL_PATH",
         "KOKORO_MODE", "KOKORO_VOICE", "KOKORO_MODEL_PATH",
         "KOKORO_API_BASE_URL", "KOKORO_API_KEY", "KOKORO_API_MODEL",
         "MELOTTS_VOICE", "MELOTTS_DEVICE", "FASTER_WHISPER_MODEL", "FASTER_WHISPER_DEVICE",
-        "LOCAL_LLM_MODEL_PATH", "GPU_AVAILABLE"
+        "LOCAL_LLM_MODEL_PATH", "LOCAL_LLM_CONTEXT", "LOCAL_LLM_MAX_TOKENS", "GPU_AVAILABLE"
     ])
 
     # Guard CUDA-only backend selection when runtime GPU is unavailable.
@@ -818,35 +976,51 @@ async def switch_model(request: SwitchModelRequest):
         requires_restart = False
 
     elif request.model_type == "llm":
-        if request.model_path:
+        wants_llm_change = bool(request.model_path) or request.llm_context is not None or request.llm_max_tokens is not None
+        if wants_llm_change:
             # LLM flow supports best-effort hot switch + verification before falling back to recreate.
-            env_updates["LOCAL_LLM_MODEL_PATH"] = request.model_path
-            # Prefer model switch without restart.
-            ws_resp = await _try_ws_switch({"type": "switch_model", "llm_model_path": request.model_path})
+            payload: Dict[str, Any] = {"type": "switch_model"}
+            if request.model_path:
+                payload["llm_model_path"] = request.model_path
+            llm_cfg: Dict[str, Any] = {}
+            if request.llm_context is not None:
+                llm_cfg["context"] = int(request.llm_context)
+            if request.llm_max_tokens is not None:
+                llm_cfg["max_tokens"] = int(request.llm_max_tokens)
+            # Resolve chat_format from catalog so hot-reload uses the correct template.
+            if request.model_path:
+                from api.models_catalog import LLM_MODELS as _LLM_CATALOG
+                _cat_by_path = {m.get("model_path", ""): m for m in _LLM_CATALOG if m.get("model_path")}
+                model_basename = os.path.basename(request.model_path)
+                cat_entry = _cat_by_path.get(model_basename, {})
+                catalog_chat_format = (cat_entry.get("chat_format") or "").strip()
+                if catalog_chat_format:
+                    llm_cfg["chat_format"] = catalog_chat_format
+            if llm_cfg:
+                payload["llm_config"] = llm_cfg
+
+            ws_resp = await _try_ws_switch(payload)
             if ws_resp and ws_resp.get("type") == "switch_response" and ws_resp.get("status") == "success":
                 _update_env_file(env_file, env_updates)
-                verified = await _wait_for_status(timeout_sec=30.0)
+                verified = await _wait_for_status(timeout_sec=45.0)
                 if verified:
                     return SwitchModelResponse(
                         success=True,
-                        message=f"LLM model switched to {request.model_path} via hot-switch",
+                        message="LLM settings applied via hot-switch",
                         requires_restart=False,
                     )
-                # Rollback on verification failure (best-effort hot rollback, then enforce by recreate)
+                # Rollback on verification failure (enforce by recreate)
                 try:
                     _update_env_file(env_file, previous_env)
                 except Exception:
                     pass
-                prev_llm = (previous_env.get("LOCAL_LLM_MODEL_PATH") or "").strip()
-                if prev_llm:
-                    await _try_ws_switch({"type": "switch_model", "llm_model_path": prev_llm})
                 try:
                     await _recreate_via_compose("local_ai_server")
                 except Exception:
                     pass
                 return SwitchModelResponse(
                     success=False,
-                    message="LLM switch did not verify as loaded within 30s; rolled back to previous configuration.",
+                    message="LLM switch did not verify as loaded within 45s; rolled back to previous configuration.",
                     requires_restart=True,
                 )
             requires_restart = True
@@ -992,43 +1166,6 @@ async def delete_model(request: DeleteModelRequest):
         )
 
 
-async def _verify_model_loaded(model_type: str, get_setting) -> bool:
-    """Verify that the specified model type is loaded after restart."""
-    # Try both localhost and container name
-    urls_to_try = [
-        "ws://127.0.0.1:8765",
-        "ws://local_ai_server:8765",
-        get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
-    ]
-    
-    for ws_url in urls_to_try:
-        try:
-            async with websockets.connect(ws_url, open_timeout=5) as ws:
-                auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
-                if auth_token:
-                    await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
-                    raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                    auth_data = json.loads(raw)
-                    if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
-                        raise RuntimeError(f"Local AI auth failed: {auth_data}")
-
-                await ws.send(json.dumps({"type": "status"}))
-                response = await asyncio.wait_for(ws.recv(), timeout=10)
-                data = json.loads(response)
-                
-                models = data.get("models", {})
-                if model_type == "stt":
-                    return models.get("stt", {}).get("loaded", False)
-                elif model_type == "tts":
-                    return models.get("tts", {}).get("loaded", False)
-                elif model_type == "llm":
-                    return models.get("llm", {}).get("loaded", False)
-                return True
-        except Exception:
-            continue
-    
-    return False
-
 
 def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
     """Read specific environment variable values from .env file."""
@@ -1042,6 +1179,9 @@ def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
                 key = line.split('=')[0].strip()
                 if key in keys:
                     value = line.split('=', 1)[1].strip()
+                    # Strip surrounding quotes (single or double)
+                    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                        value = value[1:-1]
                     values[key] = value
     return values
 
@@ -1061,7 +1201,9 @@ except ImportError:
 class RebuildRequest(BaseModel):
     """Request to rebuild local-ai-server with specific backends."""
     include_faster_whisper: bool = False
+    include_whisper_cpp: bool = False
     include_melotts: bool = False
+    include_kroko_embedded: bool = False
     # STT/TTS config to apply after rebuild
     stt_backend: Optional[str] = None
     stt_model: Optional[str] = None
@@ -1093,9 +1235,22 @@ async def rebuild_local_ai_server(request: RebuildRequest):
     if request.include_faster_whisper:
         build_args.append("--build-arg")
         build_args.append("INCLUDE_FASTER_WHISPER=true")
+    if request.include_whisper_cpp:
+        build_args.append("--build-arg")
+        build_args.append("INCLUDE_WHISPER_CPP=true")
     if request.include_melotts:
         build_args.append("--build-arg")
         build_args.append("INCLUDE_MELOTTS=true")
+    if request.include_kroko_embedded:
+        # This backend pulls a vendor binary at build time. A pinned checksum is recommended
+        # for production hardening, but should not be required for dev/test rebuilds.
+        env_file = os.path.join(PROJECT_ROOT, ".env")
+        sha = (_read_env_values(env_file, ["KROKO_SERVER_SHA256"]).get("KROKO_SERVER_SHA256") or "").strip()
+        build_args.append("--build-arg")
+        build_args.append("INCLUDE_KROKO_EMBEDDED=true")
+        if sha:
+            build_args.append("--build-arg")
+            build_args.append(f"KROKO_SERVER_SHA256={sha}")
     
     if not build_args:
         return RebuildResponse(
@@ -1107,28 +1262,67 @@ async def rebuild_local_ai_server(request: RebuildRequest):
     # Update .env file with new backend settings AND build args BEFORE rebuild
     env_file = os.path.join(PROJECT_ROOT, ".env")
     env_updates = {}
+    previous_env = _read_env_values(
+        env_file,
+        [
+            "KOKORO_VOICE",
+            "KOKORO_MODE",
+            "KOKORO_MODEL_PATH",
+        ],
+    )
     
     # Set build args in .env so docker-compose.yml picks them up
     if request.include_faster_whisper:
         env_updates["INCLUDE_FASTER_WHISPER"] = "true"
+    if request.include_whisper_cpp:
+        env_updates["INCLUDE_WHISPER_CPP"] = "true"
     if request.include_melotts:
         env_updates["INCLUDE_MELOTTS"] = "true"
+    if request.include_kroko_embedded:
+        env_updates["INCLUDE_KROKO_EMBEDDED"] = "true"
     
     if request.stt_backend:
         env_updates["LOCAL_STT_BACKEND"] = request.stt_backend
         if request.stt_model:
-            env_updates["FASTER_WHISPER_MODEL"] = request.stt_model
-    
+            if request.stt_backend == "faster_whisper":
+                env_updates["FASTER_WHISPER_MODEL"] = request.stt_model
+            elif request.stt_backend == "whisper_cpp":
+                env_updates["WHISPER_CPP_MODEL_PATH"] = request.stt_model
+            elif request.stt_backend == "kroko":
+                env_updates["KROKO_EMBEDDED"] = "1"
+                env_updates["KROKO_MODEL_PATH"] = request.stt_model
+            elif request.stt_backend == "sherpa":
+                env_updates["SHERPA_MODEL_PATH"] = request.stt_model
+            elif request.stt_backend == "vosk":
+                env_updates["LOCAL_STT_MODEL_PATH"] = request.stt_model
+
     if request.tts_backend:
         env_updates["LOCAL_TTS_BACKEND"] = request.tts_backend
         if request.tts_voice:
-            env_updates["MELOTTS_VOICE"] = request.tts_voice
+            if request.tts_backend == "melotts":
+                env_updates["MELOTTS_VOICE"] = request.tts_voice
+            elif request.tts_backend == "piper":
+                env_updates["LOCAL_TTS_MODEL_PATH"] = request.tts_voice
+            elif request.tts_backend == "kokoro":
+                # Backward-compatible: older UI code used to pass the Kokoro *model path* via tts_voice.
+                # If it looks like a path, treat it as model_path and preserve (or default) the voice id.
+                if "/" in request.tts_voice:
+                    env_updates["KOKORO_MODEL_PATH"] = request.tts_voice
+                    env_updates["KOKORO_VOICE"] = (previous_env.get("KOKORO_VOICE") or "af_heart").strip() or "af_heart"
+                else:
+                    env_updates["KOKORO_VOICE"] = request.tts_voice
     
     if env_updates:
         _update_env_file(env_file, env_updates)
     
     try:
-        ok, warn_or_err = _disk_build_preflight(PROJECT_ROOT)
+        min_free_bytes = DISK_BUILD_BLOCK_BYTES_MELOTTS if request.include_melotts else DISK_BUILD_BLOCK_BYTES
+        warn_free_bytes = max(DISK_WARNING_BYTES, min_free_bytes)
+        ok, warn_or_err = _disk_build_preflight(
+            PROJECT_ROOT,
+            min_free_bytes=min_free_bytes,
+            warn_free_bytes=warn_free_bytes,
+        )
         if not ok:
             return RebuildResponse(
                 success=False,
@@ -1159,9 +1353,21 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         )
 
         if code != 0:
+            output_tail = (out or "")[-1200:] if out else "Unknown error"
+            if "no space left on device" in (out or "").lower():
+                _, _, free = shutil.disk_usage(PROJECT_ROOT)
+                return RebuildResponse(
+                    success=False,
+                    message=(
+                        "Docker build failed: no space left on device. "
+                        f"Current free space={_format_bytes(free)} at {PROJECT_ROOT}. "
+                        "Free disk space (for example: docker system prune -af) and retry."
+                    ),
+                    phase="error",
+                )
             return RebuildResponse(
                 success=False,
-                message=f"Docker build failed: {(out or '')[-800:] if out else 'Unknown error'}",
+                message=f"Docker build failed: {output_tail}",
                 phase="error"
             )
         
@@ -1172,8 +1378,12 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         backends_enabled = []
         if request.include_faster_whisper:
             backends_enabled.append("Faster-Whisper")
+        if request.include_whisper_cpp:
+            backends_enabled.append("Whisper.cpp")
         if request.include_melotts:
             backends_enabled.append("MeloTTS")
+        if request.include_kroko_embedded:
+            backends_enabled.append("Kroko Embedded")
         
         warning_suffix = f" (Warning: {warn_or_err})" if warn_or_err else ""
         return RebuildResponse(

@@ -99,6 +99,14 @@ class LocalProviderConfig(BaseModel):
     # Ensures farewell message fully plays through RTP pipeline before disconnecting
     # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
     farewell_hangup_delay_sec: float = Field(default=5.0)
+    # Local tool-call handling policy:
+    # - auto: derive from local_ai_server LLM capability probe
+    # - strict: enforce full structured tool instructions
+    # - compatible: compact instructions + parser recovery
+    # - off: disable prompt injection for tools
+    tool_call_policy: str = Field(default="auto")
+    # Structured tool gateway for full-local provider. Keeps modular local STT/TTS paths unchanged.
+    tool_gateway_enabled: bool = Field(default=True)
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
     temperature: float = Field(default=0.4)
@@ -451,7 +459,10 @@ class BargeInConfig(BaseModel):
     pipeline_talk_detect_enabled: bool = Field(default=True)
     # TALK_DETECT(set)=<dsp_silence_threshold_ms>,<dsp_talking_threshold>
     pipeline_talk_detect_silence_ms: int = Field(default=1200)
-    pipeline_talk_detect_talking_threshold: int = Field(default=128)
+    pipeline_talk_detect_talking_threshold: int = Field(default=256)
+    # Minimum TTS elapsed time (ms) before TalkDetect barge-in is honoured.
+    # Higher than initial_protection_ms to reject phone-echo triggering TALK_DETECT.
+    talk_detect_initial_protection_ms: int = Field(default=1500)
     # New: short guard window after TTS ends to avoid self-echo re-capture
     post_tts_end_protection_ms: int = Field(default=250)
     # Extra protection during the first greeting turn

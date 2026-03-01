@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 
 class KokoroTTSBackend:
@@ -65,8 +66,9 @@ class KokoroTTSBackend:
             self._initialized = True
             logging.info("✅ KOKORO - TTS initialized successfully")
             return True
-        except ImportError:
-            logging.error("❌ KOKORO - kokoro package not installed")
+        except ImportError as exc:
+            # This can be a true missing dependency OR a CUDA/native import failure.
+            logging.error("❌ KOKORO - Import failed: %s", exc, exc_info=True)
             return False
         except Exception as exc:
             logging.error("❌ KOKORO - Failed to initialize: %s", exc)
@@ -158,6 +160,7 @@ class MeloTTSBackend:
         """Initialize the MeloTTS model."""
         try:
             from melo.api import TTS
+            self._patch_legacy_download_urls()
             
             logging.info(
                 "🎙️ MELOTTS - Initializing (voice=%s, device=%s, speed=%.1f)",
@@ -202,6 +205,31 @@ class MeloTTSBackend:
         except Exception as exc:
             logging.error("❌ MELOTTS - Failed to initialize: %s", exc)
             return False
+
+    @staticmethod
+    def _patch_legacy_download_urls() -> None:
+        try:
+            import melo.download_utils as download_utils
+        except Exception:
+            return
+
+        legacy_host = "myshell-public-repo-hosting.s3.amazonaws.com"
+        replacement_host = "myshell-public-repo-host.s3.amazonaws.com"
+        patched = 0
+        for attr in ("DOWNLOAD_CKPT_URLS", "DOWNLOAD_CONFIG_URLS", "PRETRAINED_MODELS"):
+            value = getattr(download_utils, attr, None)
+            if isinstance(value, dict):
+                for key, url in list(value.items()):
+                    if not isinstance(url, str):
+                        continue
+                    parsed = urlsplit(url)
+                    if parsed.netloc != legacy_host:
+                        continue
+                    value[key] = urlunsplit(parsed._replace(netloc=replacement_host))
+                    patched += 1
+
+        if patched:
+            logging.info("🎙️ MELOTTS - Patched %d legacy download URLs", patched)
     
     def synthesize(self, text: str) -> bytes:
         """
@@ -260,4 +288,3 @@ class MeloTTSBackend:
         self.speaker_ids = None
         self._initialized = False
         logging.info("🛑 MELOTTS - TTS shutdown")
-

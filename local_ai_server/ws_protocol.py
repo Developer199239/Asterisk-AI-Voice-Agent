@@ -18,12 +18,27 @@ class WebSocketProtocol:
         try:
             data = json.loads(message)
         except json.JSONDecodeError:
-            logging.warning("❓ Invalid JSON message: %s", message)
+            logging.warning("❓ Invalid JSON message received (length=%d)", len(message))
             return
 
-        msg_type = data.get("type")
+        msg_type_raw = data.get("type")
+        if msg_type_raw is None:
+            logging.warning("JSON payload missing 'type' (keys=%s)", sorted(data.keys()))
+            return
+        msg_type = (
+            str(msg_type_raw)
+            .replace("\x00", "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
         if not msg_type:
-            logging.warning("JSON payload missing 'type': %s", data)
+            logging.warning(
+                "JSON payload has invalid 'type' (raw=%r, raw_type=%s, payload_keys=%s)",
+                msg_type_raw,
+                type(msg_type_raw).__name__,
+                sorted(data.keys()),
+            )
             return
 
         if msg_type == "auth":
@@ -83,12 +98,32 @@ class WebSocketProtocol:
             await self._server._handle_audio_payload(websocket, session, data)
             return
 
+        if msg_type == "barge_in":
+            call_id = data.get("call_id")
+            if call_id:
+                session.call_id = call_id
+            self._server._clear_whisper_stt_suppression(session, reason="engine_barge_in")
+            await self._server._send_json(
+                websocket,
+                {
+                    "type": "barge_in_ack",
+                    "status": "ok",
+                    "call_id": session.call_id,
+                    "request_id": data.get("request_id"),
+                },
+            )
+            return
+
         if msg_type == "tts_request":
             await self._server._handle_tts_request(websocket, session, data)
             return
 
         if msg_type == "llm_request":
             await self._server._handle_llm_request(websocket, session, data)
+            return
+
+        if msg_type == "llm_tool_request":
+            await self._server._handle_llm_tool_request(websocket, session, data)
             return
 
         if msg_type == "reload_models":
@@ -203,7 +238,7 @@ class WebSocketProtocol:
             )
             return
 
-        logging.warning("❓ Unknown message type: %s", msg_type)
+        logging.warning("❓ Unknown message type: raw=%r normalized=%s", msg_type_raw, msg_type)
 
     async def handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
         if self._server.ws_auth_token and not session.authenticated:

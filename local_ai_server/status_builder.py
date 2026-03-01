@@ -45,20 +45,20 @@ def _tts_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
         display = os.path.basename(server.tts_model_path)
         return loaded, path, display
     if server.tts_backend == "kokoro":
+        # For UI consistency, keep `models.tts.path` stable as the configured Kokoro model path
+        # (matches the value returned by /api/local-ai/models) regardless of kokoro_mode.
+        #
+        # kokoro_mode and API base_url are still exposed under the top-level "kokoro" object.
+        stable_path = server.kokoro_model_path
         if server.kokoro_mode == "api":
             loaded = server.mock_models or bool(server.kokoro_api_base_url)
-            path = server.kokoro_api_base_url
             display = f"Kokoro Web API ({server.kokoro_voice})"
-            return loaded, path, display
+            return loaded, stable_path, display
 
         loaded = server.mock_models or server.kokoro_backend is not None
-        path = (
-            server.kokoro_model_path
-            if server.kokoro_mode != "hf"
-            else "hf://hexgrad/Kokoro-82M"
-        )
-        display = f"Kokoro ({server.kokoro_voice})"
-        return loaded, path, display
+        suffix = f", mode={server.kokoro_mode}" if server.kokoro_mode else ""
+        display = f"Kokoro ({server.kokoro_voice}{suffix})"
+        return loaded, stable_path, display
     if server.tts_backend == "melotts":
         loaded = server.mock_models or server.melotts_backend is not None
         path = server.melotts_voice
@@ -75,6 +75,24 @@ def build_status_response(server) -> Dict[str, Any]:
     llm_loaded = server.mock_models or server.llm_model is not None
     if runtime_mode == "minimal":
         llm_loaded = False
+
+    # Prompt-fit diagnostics (best-effort; used for UI guidance).
+    system_prompt = (getattr(server, "llm_system_prompt", "") or "").strip()
+    system_prompt_chars = len(system_prompt)
+    system_prompt_tokens = None
+    safe_max_tokens = None
+    try:
+        # Estimate tokens using the same wrapper the model sees.
+        if hasattr(server, "_build_phi_prompt_with_system"):
+            estimate_prompt = server._build_phi_prompt_with_system("Hello", system_prompt)
+        else:
+            estimate_prompt = server._build_phi_prompt("Hello")
+        system_prompt_tokens = int(server._count_prompt_tokens(estimate_prompt))
+        margin = 8
+        safe_max_tokens = max(1, int(server.llm_context) - system_prompt_tokens - margin)
+    except Exception:
+        system_prompt_tokens = None
+        safe_max_tokens = None
 
     gpu_status: Dict[str, Any]
     try:
@@ -112,7 +130,19 @@ def build_status_response(server) -> Dict[str, Any]:
                     "context": server.llm_context,
                     "threads": server.llm_threads,
                     "batch": server.llm_batch,
+                    "max_tokens": getattr(server, "llm_max_tokens", None),
+                    "temperature": getattr(server, "llm_temperature", None),
+                    "top_p": getattr(server, "llm_top_p", None),
+                    "repeat_penalty": getattr(server, "llm_repeat_penalty", None),
+                    "gpu_layers": getattr(server, "_llm_gpu_layers_effective", None),
                 },
+                "prompt_fit": {
+                    "system_prompt_chars": system_prompt_chars,
+                    "system_prompt_tokens": system_prompt_tokens,
+                    "safe_max_tokens": safe_max_tokens,
+                },
+                "auto_context": dict(getattr(server, "_llm_auto_ctx_meta", {}) or {}),
+                "tool_capability": dict(getattr(server, "_llm_tool_capability_meta", {}) or {}),
             },
             "tts": {
                 "backend": server.tts_backend,
@@ -141,6 +171,7 @@ def build_status_response(server) -> Dict[str, Any]:
             "debug_audio": DEBUG_AUDIO_FLOW,
             "mock_models": server.mock_models,
             "runtime_mode": runtime_mode,
+            "tool_gateway_enabled": bool(getattr(server, "tool_gateway_enabled", True)),
             "degraded": bool(server.startup_errors),
             "startup_errors": dict(server.startup_errors) if server.startup_errors else {},
             "runtime_fallbacks": dict(getattr(server, "runtime_fallbacks", {}) or {}),

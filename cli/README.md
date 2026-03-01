@@ -6,7 +6,7 @@ Go-based command-line interface for Asterisk AI Voice Agent operations.
 
 The `agent` CLI provides a comprehensive set of tools for setup, diagnostics, and troubleshooting. All commands are built as a single Go binary for easy distribution.
 
-**Current Status**: ✅ CLI v6.2.0 (simplified surface)
+**Current Status**: ✅ CLI v6.3.1 (simplified surface)
 
 ## Available Commands
 
@@ -16,7 +16,7 @@ The `agent` CLI provides a comprehensive set of tools for setup, diagnostics, an
 - **`agent update`** - Pull latest code + rebuild/restart as needed
 - **`agent version`** - Show version information
 
-Legacy aliases (hidden from `--help` in v6.2.0):
+Legacy aliases (hidden from `--help` in v6.3.1):
 - `agent init` → `agent setup`
 - `agent doctor` → `agent check`
 - `agent troubleshoot` → `agent rca`
@@ -27,7 +27,7 @@ Legacy aliases (hidden from `--help` in v6.2.0):
 
 **Linux/macOS:**
 ```bash
-curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash
+curl -sSL https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/main/scripts/install-cli.sh | bash
 ```
 
 This will:
@@ -39,17 +39,17 @@ This will:
 
 ### Manual Download
 
-Download pre-built binaries from [GitHub Releases](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases):
+Download pre-built binaries from [GitHub Releases](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases):
 
 **Linux:**
 ```bash
 # AMD64 (most Linux servers)
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-amd64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-linux-amd64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 
 # ARM64 (Raspberry Pi, AWS Graviton)
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-arm64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-linux-arm64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 ```
@@ -57,12 +57,12 @@ sudo mv agent /usr/local/bin/
 **macOS:**
 ```bash
 # Intel Macs
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-amd64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-darwin-amd64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 
 # Apple Silicon (M1/M2/M3)
-curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-arm64
+curl -L -o agent https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases/latest/download/agent-darwin-arm64
 chmod +x agent
 sudo mv agent /usr/local/bin/
 ```
@@ -238,7 +238,7 @@ agent troubleshoot --last --symptom <no-audio|garbled|echo|interruption|one-way>
 
 ## Hidden (Legacy) Commands
 
-CLI v6.2.0 intentionally keeps a small visible surface (`agent setup/check/rca/update/version`). For backwards compatibility and advanced workflows, these commands still exist but are hidden from `agent --help`:
+CLI v6.3.1 intentionally keeps a small visible surface (`agent setup/check/rca/update/version`). For backwards compatibility and advanced workflows, these commands still exist but are hidden from `agent --help`:
 
 - Compatibility aliases: `agent init`, `agent doctor`, `agent troubleshoot`
 - Advanced tools: `agent demo`, `agent dialplan`, `agent config validate`
@@ -272,7 +272,7 @@ agent version
 Asterisk AI Voice Agent CLI
 Version: vX.Y.Z
 Built: YYYY-MM-DDTHH:MM:SSZ
-Repository: https://github.com/hkjarral/Asterisk-AI-Voice-Agent
+Repository: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk
 ```
 
 ---
@@ -394,8 +394,8 @@ fi
 ## Support
 
 - **Documentation**: [docs/CLI_TOOLS_GUIDE.md](../docs/CLI_TOOLS_GUIDE.md)
-- **Issues**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
-- **Discussions**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions
+- **Issues**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues
+- **Discussions**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions
 
 ## License
 

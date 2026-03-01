@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/troubleshoot"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/troubleshoot"
 	"github.com/spf13/cobra"
 )
 

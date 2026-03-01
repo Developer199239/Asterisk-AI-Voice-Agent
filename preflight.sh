@@ -46,7 +46,7 @@ ASTERISK_FOUND=false
 COMPOSE_CMD=""
 
 # Docs and platform config (best-effort; script still works without them)
-AAVA_DOCS_BASE_URL="${AAVA_DOCS_BASE_URL:-https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/}"
+AAVA_DOCS_BASE_URL="${AAVA_DOCS_BASE_URL:-https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/}"
 PLATFORMS_YAML="$SCRIPT_DIR/config/platforms.yaml"
 
 github_docs_url() {
@@ -283,10 +283,12 @@ verify_fstab_bind_mount() {
 # Parse args
 LOCAL_AI_MODE_OVERRIDE=""
 PERSIST_MEDIA_MOUNT=false
+LOCAL_SERVER_ONLY=false
 for arg in "$@"; do
     case $arg in
         --apply-fixes) APPLY_FIXES=true ;;
         --force) FORCE_MODE=true ;;
+        --local-server|--local-ai-server) LOCAL_SERVER_ONLY=true ;;
         --local-ai-mode=*) LOCAL_AI_MODE_OVERRIDE="${arg#*=}" ;;
         --local-ai-minimal) LOCAL_AI_MODE_OVERRIDE="minimal" ;;
         --local-ai-full) LOCAL_AI_MODE_OVERRIDE="full" ;;
@@ -299,6 +301,7 @@ for arg in "$@"; do
             echo "Options:"
             echo "  --apply-fixes  Apply fixes automatically (requires root/sudo)"
             echo "  --force        Downgrade unsupported-OS failure to warning (for users with Docker pre-installed)"
+            echo "  --local-server Run only checks needed to bring up local_ai_server (skips Asterisk/Admin UI)"
             echo "  --local-ai-mode=MODE  Set LOCAL_AI_MODE in .env (MODE=full|minimal)"
             echo "  --local-ai-minimal    Shortcut for --local-ai-mode=minimal"
             echo "  --local-ai-full       Shortcut for --local-ai-mode=full"
@@ -374,7 +377,7 @@ detect_os() {
         log_fail "Unsupported architecture: $ARCH"
         log_info "  AAVA requires x86_64 (64-bit Intel/AMD) architecture"
         log_info "  ARM64/aarch64 support is planned for a future release"
-        log_info "  Docs: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/SUPPORTED_PLATFORMS.md"
+        log_info "  Docs: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/SUPPORTED_PLATFORMS.md"
     else
         log_ok "Architecture: $ARCH"
     fi
@@ -412,7 +415,7 @@ detect_os() {
             else
                 log_ok "NumPy already pinned to <2.0 for CPU compatibility"
             fi
-            log_info "  Docs: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md#troubleshooting"
+            log_info "  Docs: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md#troubleshooting"
         else
             log_ok "CPU supports SSE4.1/SSE4.2 (NumPy 2.x compatible)"
         fi
@@ -439,7 +442,7 @@ detect_os() {
         log_info "    3. Ensure systemd is available"
         log_info ""
         log_info "  Supported platforms matrix:"
-        log_info "    https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/SUPPORTED_PLATFORMS.md"
+        log_info "    https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/SUPPORTED_PLATFORMS.md"
         log_info ""
         log_info "  Then re-run with --force to skip this check:"
         log_info "    ./preflight.sh --force"
@@ -735,7 +738,7 @@ check_docker() {
         local DOCKER_AAVA_DOCS_PATH
         DOCKER_AAVA_DOCS_PATH="$(platform_yaml_get docker.aava_docs || echo "docs/INSTALLATION.md")"
         local DOCKER_AAVA_DOCS_URL
-        DOCKER_AAVA_DOCS_URL="$(github_docs_url "$DOCKER_AAVA_DOCS_PATH" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md")"
+        DOCKER_AAVA_DOCS_URL="$(github_docs_url "$DOCKER_AAVA_DOCS_PATH" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md")"
         
         # Offer to install based on OS family
         if [ "$APPLY_FIXES" = true ]; then
@@ -781,7 +784,7 @@ check_docker() {
             local ROOTLESS_START_CMD
             ROOTLESS_START_CMD="$(platform_yaml_get docker.rootless_start_cmd || echo "systemctl --user start docker")"
             local ROOTLESS_DOCS
-            ROOTLESS_DOCS="$(github_docs_url "$(platform_yaml_get docker.rootless_docs || echo "docs/CROSS_PLATFORM_PLAN.md")" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/CROSS_PLATFORM_PLAN.md")"
+            ROOTLESS_DOCS="$(github_docs_url "$(platform_yaml_get docker.rootless_docs || echo "docs/CROSS_PLATFORM_PLAN.md")" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/CROSS_PLATFORM_PLAN.md")"
             MANUAL_CMDS+=("$ROOTLESS_START_CMD")
             print_fix_and_docs "$ROOTLESS_START_CMD" "$ROOTLESS_DOCS"
         else
@@ -824,7 +827,7 @@ check_docker() {
         log_fail "Docker $DOCKER_VERSION too old (minimum: 20.10) - upgrade required"
         local DOCKER_INSTALL_CMD
         DOCKER_INSTALL_CMD="$(platform_yaml_get docker.install_cmd || true)"
-        print_fix_and_docs "$DOCKER_INSTALL_CMD" "$(github_docs_url "$(platform_yaml_get docker.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md")"
+        print_fix_and_docs "$DOCKER_INSTALL_CMD" "$(github_docs_url "$(platform_yaml_get docker.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md")"
     elif [ "$DOCKER_MAJOR" -lt 25 ]; then
         log_warn "Docker $DOCKER_VERSION supported but upgrade to 25.x+ recommended"
     else
@@ -922,7 +925,7 @@ check_compose() {
     COMPOSE_CMD=""
     COMPOSE_VER=""
     local COMPOSE_AAVA_DOCS_URL
-    COMPOSE_AAVA_DOCS_URL="$(github_docs_url "$(platform_yaml_get compose.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/INSTALLATION.md")"
+    COMPOSE_AAVA_DOCS_URL="$(github_docs_url "$(platform_yaml_get compose.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || echo "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/INSTALLATION.md")"
     
     if docker compose version &>/dev/null 2>&1; then
         COMPOSE_CMD="docker compose"
@@ -1039,8 +1042,12 @@ check_directories() {
     SHARED_GID="$(choose_shared_gid)"
     local CONTAINER_UID="${CONTAINER_UID_DEFAULT}"
     
+    # Skip asterisk_media checks for --local-server mode (standalone GPU server
+    # doesn't need Asterisk media directories; only data/ and models/ matter).
+    if [ "$LOCAL_SERVER_ONLY" = true ]; then
+        log_info "Skipping asterisk_media checks (--local-server mode)"
     # Check media directory
-    if [ -d "$MEDIA_DIR_HOST" ]; then
+    elif [ -d "$MEDIA_DIR_HOST" ]; then
         local media_uid media_gid media_mode parent_uid parent_gid parent_mode
         parent_uid="$(stat_uid "$MEDIA_PARENT")"
         parent_gid="$(stat_gid "$MEDIA_PARENT")"
@@ -2316,6 +2323,13 @@ GPU_AVAILABLE=$gpu_value" "$SCRIPT_DIR/.env"
     
     if [ "$gpu_value" = "true" ]; then
         log_ok "Set GPU_AVAILABLE=true in .env"
+        # Check for GPU layers footgun: GPU detected but layers=0 means CPU-only LLM inference.
+        local current_layers
+        current_layers="$(grep -E '^LOCAL_LLM_GPU_LAYERS=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')"
+        if [ "$current_layers" = "0" ]; then
+            log_warn "LOCAL_LLM_GPU_LAYERS=0 in .env — LLM will run on CPU despite GPU being available"
+            log_info "  Suggestion: Set LOCAL_LLM_GPU_LAYERS=-1 in .env for automatic GPU offloading"
+        fi
     fi
 }
 
@@ -2335,6 +2349,30 @@ check_ports() {
             log_warn "Port $PORT already in use (Admin UI port)"
         else
             log_ok "Port $PORT available"
+        fi
+    fi
+}
+
+check_ports_local_server() {
+    # Local AI Server is WS-only. Default port is 8765 (LOCAL_WS_PORT).
+    local port="8765"
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        # Use grep instead of source to avoid executing arbitrary code from .env
+        local env_port
+        env_port="$(grep -E '^LOCAL_WS_PORT=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')"
+        [ -n "$env_port" ] && port="$env_port"
+    fi
+    if command -v ss &>/dev/null; then
+        if ss -tln | grep -q ":$port "; then
+            log_warn "Port $port already in use (Local AI Server WS port)"
+        else
+            log_ok "Port $port available"
+        fi
+    elif command -v netstat &>/dev/null; then
+        if netstat -tln | grep -q ":$port "; then
+            log_warn "Port $port already in use (Local AI Server WS port)"
+        else
+            log_ok "Port $port available"
         fi
     fi
 }
@@ -2421,6 +2459,19 @@ print_summary() {
         touch "$SCRIPT_DIR/.preflight-ok"
         echo -e "${GREEN}✓ All checks passed!${NC}"
         echo ""
+
+        if [ "$LOCAL_SERVER_ONLY" = true ]; then
+            echo "Next steps (Local AI Server only):"
+            echo ""
+            echo "  1. Start Local AI Server:"
+            echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d --build local_ai_server"
+            echo ""
+            echo "  2. Verify WS health:"
+            echo "     cd local_ai_server && python3 smoke_test_ws.py --url ws://127.0.0.1:${LOCAL_WS_PORT:-8765} --auth-token \"\\$LOCAL_WS_AUTH_TOKEN\" --verbose"
+            echo ""
+            return
+        fi
+
         echo "╔═══════════════════════════════════════════════════════════════════════════╗"
         echo "║  ⚠️  SECURITY NOTICE                                                       ║"
         echo "╠═══════════════════════════════════════════════════════════════════════════╣"
@@ -2544,12 +2595,19 @@ main() {
     check_secrets_permissions  # AAVA-191: Vertex AI credentials directory
     check_selinux
     check_env
-    check_docker_gid
-    check_asterisk
-    check_asterisk_uid_gid
-    check_asterisk_config
-    check_gpu
-    check_ports
+
+    if [ "$LOCAL_SERVER_ONLY" = true ]; then
+        # Local AI Server onboarding path: skip Asterisk/Admin UI checks.
+        check_gpu
+        check_ports_local_server
+    else
+        check_docker_gid
+        check_asterisk
+        check_asterisk_uid_gid
+        check_asterisk_config
+        check_gpu
+        check_ports
+    fi
     
     # Apply fixes if requested
     if [ "$APPLY_FIXES" = true ]; then

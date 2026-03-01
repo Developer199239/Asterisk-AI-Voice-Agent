@@ -476,6 +476,6 @@ Stasis(asterisk-ai-voice-agent)
 
 ## Support
 
-- **Issues**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
-- **Docs**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/tree/main/docs
+- **Issues**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues
+- **Docs**: https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/tree/main/docs
 - **Linear**: Task AAVA-75 (Google Cloud Integration - CLOSED with findings)

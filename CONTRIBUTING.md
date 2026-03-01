@@ -18,7 +18,7 @@ By participating, you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
 - **Get recognized** — your name in our Contributors list, release notes, and Discord
 - **Shape YOUR tool** — contribute features YOU actually need in your day-to-day operations
 
-**New to open source?** See the [Operator Contributor Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE.md) — a step-by-step walkthrough for people who have never used GitHub before.
+**New to open source?** See the [Operator Contributor Guide](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/develop/docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE.md) — a step-by-step walkthrough for people who have never used GitHub before.
 
 ## What We're Looking For
 
@@ -35,8 +35,8 @@ By participating, you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Finding Work
 
-- **Good first issues**: [GitHub Issues labeled `good first issue`](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues?q=label%3A%22good+first+issue%22)
-- **Help wanted**: [GitHub Issues labeled `help wanted`](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues?q=label%3A%22help+wanted%22)
+- **Good first issues**: [GitHub Issues labeled `good first issue`](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=label%3A%22good+first+issue%22)
+- **Help wanted**: [GitHub Issues labeled `help wanted`](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=label%3A%22help+wanted%22)
 - **Roadmap**: See [docs/ROADMAP.md](docs/ROADMAP.md) for planned milestones with difficulty levels
 - **Discord**: Join [our server](https://discord.gg/ysg8fphxUe) and ask in #contributing
 
@@ -73,17 +73,17 @@ Releases are promoted from `staging` to `main` after golden baseline validation.
 ### Option A: AI-Assisted Setup (Recommended for Operators)
 
 ```bash
-git clone -b develop https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone -b develop https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 ./scripts/setup-contributor.sh
 ```
 
-Then open the folder in [Windsurf](https://codeium.com/windsurf) and type "I want to contribute" in the chat. See the [Operator Contributor Guide](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/develop/docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE.md) for details.
+Then open the folder in [Windsurf](https://codeium.com/windsurf) and type "I want to contribute" in the chat. See the [Operator Contributor Guide](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/develop/docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE.md) for details.
 
 ### Option B: Traditional Setup (For Developers)
 
 ```bash
-git clone -b develop https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone -b develop https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 ./install.sh   # guided setup; or follow README for manual steps
 ```
@@ -121,7 +121,7 @@ See [testing-guide.md](docs/contributing/testing-guide.md) for more detail.
 
 For new features or significant changes:
 
-1. Open a [GitHub Discussion](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions) in "Ideas"
+1. Open a [GitHub Discussion](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions) in "Ideas"
 2. If accepted, create a milestone spec using the [template](docs/contributing/milestones/TEMPLATE.md)
 3. Submit as a Draft PR for review
 
@@ -136,7 +136,7 @@ See [GOVERNANCE.md](GOVERNANCE.md) for the full decision-making process.
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues) with:
+Use [GitHub Issues](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues) with:
 - Steps to reproduce
 - Relevant logs (`agent check`, `agent rca`)
 - Environment details (OS, Docker version, Asterisk version)

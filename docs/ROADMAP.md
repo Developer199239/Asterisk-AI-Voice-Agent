@@ -78,12 +78,12 @@ Longer-term goals that will shape the project's direction:
 ### Pick up existing work
 
 1. Browse the [Planned Milestones](#planned-milestones) or [Good First Issues](#good-first-issues-beginner-friendly) above
-2. Check [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues) filtered by `help wanted` or `good first issue`
+2. Check [GitHub Issues](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues) filtered by `help wanted` or `good first issue`
 3. Comment on the issue to claim it, or ask in [Discord](https://discord.gg/ysg8fphxUe)
 
 ### Propose something new
 
-1. Open a [GitHub Discussion](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions) in the "Ideas" category
+1. Open a [GitHub Discussion](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/discussions) in the "Ideas" category
 2. If accepted, create a milestone spec using the [template](contributing/milestones/TEMPLATE.md) and submit as a Draft PR
 3. See [GOVERNANCE.md](../GOVERNANCE.md) for the full feature proposal process
 
@@ -98,4 +98,4 @@ Longer-term goals that will shape the project's direction:
 
 ---
 
-**Last Updated**: February 2026 | **Current Version**: v6.2.0
+**Last Updated**: February 2026 | **Current Version**: v6.3.1

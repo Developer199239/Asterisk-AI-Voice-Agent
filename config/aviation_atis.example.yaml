@@ -1,7 +1,7 @@
 metno:
   # met.no requires an identifying User-Agent. Include a URL and/or contact.
   # See: https://api.met.no/doc/TermsOfService and https://api.met.no/doc/FAQ
-  user_agent: "Asterisk-AI-Voice-Agent (+https://github.com/hkjarral/Asterisk-AI-Voice-Agent)"
+  user_agent: "Asterisk-AI-Voice-Agent (+https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk)"
   timeout_seconds: 10
   # Cache TTL in seconds. The MCP server also background-refreshes tracked ICAOs on this cadence.
   cache_ttl_seconds: 300
@@ -9,7 +9,7 @@ metno:
 awc:
   # Optional enrichment (airport name, ATIS frequencies, runway list) via aviationweather.gov.
   # Uses the same identifying User-Agent by default if omitted.
-  user_agent: "Asterisk-AI-Voice-Agent (+https://github.com/hkjarral/Asterisk-AI-Voice-Agent)"
+  user_agent: "Asterisk-AI-Voice-Agent (+https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk)"
   timeout_seconds: 5
   cache_ttl_seconds: 300
 

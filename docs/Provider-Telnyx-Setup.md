@@ -308,4 +308,4 @@ SIP trunk configuration is handled natively by Asterisk/FreePBX and is separate 
 
 **Telnyx AI Inference Provider Setup - Complete**
 
-For questions or issues, see the [GitHub repository](https://github.com/hkjarral/Asterisk-AI-Voice-Agent).
+For questions or issues, see the [GitHub repository](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk).

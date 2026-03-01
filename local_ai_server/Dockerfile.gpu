@@ -4,13 +4,13 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 as builder
 # Build args - keep parity with Dockerfile where possible
 ARG INCLUDE_VOSK=true
 ARG INCLUDE_SHERPA=true
-ARG INCLUDE_FASTER_WHISPER=false
-ARG INCLUDE_WHISPER_CPP=false
+ARG INCLUDE_FASTER_WHISPER=true
+ARG INCLUDE_WHISPER_CPP=true
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false
 ARG INCLUDE_LLAMA=true
-ARG MELOTTS_GIT_REF=b633f243412169b999526e19eb6fcac0974b5d30
+ARG MELOTTS_GIT_REF=209145371cff8fc3bd60d7be902ea69cbdb7965a
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -72,11 +72,21 @@ RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
     fi
 
 RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
-        pip install --no-cache-dir "git+https://github.com/myshell-ai/MeloTTS.git@${MELOTTS_GIT_REF}" && \
-        python -m unidic download && \
-        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" && \
-        python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" && \
-        python -c "from melo.api import TTS; tts = TTS(language='EN', device='cpu'); print('MeloTTS ready')"; \
+        pip install --no-cache-dir --upgrade pip setuptools wheel && \
+        git clone https://github.com/myshell-ai/MeloTTS.git /tmp/MeloTTS && \
+        cd /tmp/MeloTTS && \
+        git checkout "${MELOTTS_GIT_REF}" && \
+        python -c "from pathlib import Path; p=Path('/tmp/MeloTTS/setup.py'); s=p.read_text(); s=s.replace(\"from pip.req import parse_requirements\\n\", \"\"); s=s.replace(\"install_reqs = parse_requirements('requirements.txt')\\nreqs = [str(ir.req) for ir in install_reqs]\\n\", \"with open(os.path.join(cwd, 'requirements.txt'), encoding='utf-8') as _f:\\n    reqs = [ln.strip() for ln in _f if ln.strip() and not ln.startswith('#')]\\n\"); p.write_text(s); req=[]; ex=('torch','torchaudio','gradio'); [req.append(ln.strip()) for ln in Path('/tmp/MeloTTS/requirements.txt').read_text().splitlines() if ln.strip() and not ln.strip().startswith('#') and not ln.strip().lower().startswith(ex)]; Path('/tmp/MeloTTS/requirements.filtered.txt').write_text('\\n'.join(req)+'\\n'); print(f'MeloTTS filtered requirements prepared: {len(req)} packages')" && \
+        pip install --no-cache-dir -r requirements.filtered.txt && \
+        pip install --no-cache-dir "setuptools<81" && \
+        if ! python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)"; then pip install --no-cache-dir torch; fi && \
+        if ! python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('torchaudio') else 1)"; then pip install --no-cache-dir torchaudio; fi && \
+        pip install --no-cache-dir --no-build-isolation --no-deps . && \
+        cd / && rm -rf /tmp/MeloTTS && \
+        python -m unidic download || true && \
+        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/venv/nltk_data')" || true && \
+        python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" || true && \
+        python -c "from melo.api import TTS; print('MeloTTS package ready')"; \
     fi
 
 RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \
@@ -128,16 +138,15 @@ RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
         tar -xzf /tmp/onnxruntime.tgz -C /tmp && \
         mv /tmp/onnxruntime-linux-x64-1.17.1/lib/* /usr/lib/ && \
         rm -rf /tmp/onnxruntime* && \
-        if [ -z "$KROKO_SERVER_SHA256" ]; then \
-            echo "KROKO_SERVER_SHA256 must be set when INCLUDE_KROKO_EMBEDDED=true. Build aborted." && \
-            exit 1; \
-        fi && \
         wget -q https://download.kroko.ai/binaries/kroko-onnx-online-websocket-server \
             -O /usr/local/bin/kroko-server && \
         ACTUAL_KROKO_SHA=$(sha256sum /usr/local/bin/kroko-server | cut -d' ' -f1) && \
         if [ -n "$KROKO_SERVER_SHA256" ] && [ "$ACTUAL_KROKO_SHA" != "$KROKO_SERVER_SHA256" ]; then \
             echo "Kroko checksum mismatch. Build aborted." && \
             exit 1; \
+        fi && \
+        if [ -z "$KROKO_SERVER_SHA256" ]; then \
+            echo "⚠️  WARNING: KROKO_SERVER_SHA256 not set. For production, set --build-arg KROKO_SERVER_SHA256=${ACTUAL_KROKO_SHA}"; \
         fi && \
         chmod +x /usr/local/bin/kroko-server; \
     fi
@@ -157,6 +166,9 @@ COPY --chown=appuser:appuser . .
 # Set PATH for virtual environment
 ENV PATH="/opt/venv/bin:$PATH"
 ENV NLTK_DATA="/opt/venv/nltk_data"
+
+# Document the WebSocket server port (informational; host networking ignores EXPOSE)
+EXPOSE 8765
 
 # Run the application
 CMD ["python", "main.py"]

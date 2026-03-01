@@ -9,12 +9,19 @@ DEFAULT_HANGUP_MARKERS: Dict[str, List[str]] = {
         "no transcript needed",
         "don't send a transcript",
         "no thanks",
+        "no thank you",
+        "thank you",
+        "thanks",
         "that's all",
         "nothing else",
         "end call",
         "hang up",
         "goodbye",
         "bye",
+        "have a good day",
+        "have a great day",
+        "take care",
+        "talk to you later",
     ],
     "assistant_farewell": [
         "goodbye",
@@ -61,9 +68,28 @@ DEFAULT_HANGUP_POLICY: Dict[str, Any] = {
     "markers": DEFAULT_HANGUP_MARKERS,
 }
 
+_END_CALL_FUZZY_PATTERNS: List[tuple[str, str]] = [
+    (r"\bhand[\s-]*up\b", "hang up"),
+    (r"\bhangup\b", "hang up"),
+    (r"\bhand[\s-]*off\b", "hang up"),
+    (r"\b(and|end)\s+the\s+call\b", "end call"),
+    (r"\b(and|end)\s+call\b", "end call"),
+    (r"\bhang\s+up\s+the\s+(?:cob|cab|cop|cause)\b", "hang up the call"),
+    (r"\bhand\s+up\s+the\s+(?:call|cob|cab|cop|cause)\b", "hang up the call"),
+]
+
 
 def _normalize_text(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+def _normalize_end_call_text(value: str) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return text
+    for pattern, replacement in _END_CALL_FUZZY_PATTERNS:
+        text = re.sub(pattern, replacement, text)
+    return _normalize_text(text)
 
 
 def _coerce_marker_list(value: Any) -> List[str]:
@@ -166,3 +192,45 @@ def text_contains_marker_word(text: str, markers: Iterable[str]) -> bool:
         if re.search(rf"(?:^|\b){re.escape(m)}(?:\b|$)", t):
             return True
     return False
+
+
+def text_contains_end_call_intent(text: str, markers: Iterable[str]) -> bool:
+    """
+    End-of-call intent matcher with light fuzzy normalization for STT artifacts.
+
+    Examples:
+    - "hand up the call" -> "hang up the call"
+    - "and the call" -> "end call"
+    """
+    normalized = _normalize_end_call_text(text)
+    if not normalized:
+        return False
+    if text_contains_marker(normalized, markers):
+        return True
+    if normalized != _normalize_text(text):
+        return text_contains_marker(_normalize_text(text), markers)
+    return False
+
+
+def text_is_short_polite_closing(text: str) -> bool:
+    """
+    Detect short gratitude closings even when custom marker lists are too narrow.
+
+    This is intentionally conservative to avoid mid-call false positives:
+    - utterance must be short (<= 6 words after normalization)
+    - must look like a closing gratitude phrase (e.g. "okay thank you")
+    """
+    normalized = _normalize_end_call_text(text)
+    if not normalized:
+        return False
+    compact = _normalize_text(re.sub(r"[^a-z0-9\s]", " ", normalized))
+    if not compact:
+        return False
+    if len(compact.split()) > 6:
+        return False
+    return bool(
+        re.fullmatch(
+            r"(?:ok(?:ay)?\s+)?(?:thank\s+you|thanks)(?:\s+(?:so\s+much|very\s+much))?(?:\s+(?:bye|goodbye))?",
+            compact,
+        )
+    )

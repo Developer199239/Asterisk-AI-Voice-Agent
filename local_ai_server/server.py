@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import audioop
 import base64
 import json
 import logging
@@ -14,6 +15,7 @@ import tempfile
 import wave
 import urllib.request
 import urllib.error
+from dataclasses import replace
 from time import monotonic, time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -53,6 +55,30 @@ from session import SessionContext
 from config import LocalAIConfig
 from model_manager import ModelManager
 from ws_protocol import WebSocketProtocol
+
+
+# Local LLM tool-call guardrails (server-side) to prevent accidental hangups.
+# This is intentionally conservative: we only allow hangup_call when the user's
+# transcript contains explicit end-of-call intent markers.
+_END_CALL_MARKERS: Tuple[str, ...] = (
+    "no transcript",
+    "no transcript needed",
+    "don't send a transcript",
+    "no thanks",
+    "no thank you",
+    "thank you",
+    "thanks",
+    "that's all",
+    "nothing else",
+    "end call",
+    "hang up",
+    "goodbye",
+    "bye",
+    "have a good day",
+    "have a great day",
+    "take care",
+    "talk to you later",
+)
 
 
 class _LegacyKrokoSTTBackend:
@@ -724,10 +750,14 @@ class LocalAIServer:
         self._llm_lock = asyncio.Lock()
         # Lock to serialize Faster-Whisper inference (CTranslate2 is NOT thread-safe)
         self._faster_whisper_lock = asyncio.Lock()
+        # Lock to serialize Whisper.cpp inference (avoid concurrent model access).
+        self._whisper_cpp_lock = asyncio.Lock()
         # Component -> last startup error (used for degraded mode status/logging)
         self.startup_errors: Dict[str, str] = {}
         # Track runtime fallbacks (e.g. CUDA -> CPU) for operator visibility.
         self.runtime_fallbacks: Dict[str, Dict[str, Any]] = {}
+        # Last effective llama.cpp GPU layer selection (for status/UI).
+        self._llm_gpu_layers_effective: int = 0
         # Cached runtime GPU probe for status responses (avoid probing every request).
         self._gpu_runtime_status_cache: Dict[str, Any] = {}
         self._gpu_runtime_status_checked_mono: float = 0.0
@@ -755,6 +785,105 @@ class LocalAIServer:
         self.buffer_size_bytes = PCM16_TARGET_RATE * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
         # Process buffer after N ms of silence (idle finalizer).
         self.buffer_timeout_ms = self.config.stt_idle_ms
+        # Track startup-only auto-tuning so reload_models() doesn't re-run it.
+        self._startup_tuning_applied = False
+        # Best-effort metadata for UI/status.
+        self._llm_auto_ctx_meta: Dict[str, Any] = {}
+        self._llm_tool_capability_meta: Dict[str, Any] = {
+            "level": "unknown",
+            "source": "init",
+            "notes": "llm_not_probed",
+            "structured_mode": "none",
+            "validated_at": int(time() * 1000),
+            "model_fingerprint": "unknown",
+        }
+
+    def _llm_auto_ctx_cache_path(self) -> str:
+        """
+        Persist startup auto-tuning decisions in the models volume (if writable).
+
+        We prefer /app/data because preflight ensures it is writable by containers.
+        If it isn't available, fall back to /app/models (best-effort).
+        """
+        try:
+            if os.path.isdir("/app/data") and os.access("/app/data", os.W_OK):
+                return "/app/data/local_ai_server/llm_auto_ctx_cache.json"
+        except Exception:
+            pass
+        return "/app/models/.aava/llm_auto_ctx_cache.json"
+
+    def _llm_auto_ctx_cache_key(self, gpu: Dict[str, Any]) -> str:
+        model_path = (self.llm_model_path or "").strip()
+        gpu_name = (gpu.get("name") or "").strip()
+        mem = gpu.get("memory_gb")
+        return f"{model_path}|{gpu_name}|{mem}"
+
+    def _read_llm_auto_ctx_cache(self, gpu: Dict[str, Any]) -> Optional[int]:
+        path = self._llm_auto_ctx_cache_path()
+        try:
+            if not os.path.exists(path):
+                return None
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+            key = self._llm_auto_ctx_cache_key(gpu)
+            entry = (payload.get("entries") or {}).get(key) or {}
+            value = entry.get("context")
+            if value is None:
+                return None
+            return int(value)
+        except Exception:  # pragma: no cover - best-effort cache
+            return None
+
+    def _write_llm_auto_ctx_cache(self, gpu: Dict[str, Any], context: int) -> None:
+        path = self._llm_auto_ctx_cache_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload: Dict[str, Any] = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        payload = json.load(f) or {}
+                except Exception:
+                    payload = {}
+            entries = payload.get("entries")
+            if not isinstance(entries, dict):
+                entries = {}
+            key = self._llm_auto_ctx_cache_key(gpu)
+            entries[key] = {
+                "context": int(context),
+                "model_path": (self.llm_model_path or "").strip(),
+                "gpu_name": gpu.get("name"),
+                "gpu_memory_gb": gpu.get("memory_gb"),
+                "at_epoch_ms": int(time() * 1000),
+            }
+            payload["entries"] = entries
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, sort_keys=True)
+        except Exception:  # pragma: no cover - best-effort cache
+            return
+
+    def _llm_auto_ctx_candidates(self, gpu: Dict[str, Any]) -> List[int]:
+        """
+        Choose an ordered context ladder based on GPU memory.
+
+        We cap at 4096 for the current shipped Phi-3-mini-4k models. Operators can
+        override via LOCAL_LLM_CONTEXT for other models.
+        """
+        mem = gpu.get("memory_gb")
+        try:
+            mem_gb = float(mem) if mem is not None else None
+        except Exception:
+            mem_gb = None
+
+        if mem_gb is None:
+            return [4096, 3072, 2048, 1536, 1024, 768]
+        if mem_gb >= 20:
+            return [4096, 3072, 2048, 1536, 1024, 768]
+        if mem_gb >= 12:
+            return [3072, 2048, 1536, 1024, 768]
+        if mem_gb >= 8:
+            return [2048, 1536, 1024, 768]
+        return [1536, 1024, 768]
 
     @staticmethod
     def _parse_optional_bool(raw: Optional[str]) -> Optional[bool]:
@@ -906,6 +1035,9 @@ class LocalAIServer:
         self.llm_system_prompt = config.llm_system_prompt
         self.llm_stop_tokens = list(config.llm_stop_tokens)
         self.llm_use_mlock = config.llm_use_mlock
+        self.llm_chat_format = config.llm_chat_format
+        self.llm_voice_preamble = config.llm_voice_preamble
+        self.tool_gateway_enabled = bool(config.tool_gateway_enabled)
 
         # TTS configuration
         self.tts_backend = config.tts_backend
@@ -939,7 +1071,7 @@ class LocalAIServer:
             logging.debug("Vosk model path resolution skipped", exc_info=True)
         return path
 
-    async def initialize_models(self):
+    async def initialize_models(self, *, startup: bool = False):
         """Initialize all AI models.
 
         Default behavior is "degraded start": failures are logged and reflected
@@ -965,8 +1097,16 @@ class LocalAIServer:
                 "🤖 Local AI runtime_mode=minimal: skipping LLM preload (set LOCAL_AI_MODE=full to enable)"
             )
             self.llm_model = None
+            self._llm_tool_capability_meta = {
+                "level": "none",
+                "source": "runtime_mode",
+                "notes": "runtime_mode=minimal",
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": self._llm_model_fingerprint(),
+            }
         else:
-            await self._load_llm_model()
+            await self._load_llm_model(allow_auto_ctx=bool(startup))
             await self.run_startup_latency_check()
         await self._load_tts_model()
 
@@ -1352,7 +1492,7 @@ class LocalAIServer:
             "at_epoch_ms": int(time() * 1000),
         }
 
-    async def _load_llm_model(self):
+    async def _load_llm_model(self, *, allow_auto_ctx: bool = False):
         """Load LLM model with optimized parameters for faster inference"""
         if Llama is None:
             logging.warning(
@@ -1368,35 +1508,284 @@ class LocalAIServer:
 
             # Determine GPU layers
             gpu_layers = self._detect_gpu_layers()
+            self._llm_gpu_layers_effective = gpu_layers
             gpu_status = f"GPU ({gpu_layers} layers)" if gpu_layers > 0 else "CPU only"
 
-            self.llm_model = Llama(
-                model_path=self.llm_model_path,
-                n_ctx=self.llm_context,
-                n_threads=self.llm_threads,
-                n_batch=self.llm_batch,
-                n_gpu_layers=gpu_layers,
-                verbose=False,
-                use_mmap=True,
-                use_mlock=self.llm_use_mlock,
-                add_bos=False,
+            explicit_ctx_raw = (os.getenv("LOCAL_LLM_CONTEXT") or "").strip()
+            has_explicit_ctx = bool(explicit_ctx_raw)
+            can_auto_ctx = (
+                bool(allow_auto_ctx)
+                and not self._startup_tuning_applied
+                and not has_explicit_ctx
+                and gpu_layers > 0
             )
+
+            gpu_runtime = {}
+            try:
+                gpu_runtime = self.get_gpu_runtime_status(refresh=True) or {}
+            except Exception:
+                gpu_runtime = {}
+
+            selected_ctx_source = "env" if has_explicit_ctx else "config"
+            cached_ctx: Optional[int] = None
+            if can_auto_ctx:
+                cached_ctx = self._read_llm_auto_ctx_cache(gpu_runtime)
+                if cached_ctx:
+                    selected_ctx_source = "cache"
+
+            if cached_ctx:
+                ctx_candidates = [cached_ctx]
+            elif can_auto_ctx:
+                ctx_candidates = self._llm_auto_ctx_candidates(gpu_runtime)
+                selected_ctx_source = "auto"
+            else:
+                ctx_candidates = [int(self.llm_context)]
+
+            last_exc: Optional[Exception] = None
+            loaded = False
+            contexts_to_try = list(ctx_candidates)
+            idx = 0
+            while idx < len(contexts_to_try):
+                ctx = int(contexts_to_try[idx])
+                idx += 1
+
+                # Keep server + config consistent so subsequent model switches preserve tuned ctx.
+                self.llm_context = ctx
+                try:
+                    self.config = replace(self.config, llm_context=ctx)
+                except Exception:
+                    pass
+
+                try:
+                    llama_kwargs = dict(
+                        model_path=self.llm_model_path,
+                        n_ctx=ctx,
+                        n_threads=self.llm_threads,
+                        n_batch=self.llm_batch,
+                        n_gpu_layers=gpu_layers,
+                        verbose=False,
+                        use_mmap=True,
+                        use_mlock=self.llm_use_mlock,
+                    )
+                    if self.llm_chat_format:
+                        llama_kwargs["chat_format"] = self.llm_chat_format
+                    self.llm_model = Llama(**llama_kwargs)
+                    loaded = True
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    self.llm_model = None
+
+                    if cached_ctx and ctx == int(cached_ctx):
+                        logging.warning(
+                            "❌ Cached LLM context failed to load (ctx=%s). Falling back to auto ladder.",
+                            cached_ctx,
+                        )
+                        cached_ctx = None
+                        selected_ctx_source = "auto"
+                        contexts_to_try = list(self._llm_auto_ctx_candidates(gpu_runtime))
+                        idx = 0
+                        continue
+
+                    if can_auto_ctx and len(contexts_to_try) > 1:
+                        logging.warning(
+                            "❌ LLM load failed with ctx=%s; trying smaller context. error=%s",
+                            ctx,
+                            str(exc)[:200],
+                        )
+                        continue
+                    break
+
+            if not loaded:
+                raise last_exc or RuntimeError("Failed to load LLM model")
+
             logging.info("✅ LLM model loaded: %s (%s)", self.llm_model_path, gpu_status)
             logging.info(
-                "📊 LLM Config: ctx=%s, threads=%s, batch=%s, max_tokens=%s, temp=%s, gpu_layers=%s",
+                "📊 LLM Config: ctx=%s, threads=%s, batch=%s, max_tokens=%s, temp=%s, gpu_layers=%s, chat_format=%s",
                 self.llm_context,
                 self.llm_threads,
                 self.llm_batch,
                 self.llm_max_tokens,
                 self.llm_temperature,
                 gpu_layers,
+                self.llm_chat_format or "(legacy-phi)",
             )
+
+            if can_auto_ctx:
+                self._startup_tuning_applied = True
+                self._llm_auto_ctx_meta = {
+                    "enabled": True,
+                    "source": selected_ctx_source,
+                    "selected_context": int(self.llm_context),
+                    "candidates": list(contexts_to_try),
+                    "cache_path": self._llm_auto_ctx_cache_path(),
+                }
+                if selected_ctx_source in ("auto", "cache"):
+                    self._write_llm_auto_ctx_cache(gpu_runtime, int(self.llm_context))
+            else:
+                self._llm_auto_ctx_meta = {
+                    "enabled": False,
+                    "source": selected_ctx_source,
+                    "selected_context": int(self.llm_context),
+                }
+            self._llm_tool_capability_meta = self._probe_llm_tool_capability()
         except Exception as exc:
             logging.error("❌ Failed to load LLM model: %s", exc)
             self.llm_model = None
+            self._llm_tool_capability_meta = {
+                "level": "none",
+                "source": "load_failed",
+                "notes": str(exc),
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": self._llm_model_fingerprint(),
+            }
             self.startup_errors["llm"] = str(exc)
             if self.fail_fast:
                 raise
+
+    def _probe_llm_tool_capability(self) -> Dict[str, Any]:
+        """
+        Lightweight one-shot capability probe for local tool calling.
+
+        Levels:
+        - strict: emits parseable `<tool_call>` wrapper
+        - partial: references tools but not in strict format
+        - none: no observable tool-call behavior
+        """
+        model_fingerprint = self._llm_model_fingerprint()
+        model_name = os.path.basename(self.llm_model_path or "") or self.llm_model_path or "unknown"
+        if self.runtime_mode == "minimal":
+            return {
+                "level": "none",
+                "source": "runtime_mode",
+                "model": model_name,
+                "notes": "runtime_mode=minimal",
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
+            }
+        if not self.llm_model:
+            return {
+                "level": "none",
+                "source": "unloaded",
+                "model": model_name,
+                "notes": "llm_model_unavailable",
+                "structured_mode": "none",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
+            }
+
+        probe_prompt = (
+            "You are validating tool-calling format. "
+            "Output ONLY a single tool call to hang up the call.\n"
+            "Use EXACTLY this format:\n"
+            "<tool_call>\n"
+            "{\"name\":\"hangup_call\",\"arguments\":{\"farewell_message\":\"Goodbye\"}}\n"
+            "</tool_call>\n"
+            "Do not add any other text."
+        )
+        try:
+            use_chat_path = bool(self.llm_chat_format)
+            if use_chat_path:
+                chat_output = self.llm_model.create_chat_completion(
+                    messages=[
+                        {"role": "system", "content": "You output tool calls in the exact format requested. No extra text."},
+                        {"role": "user", "content": probe_prompt},
+                    ],
+                    max_tokens=64,
+                    stop=self.llm_stop_tokens,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                raw = (
+                    chat_output.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if isinstance(chat_output, dict)
+                    else ""
+                )
+            else:
+                output = self.llm_model(
+                    probe_prompt,
+                    max_tokens=64,
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                raw = (
+                    output.get("choices", [{}])[0].get("text", "").strip()
+                    if isinstance(output, dict)
+                    else ""
+                )
+            lowered = (raw or "").lower()
+            has_primary_wrapper = "<tool_call" in lowered and "</tool_call>" in lowered
+            has_named_wrapper = "<hangup_call" in lowered and "</hangup_call>" in lowered
+            has_hangup_name = (
+                "hangup_call" in lowered
+                and (
+                    "\"name\"" in lowered
+                    or "'name'" in lowered
+                    or has_named_wrapper
+                    or has_primary_wrapper
+                )
+            )
+
+            if has_hangup_name and has_primary_wrapper:
+                level = "strict"
+                notes = "tool_call_wrapper_detected"
+            elif has_hangup_name:
+                level = "partial"
+                notes = "hangup_tool_marker_detected"
+            elif "tool_call" in lowered:
+                level = "partial"
+                notes = "tool_markers_detected_unparsed"
+            else:
+                level = "none"
+                notes = "no_tool_markers_detected"
+
+            result = {
+                "level": level,
+                "source": "startup_probe",
+                "model": model_name,
+                "notes": notes,
+                "structured_mode": "json_schema" if level == "strict" else "parser_fallback",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
+            }
+            logging.info(
+                "🧪 LLM TOOL-CALL PROBE - level=%s model=%s notes=%s preview=%s",
+                level,
+                model_name,
+                notes,
+                (raw or "")[:100],
+            )
+            return result
+        except Exception as exc:
+            logging.debug("LLM tool-call capability probe failed: %s", exc, exc_info=True)
+            return {
+                "level": "unknown",
+                "source": "probe_failed",
+                "model": model_name,
+                "notes": str(exc),
+                "structured_mode": "parser_fallback",
+                "validated_at": int(time() * 1000),
+                "model_fingerprint": model_fingerprint,
+            }
+
+    def _llm_model_fingerprint(self) -> str:
+        model_path = (self.llm_model_path or "").strip()
+        model_name = os.path.basename(model_path) or "unknown"
+        ctx = int(getattr(self, "llm_context", 0) or 0)
+        gpu_layers = int(getattr(self, "_llm_gpu_layers_effective", getattr(self, "llm_gpu_layers", 0)) or 0)
+        if not model_path:
+            return f"{model_name}|ctx={ctx}|gpu={gpu_layers}"
+        try:
+            st = os.stat(model_path)
+            return f"{model_name}|size={st.st_size}|mtime={int(st.st_mtime)}|ctx={ctx}|gpu={gpu_layers}"
+        except Exception:
+            return f"{model_name}|ctx={ctx}|gpu={gpu_layers}"
 
     async def run_startup_latency_check(self) -> None:
         """Run a lightweight LLM inference at startup to log baseline latency."""
@@ -1406,19 +1795,20 @@ class LocalAIServer:
         try:
             session = SessionContext(call_id="startup-latency")
             sample_text = "Hello, can you hear me?"
-            prompt, prompt_tokens, truncated, raw_tokens = self._prepare_llm_prompt(
+            prompt, prompt_tokens, truncated, raw_tokens, chat_messages = self._prepare_llm_prompt(
                 session, sample_text
             )
             loop = asyncio.get_running_loop()
             started = loop.time()
             logging.info(
-                "🧪 LLM WARMUP START - Running startup latency check (prompt_tokens=%s raw_tokens=%s model=%s ctx=%s batch=%s max_tokens<=%s)",
+                "🧪 LLM WARMUP START - Running startup latency check (prompt_tokens=%s raw_tokens=%s model=%s ctx=%s batch=%s max_tokens<=%s chat_format=%s)",
                 prompt_tokens,
                 raw_tokens,
                 os.path.basename(self.llm_model_path),
                 self.llm_context,
                 self.llm_batch,
                 min(self.llm_max_tokens, 32),
+                self.llm_chat_format or "(legacy-phi)",
             )
 
             # Heartbeat: log progress while the warm-up runs so users see activity
@@ -1443,16 +1833,27 @@ class LocalAIServer:
 
             hb_task = asyncio.create_task(_heartbeat())
 
-            await asyncio.to_thread(
-                self.llm_model,
-                prompt,
-                max_tokens=min(self.llm_max_tokens, 32),
-                stop=self.llm_stop_tokens,
-                echo=False,
-                temperature=self.llm_temperature,
-                top_p=self.llm_top_p,
-                repeat_penalty=self.llm_repeat_penalty,
-            )
+            if self.llm_chat_format:
+                await asyncio.to_thread(
+                    self.llm_model.create_chat_completion,
+                    messages=chat_messages,
+                    max_tokens=min(self.llm_max_tokens, 32),
+                    stop=self.llm_stop_tokens,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+            else:
+                await asyncio.to_thread(
+                    self.llm_model,
+                    prompt,
+                    max_tokens=min(self.llm_max_tokens, 32),
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
 
             latency_ms = round((loop.time() - started) * 1000.0, 2)
             done.set()
@@ -1691,7 +2092,7 @@ class LocalAIServer:
             return
         try:
             await self._cleanup_kroko_backend()
-            await self.initialize_models()
+            await self.initialize_models(startup=False)
             logging.info("✅ Models reloaded successfully")
         except Exception as exc:
             logging.error("❌ Model reload failed: %s", exc)
@@ -1923,8 +2324,52 @@ class LocalAIServer:
             logging.error("STT processing failed: %s", exc, exc_info=True)
             return ""
 
+    async def process_llm_chat(self, messages: List[Dict[str, str]]) -> str:
+        """Run LLM inference via create_chat_completion (chat_format mode).
+
+        Uses the model's configured chat_format to automatically apply the
+        correct chat template for the loaded model (Llama-3, Phi-3, Mistral, etc.).
+        """
+        async with self._llm_lock:
+            try:
+                if not self.llm_model:
+                    logging.warning("LLM model not loaded, using fallback")
+                    return "I'm here to help you. How can I assist you today?"
+
+                max_tokens = self.llm_max_tokens
+                loop = asyncio.get_running_loop()
+                started = loop.time()
+                output = await asyncio.to_thread(
+                    self.llm_model.create_chat_completion,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    stop=self.llm_stop_tokens,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+
+                choices = output.get("choices", []) if isinstance(output, dict) else []
+                if not choices:
+                    logging.warning("🤖 LLM RESULT (chat) - No choices returned, using fallback response")
+                    return "I'm here to help you. How can I assist you today?"
+
+                message = choices[0].get("message", {})
+                response = (message.get("content") or "").strip()
+                latency_ms = round((loop.time() - started) * 1000.0, 2)
+                logging.info(
+                    "🤖 LLM RESULT (chat) - Completed in %s ms tokens=%s",
+                    latency_ms,
+                    len(response.split()),
+                )
+                return response
+
+            except Exception as exc:
+                logging.error("LLM chat processing failed: %s", exc, exc_info=True)
+                return "I'm here to help you. How can I assist you today?"
+
     async def process_llm(self, prompt: str) -> str:
-        """Run LLM inference using the prepared Phi-style prompt.
+        """Run LLM inference using a raw prompt string (legacy Phi-style path).
         
         Uses a lock to serialize inference calls - llama-cpp is NOT thread-safe
         and will segfault if multiple threads try to use the model simultaneously.
@@ -1936,12 +2381,35 @@ class LocalAIServer:
                     logging.warning("LLM model not loaded, using fallback")
                     return "I'm here to help you. How can I assist you today?"
 
+                prompt_tokens = self._count_prompt_tokens(prompt)
+                # Safety margin: llama.cpp may add a token (BOS) depending on configuration.
+                safety_margin = 8
+                remaining = self.llm_context - prompt_tokens - safety_margin
+                if remaining <= 0:
+                    logging.error(
+                        "LLM prompt exceeds context window: prompt_tokens=%s n_ctx=%s (margin=%s)",
+                        prompt_tokens,
+                        self.llm_context,
+                        safety_margin,
+                    )
+                    return "I'm here to help you. How can I assist you today?"
+
+                max_tokens = min(self.llm_max_tokens, max(1, remaining))
+                if max_tokens != self.llm_max_tokens:
+                    logging.warning(
+                        "LLM max_tokens reduced to fit context: requested=%s using=%s prompt_tokens=%s n_ctx=%s",
+                        self.llm_max_tokens,
+                        max_tokens,
+                        prompt_tokens,
+                        self.llm_context,
+                    )
+
                 loop = asyncio.get_running_loop()
                 started = loop.time()
                 output = await asyncio.to_thread(
                     self.llm_model,
                     prompt,
-                    max_tokens=self.llm_max_tokens,
+                    max_tokens=max_tokens,
                     stop=self.llm_stop_tokens,
                     echo=False,
                     temperature=self.llm_temperature,
@@ -1980,8 +2448,34 @@ class LocalAIServer:
 
     def _build_phi_prompt(self, user_text: str) -> str:
         user_text = (user_text or "").strip()
-        segments = ["<|system|>", self.llm_system_prompt.strip(), "<|user|>"]
+        segments = ["<|system|>", (self.llm_system_prompt or "").strip(), "<|user|>"]
         segments.append(user_text if user_text else "Hello")
+        segments.append("<|assistant|>")
+        return "\n".join(segments) + "\n"
+
+    def _build_phi_prompt_with_system(self, user_text: str, system_prompt: str) -> str:
+        user_text = (user_text or "").strip()
+        system_prompt = (system_prompt or "").strip()
+        segments = ["<|system|>", system_prompt, "<|user|>"]
+        segments.append(user_text if user_text else "Hello")
+        segments.append("<|assistant|>")
+        return "\n".join(segments) + "\n"
+
+    def _build_phi_chat_prompt(self, messages: List[Dict[str, str]], system_prompt: str) -> str:
+        system_prompt = (system_prompt or "").strip()
+        segments: List[str] = ["<|system|>", system_prompt]
+
+        for message in messages or []:
+            role = (message.get("role") or "").strip().lower()
+            content = (message.get("content") or "").strip()
+            if not content:
+                continue
+            if role not in {"user", "assistant"}:
+                continue
+            segments.append("<|user|>" if role == "user" else "<|assistant|>")
+            segments.append(content)
+
+        # Always end with an assistant tag to cue generation.
         segments.append("<|assistant|>")
         return "\n".join(segments) + "\n"
 
@@ -1995,30 +2489,160 @@ class LocalAIServer:
                 cleaned = cleaned[len(marker):].lstrip()
         return cleaned
 
+    def _truncate_system_prompt_to_fit(self, user_text: str, max_prompt_tokens: int) -> Tuple[str, bool]:
+        """
+        Ensure the system prompt doesn't make the total prompt exceed n_ctx.
+
+        This is a last-resort guard to prevent llama.cpp hard failures when the
+        configured context window is too small for a large system prompt.
+        """
+        system_prompt = (self.llm_system_prompt or "").strip()
+        if not system_prompt:
+            return system_prompt, False
+
+        full_prompt = self._build_phi_prompt_with_system(user_text, system_prompt)
+        if self._count_prompt_tokens(full_prompt) <= max_prompt_tokens:
+            return system_prompt, False
+
+        low, high = 0, len(system_prompt)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = system_prompt[:mid].rstrip()
+            prompt = self._build_phi_prompt_with_system(user_text, candidate)
+            tokens = self._count_prompt_tokens(prompt)
+            if tokens <= max_prompt_tokens:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        return best, True
+
+    def _truncate_user_text_to_fit(
+        self, system_prompt: str, user_text: str, max_prompt_tokens: int
+    ) -> Tuple[str, bool]:
+        """
+        Final guard: truncate user text (keep most recent tail) until the prompt fits.
+        """
+        user_text = (user_text or "").strip()
+        if not user_text:
+            return user_text, False
+
+        full_prompt = self._build_phi_prompt_with_system(user_text, system_prompt)
+        if self._count_prompt_tokens(full_prompt) <= max_prompt_tokens:
+            return user_text, False
+
+        low, high = 0, len(user_text)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = user_text[-mid:].lstrip() if mid else ""
+            prompt = self._build_phi_prompt_with_system(candidate, system_prompt)
+            tokens = self._count_prompt_tokens(prompt)
+            if tokens <= max_prompt_tokens:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        return best, True
+
+    def _get_effective_system_prompt(self) -> str:
+        """Compose the effective system prompt by prepending voice preamble (if set)."""
+        system = (self.llm_system_prompt or "").strip()
+        preamble = (self.llm_voice_preamble or "").strip()
+        if preamble and system:
+            return f"{preamble}\n\n{system}"
+        return preamble or system
+
     def _prepare_llm_prompt(
         self, session: SessionContext, new_turn: str
-    ) -> Tuple[str, int, bool, int]:
-        """Append a user turn, trim history to fit context, and report token counts."""
-        candidate_turns = list(session.llm_user_turns) + [new_turn]
-        raw_user_text = "\n\n".join(candidate_turns).strip()
-        raw_prompt = self._build_phi_prompt(raw_user_text)
+    ) -> Tuple[str, int, bool, int, List[Dict[str, str]]]:
+        """
+        Append a user turn, trim dialog history to fit context, and report token counts.
+
+        Returns (prompt_text, prompt_tokens, truncated, raw_tokens, chat_messages).
+        - prompt_text: legacy Phi-style raw string (used when chat_format is empty)
+        - chat_messages: OpenAI-style messages list with system/user/assistant roles
+          (used when chat_format is set, via create_chat_completion)
+
+        Important: We keep a true chat transcript (user/assistant turns) rather than
+        concatenating all user turns into a single mega-message. Concatenation causes
+        small local models to repeatedly answer the *first* question, consuming
+        max_tokens before reaching the latest user turn.
+        """
+        new_turn = (new_turn or "").strip()
+        candidate_messages = list(session.llm_messages)
+        if new_turn:
+            candidate_messages.append({"role": "user", "content": new_turn})
+
+        effective_system = self._get_effective_system_prompt()
+
+        raw_prompt = self._build_phi_chat_prompt(candidate_messages, effective_system)
+        raw_prompt = self._strip_leading_bos(raw_prompt)
         raw_tokens = self._count_prompt_tokens(raw_prompt)
 
         max_prompt_tokens = max(self.llm_context - self.llm_max_tokens - 64, 128)
-        trimmed_turns = list(candidate_turns)
+        trimmed_messages = list(candidate_messages)
         truncated = False
-        while trimmed_turns and self._count_prompt_tokens(
-            self._build_phi_prompt("\n\n".join(trimmed_turns).strip())
-        ) > max_prompt_tokens:
-            trimmed_turns.pop(0)
+
+        def _count_with_system(system_prompt: str, messages: List[Dict[str, str]]) -> int:
+            prompt = self._build_phi_chat_prompt(messages, system_prompt)
+            prompt = self._strip_leading_bos(prompt)
+            return self._count_prompt_tokens(prompt)
+
+        # Trim oldest turns until prompt fits.
+        while trimmed_messages and _count_with_system(effective_system, trimmed_messages) > max_prompt_tokens:
+            trimmed_messages.pop(0)
             truncated = True
 
-        trimmed_user_text = "\n\n".join(trimmed_turns).strip()
-        prompt_text = self._build_phi_prompt(trimmed_user_text)
+        safety_margin = 8
+        max_allowed_prompt_tokens = max(self.llm_context - safety_margin, 32)
+        system_prompt = effective_system
+
+        prompt_text = self._build_phi_chat_prompt(trimmed_messages, system_prompt)
         prompt_text = self._strip_leading_bos(prompt_text)
         prompt_tokens = self._count_prompt_tokens(prompt_text)
-        session.llm_user_turns = trimmed_turns
-        return prompt_text, prompt_tokens, truncated, raw_tokens
+
+        # Last-resort: truncate system prompt if it alone causes overflow.
+        system_truncated = False
+        if prompt_tokens > max_allowed_prompt_tokens and system_prompt:
+            low, high = 0, len(system_prompt)
+            best = ""
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = system_prompt[:mid].rstrip()
+                tokens = _count_with_system(candidate, trimmed_messages)
+                if tokens <= max_allowed_prompt_tokens:
+                    best = candidate
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            system_prompt = best
+            system_truncated = True
+            prompt_text = self._build_phi_chat_prompt(trimmed_messages, system_prompt)
+            prompt_text = self._strip_leading_bos(prompt_text)
+            prompt_tokens = self._count_prompt_tokens(prompt_text)
+
+        if system_truncated:
+            truncated = True
+            logging.warning(
+                "🧠 LLM PROMPT - System prompt truncated to fit context n_ctx=%s max_prompt_tokens=%s",
+                self.llm_context,
+                max_allowed_prompt_tokens,
+            )
+
+        # Build chat_messages for create_chat_completion path.
+        chat_messages: List[Dict[str, str]] = []
+        if system_prompt:
+            chat_messages.append({"role": "system", "content": system_prompt})
+        chat_messages.extend(trimmed_messages)
+
+        # Update session state. Keep llm_user_turns in sync for existing logs/metrics.
+        session.llm_messages = trimmed_messages
+        session.llm_user_turns = [m.get("content", "") for m in trimmed_messages if (m.get("role") or "").lower() == "user"]
+        return prompt_text, prompt_tokens, truncated, raw_tokens, chat_messages
 
     async def process_tts(self, text: str) -> bytes:
         """Process TTS with 8kHz uLaw generation - routes to appropriate backend."""
@@ -2254,6 +2878,16 @@ class LocalAIServer:
         session.last_partial = ""
         session.partial_emitted = False
         session.audio_buffer = b""
+        # Batch STT segmentation state (Whisper family).
+        session.stt_segment_preroll = b""
+        session.stt_segment_buffer = b""
+        session.stt_segment_last_voice_mono = 0.0
+        session.stt_segment_in_speech = False
+        # Legacy per-backend buffers (kept for safety; segmenter no longer uses them).
+        if hasattr(session, "fw_audio_buffer"):
+            session.fw_audio_buffer = b""
+        if hasattr(session, "wcpp_audio_buffer"):
+            session.wcpp_audio_buffer = b""
         session.last_request_meta.clear()
         session.last_final_text = last_text
         session.last_final_norm = _normalize_text(last_text)
@@ -2320,72 +2954,13 @@ class LocalAIServer:
         audio_data: bytes,
         input_rate: int,
     ) -> List[Dict[str, Any]]:
-        """Feed audio into Faster-Whisper and return transcript updates."""
-        if not self.faster_whisper_backend:
-            logging.error("Faster-Whisper STT backend not initialized")
-            return []
-
-        # Buffer audio for Faster-Whisper (needs sufficient audio for transcription)
-        if not hasattr(session, 'fw_audio_buffer'):
-            session.fw_audio_buffer = b""
-        
-        # Resample to 16kHz if needed
-        if input_rate != PCM16_TARGET_RATE:
-            audio_bytes = await asyncio.to_thread(
-                self.audio_processor.resample_audio,
-                audio_data,
-                input_rate,
-                PCM16_TARGET_RATE,
-                "raw",
-                "raw",
-            )
-        else:
-            audio_bytes = audio_data
-
-        session.fw_audio_buffer += audio_bytes
-        
-        # Only process when we have enough audio (e.g., 1 second = 32000 bytes at 16kHz mono 16-bit)
-        MIN_BUFFER_SIZE = 32000  # 1 second of audio
-        if len(session.fw_audio_buffer) < MIN_BUFFER_SIZE:
-            return []
-
-        updates: List[Dict[str, Any]] = []
-        
-        try:
-            # Acquire lock to prevent concurrent access (CTranslate2 is NOT thread-safe)
-            async with self._faster_whisper_lock:
-                # Reset backend's internal buffer since we manage our own buffer
-                await asyncio.to_thread(self.faster_whisper_backend.reset)
-                
-                # Process buffered audio with Faster-Whisper
-                await asyncio.to_thread(
-                    self.faster_whisper_backend.process_audio,
-                    session.fw_audio_buffer
-                )
-                
-                # Call finalize() to get the final transcript
-                # (Whisper is a batch model, each chunk is effectively final)
-                result = await asyncio.to_thread(self.faster_whisper_backend.finalize)
-            
-            if result and result.get("text"):
-                transcript = result["text"].strip()
-                is_final = result.get("type") == "final"
-                logging.info("📝 STT RESULT - Faster-Whisper transcript: '%s' (final=%s)", transcript, is_final)
-                updates.append({
-                    "type": "stt_result",
-                    "is_final": is_final,
-                    "text": transcript,
-                    "transcript": transcript,
-                })
-            
-            # Clear buffer after processing
-            session.fw_audio_buffer = b""
-            
-        except Exception as exc:
-            logging.error("Faster-Whisper STT stream processing failed: %s", exc, exc_info=True)
-            session.fw_audio_buffer = b""
-
-        return updates
+        """Telephony-friendly utterance segmentation + one-shot Faster-Whisper decode."""
+        return await self._process_stt_stream_whisper_segmented(
+            session,
+            audio_data,
+            input_rate,
+            backend_name="faster_whisper",
+        )
 
     async def _process_stt_stream_whisper_cpp(
         self,
@@ -2393,18 +2968,45 @@ class LocalAIServer:
         audio_data: bytes,
         input_rate: int,
     ) -> List[Dict[str, Any]]:
-        """Feed audio into Whisper.cpp and return transcript updates."""
-        if not self.whisper_cpp_backend:
-            logging.error("Whisper.cpp STT backend not initialized")
+        """Telephony-friendly utterance segmentation + one-shot Whisper.cpp decode."""
+        return await self._process_stt_stream_whisper_segmented(
+            session,
+            audio_data,
+            input_rate,
+            backend_name="whisper_cpp",
+        )
+
+    async def _process_stt_stream_whisper_segmented(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+        *,
+        backend_name: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Segment telephony audio into utterances and run a one-shot transcription.
+
+        Whisper-family backends are batch models; emitting a "final" every 1s causes chopped
+        transcripts and incoherent turn-taking. We instead do simple energy-based segmentation
+        with preroll and silence endpointer, then decode the entire utterance in one shot.
+        """
+        if backend_name == "faster_whisper":
+            backend = self.faster_whisper_backend
+            lock = self._faster_whisper_lock
+        elif backend_name == "whisper_cpp":
+            backend = self.whisper_cpp_backend
+            lock = self._whisper_cpp_lock
+        else:  # pragma: no cover - defensive guard
+            logging.error("Unknown Whisper backend: %s", backend_name)
             return []
 
-        # Buffer audio for Whisper.cpp (needs sufficient audio for transcription)
-        if not hasattr(session, 'wcpp_audio_buffer'):
-            session.wcpp_audio_buffer = b""
-        
-        # Resample to 16kHz if needed
+        if not backend:
+            logging.error("%s STT backend not initialized call_id=%s", backend_name, session.call_id)
+            return []
+
         if input_rate != PCM16_TARGET_RATE:
-            audio_bytes = await asyncio.to_thread(
+            pcm16 = await asyncio.to_thread(
                 self.audio_processor.resample_audio,
                 audio_data,
                 input_rate,
@@ -2413,49 +3015,107 @@ class LocalAIServer:
                 "raw",
             )
         else:
-            audio_bytes = audio_data
+            pcm16 = audio_data
 
-        session.wcpp_audio_buffer += audio_bytes
-        
-        # Only process when we have enough audio (e.g., 1 second = 32000 bytes at 16kHz mono 16-bit)
-        MIN_BUFFER_SIZE = 32000  # 1 second of audio
-        if len(session.wcpp_audio_buffer) < MIN_BUFFER_SIZE:
+        if not pcm16:
             return []
 
-        updates: List[Dict[str, Any]] = []
-        
-        try:
-            # Reset backend's internal buffer since we manage our own buffer
-            await asyncio.to_thread(self.whisper_cpp_backend.reset)
-            
-            # Process buffered audio with Whisper.cpp
-            await asyncio.to_thread(
-                self.whisper_cpp_backend.process_audio,
-                session.wcpp_audio_buffer
-            )
-            
-            # Call finalize() to get the final transcript
-            result = await asyncio.to_thread(self.whisper_cpp_backend.finalize)
-            
-            if result and result.get("text"):
-                transcript = result["text"].strip()
-                is_final = result.get("type") == "final"
-                logging.info("📝 STT RESULT - Whisper.cpp transcript: '%s' (final=%s)", transcript, is_final)
-                updates.append({
-                    "type": "stt_result",
-                    "is_final": is_final,
-                    "text": transcript,
-                    "transcript": transcript,
-                })
-            
-            # Clear buffer after processing
-            session.wcpp_audio_buffer = b""
-            
-        except Exception as exc:
-            logging.error("Whisper.cpp STT stream processing failed: %s", exc, exc_info=True)
-            session.wcpp_audio_buffer = b""
+        # Keep a small preroll buffer so we don't clip initial phonemes.
+        preroll_max = int(PCM16_TARGET_RATE * 2 * (max(self.config.stt_segment_preroll_ms, 0) / 1000.0))
+        if preroll_max > 0:
+            session.stt_segment_preroll = (session.stt_segment_preroll + pcm16)[-preroll_max:]
+        else:
+            session.stt_segment_preroll = b""
 
-        return updates
+        try:
+            rms = int(audioop.rms(pcm16, 2))
+        except Exception:
+            rms = 0
+
+        now = monotonic()
+        is_voice = rms >= int(self.config.stt_segment_energy_threshold)
+
+        if is_voice:
+            session.stt_segment_last_voice_mono = now
+            if not session.stt_segment_in_speech:
+                session.stt_segment_in_speech = True
+                session.stt_segment_buffer = session.stt_segment_preroll + pcm16
+            else:
+                session.stt_segment_buffer += pcm16
+        elif session.stt_segment_in_speech:
+            # Keep buffering a bit of trailing silence while in-speech.
+            session.stt_segment_buffer += pcm16
+
+        if not session.stt_segment_in_speech:
+            return []
+
+        buf_len = len(session.stt_segment_buffer)
+        buf_ms = (float(buf_len) / float(PCM16_TARGET_RATE * 2)) * 1000.0
+        max_ms = float(max(250, int(self.config.stt_segment_max_ms)))
+        min_ms = float(max(0, int(self.config.stt_segment_min_ms)))
+        silence_ms = float(max(0, int(self.config.stt_segment_silence_ms)))
+        last_voice = float(session.stt_segment_last_voice_mono or 0.0)
+        since_voice_ms = (now - last_voice) * 1000.0 if last_voice > 0.0 else 0.0
+
+        end_due_to_silence = buf_ms >= min_ms and since_voice_ms >= silence_ms
+        end_due_to_max = buf_ms >= max_ms
+        if not (end_due_to_silence or end_due_to_max):
+            return []
+
+        # Finalize this utterance and reset segmenter state before decoding.
+        segment_pcm16 = session.stt_segment_buffer
+        session.stt_segment_preroll = b""
+        session.stt_segment_buffer = b""
+        session.stt_segment_last_voice_mono = 0.0
+        session.stt_segment_in_speech = False
+
+        if buf_ms < min_ms:
+            return []
+
+        request_mode = ((session.last_request_meta or {}).get("mode") or "").strip().lower()
+        started_ms = int(time() * 1000)
+        try:
+            async with lock:
+                text = await asyncio.to_thread(getattr(backend, "transcribe_pcm16"), segment_pcm16)
+        except Exception:
+            logging.error(
+                "Whisper segmented transcription failed backend=%s call_id=%s",
+                backend_name,
+                session.call_id,
+                exc_info=True,
+            )
+            text = ""
+        took_ms = int(time() * 1000) - started_ms
+
+        transcript = (text or "").strip()
+        try:
+            has_alnum = any(ch.isalnum() for ch in transcript) if transcript else False
+        except Exception:
+            has_alnum = True
+        if transcript and not has_alnum:
+            transcript = ""
+
+        logging.info(
+            "📝 STT RESULT - %s segmented utterance call_id=%s mode=%s ms=%.0f took=%dms text=%r",
+            backend_name,
+            session.call_id,
+            request_mode or "unknown",
+            buf_ms,
+            took_ms,
+            transcript[:120],
+        )
+
+        if request_mode != "stt" and not transcript:
+            return []
+
+        return [
+            {
+                "type": "stt_result",
+                "is_final": True,
+                "text": transcript,
+                "transcript": transcript,
+            }
+        ]
 
     async def _process_stt_stream_kroko(
         self,
@@ -2758,6 +3418,7 @@ class LocalAIServer:
             "mode": source_mode,
             "is_final": is_final,
             "is_partial": is_partial,
+            "stt_backend": self.stt_backend,
         }
         if confidence is not None:
             payload["confidence"] = confidence
@@ -2768,27 +3429,607 @@ class LocalAIServer:
     def _strip_tool_calls_for_tts(self, text: str) -> str:
         """
         Strip tool call markup from text before TTS to avoid speaking tags.
-        Returns the clean spoken text without <tool_call>...</tool_call> blocks.
+        Returns the clean spoken text without tool-call wrappers.
+
+        Notes:
+        - Local LLMs sometimes emit named-tag tool wrappers like <hangup_call>...</hangup_call>
+          even when instructed to use <tool_call>...</tool_call>. We strip both forms.
+        - We also strip leaked chat/template tokens like <|system|>, <|user|>, etc.
         """
         import re
         if not text:
             return ""
-        
-        # Remove <tool_call>...</tool_call> blocks (including newlines inside)
-        clean = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        
-        # Also handle potential JSON tool calls without tags
+
+        tool_names = [
+            "hangup_call",
+            "transfer",
+            "blind_transfer",
+            "attended_transfer",
+            "cancel_transfer",
+            "leave_voicemail",
+            "send_email_summary",
+            "request_transcript",
+        ]
+
+        clean = text
+
+        # Strip <tool_call>...</tool_call> blocks (including newlines inside).
+        clean = re.sub(r"<tool_call\b[^>]*>.*?</tool_call>", "", clean, flags=re.DOTALL | re.IGNORECASE)
+
+        # Strip named-tag wrappers like <hangup_call>...</hangup_call>.
+        for name in tool_names:
+            clean = re.sub(
+                rf"<{re.escape(name)}\b[^>]*>.*?</{re.escape(name)}>",
+                "",
+                clean,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+
+        # Remove any leftover orphan tags for known tool wrappers.
+        clean = re.sub(r"</?\s*tool_call\b[^>]*>", "", clean, flags=re.IGNORECASE)
+        for name in tool_names:
+            clean = re.sub(rf"</?\s*{re.escape(name)}\b[^>]*>", "", clean, flags=re.IGNORECASE)
+
+        # Strip leaked chat/template tokens that should never be spoken.
+        clean = re.sub(r"<\|\s*(?:system|assistant|user|enduser|end)\s*\|>", "", clean, flags=re.IGNORECASE)
+        # Strip partial/leaked control token fragments (e.g., "<|system|" without closing).
+        clean = re.sub(r"<\|[^>\n\r]*$", "", clean)
+        clean = re.sub(r"<\|[^>\n\r]*\|?>?", "", clean)
+
+        # Also handle potential JSON tool calls without tags (best-effort).
         # e.g., {"name": "hangup_call", ...}
-        clean = re.sub(r'\{["\']name["\']\s*:\s*["\'](?:hangup_call|transfer|request_transcript)["\'].*?\}', '', clean, flags=re.DOTALL)
-        
-        # Clean up extra whitespace
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        
-        if clean != text.strip():
+        names_pattern = "|".join(re.escape(n) for n in tool_names)
+        clean = re.sub(
+            rf"\{{[^{{}}]*[\"']name[\"']\s*:\s*[\"'](?:{names_pattern})[\"'][^{{}}]*\}}",
+            "",
+            clean,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\(?\s*tool\s*call(?:s)?(?:\s*executed)?\s*\)?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\b(?:hangup|hang up)\s+call\s+(?:successful|succeeded|executed|complete(?:d)?|requested)\b[.!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(
+            r"\btool\s*call(?:s)?\s*(?:successful|succeeded|executed|complete(?:d)?)\b[.!]?",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if re.search(r"(?:hangup|hang up)\s+call|tool\s*call", clean, flags=re.IGNORECASE):
+            clean = re.sub(
+                r"\bcall\s+duration\s*[:\-]?\s*[^.?!]{0,96}[.?!]?",
+                "",
+                clean,
+                flags=re.IGNORECASE,
+            )
+
+        # Strip markdown-style tool markers (e.g. *hangup_call* or *hangup*).
+        for name in tool_names:
+            clean = re.sub(
+                rf"[\*\_`~]+\s*{re.escape(name)}\s*[\*\_`~]+",
+                "",
+                clean,
+                flags=re.IGNORECASE,
+            )
+        clean = re.sub(
+            r"[\*\_`~]+\s*(?:hangup|hangup_call|transfer|blind_transfer|attended_transfer|request_transfer)\s*[\*\_`~]+",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        )
+
+        # Remove stray standalone braces that can be left after partial stripping.
+        clean = re.sub(r"(?:^|\s)[}\]]+(?=\s|$)", " ", clean)
+
+        # Normalize whitespace.
+        clean = re.sub(r"\s+", " ", clean).strip()
+
+        if clean != (text or "").strip():
             logging.info("🔇 TTS - Stripped tool call markup: original=%d chars, clean=%d chars", 
                         len(text), len(clean))
         
         return clean
+
+    def _text_has_end_call_intent(self, text: str) -> bool:
+        import re
+        t = _normalize_text(text or "")
+        if not t:
+            return False
+        for marker in _END_CALL_MARKERS:
+            m = _normalize_text(marker)
+            if not m:
+                continue
+            if " " in m:
+                if m in t:
+                    return True
+                continue
+            if re.search(rf"(?:^|\b){re.escape(m)}(?:\b|$)", t):
+                return True
+        return False
+
+    def _text_has_hangup_tool_call(self, text: str) -> bool:
+        import re
+        s = text or ""
+        if not s:
+            return False
+        if re.search(r"<\s*hangup_call\b", s, flags=re.IGNORECASE):
+            return True
+        if re.search(r"<\s*tool_call\b", s, flags=re.IGNORECASE) and re.search(
+            r"[\"']name[\"']\s*:\s*[\"']hangup_call[\"']",
+            s,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        if re.search(r"[\"']name[\"']\s*:\s*[\"']hangup_call[\"']", s, flags=re.IGNORECASE):
+            return True
+        return False
+
+    @staticmethod
+    def _normalize_tool_policy(raw_policy: Any) -> str:
+        value = str(raw_policy or "auto").strip().lower()
+        if value in {"strict", "compatible", "off"}:
+            return value
+        return "auto"
+
+    @staticmethod
+    def _extract_allowed_tool_names(payload: Dict[str, Any]) -> List[str]:
+        names: List[str] = []
+        raw_names = payload.get("allowed_tools")
+        if isinstance(raw_names, list):
+            for item in raw_names:
+                name = str(item or "").strip()
+                if name:
+                    names.append(name)
+        if not names:
+            raw_tools = payload.get("tools")
+            if isinstance(raw_tools, list):
+                for item in raw_tools:
+                    if isinstance(item, dict):
+                        name = str(item.get("name") or "").strip()
+                        if name:
+                            names.append(name)
+        deduped: List[str] = []
+        seen = set()
+        for name in names:
+            lowered = name.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped.append(name)
+        return deduped
+
+    @staticmethod
+    def _normalize_tool_calls(
+        calls: List[Dict[str, Any]], allowed_tools: List[str]
+    ) -> List[Dict[str, Any]]:
+        if not calls:
+            return []
+        allowed = {str(name).strip() for name in allowed_tools if str(name).strip()}
+        normalized: List[Dict[str, Any]] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name") or "").strip()
+            if not name:
+                continue
+            if allowed and name not in allowed:
+                continue
+            params = call.get("parameters")
+            if params is None:
+                params = call.get("arguments")
+            if not isinstance(params, dict):
+                params = {}
+            normalized.append({"name": name, "parameters": params})
+        return normalized
+
+    @staticmethod
+    def _looks_like_tool_output(text: str, allowed_tools: List[str]) -> bool:
+        import re
+
+        sample = (text or "").strip().lower()
+        if not sample:
+            return False
+        if "<tool_call" in sample:
+            return True
+        if "\"name\"" in sample and "arguments" in sample:
+            return True
+        for tool in allowed_tools:
+            marker = str(tool or "").strip().lower()
+            if not marker:
+                continue
+            if f"<{marker}" in sample or f"*{marker}*" in sample or marker in sample:
+                return True
+            if re.search(rf"[\"']name[\"']\s*:\s*[\"']{re.escape(marker)}[\"']", sample):
+                return True
+        return False
+
+    def _extract_tool_calls_from_text(
+        self,
+        text: str,
+        allowed_tools: List[str],
+    ) -> Tuple[str, List[Dict[str, Any]], int]:
+        import re
+
+        raw = text or ""
+        parse_failures = 0
+        calls: List[Dict[str, Any]] = []
+
+        def _parse_json_object(candidate: str) -> Optional[Dict[str, Any]]:
+            nonlocal parse_failures
+            candidate = (candidate or "").strip()
+            if not candidate:
+                return None
+            try:
+                data = json.loads(candidate)
+            except Exception:
+                parse_failures += 1
+                return None
+            if not isinstance(data, dict):
+                return None
+            name = str(data.get("name") or "").strip()
+            args = data.get("arguments")
+            if args is None:
+                args = data.get("parameters")
+            if not isinstance(args, dict):
+                args = {}
+            if not name:
+                return None
+            return {"name": name, "parameters": args}
+
+        for match in re.finditer(r"<tool_call\b[^>]*>(.*?)</tool_call>", raw, flags=re.IGNORECASE | re.DOTALL):
+            parsed = _parse_json_object(match.group(1))
+            if parsed:
+                calls.append(parsed)
+
+        if not calls:
+            for tool in allowed_tools:
+                escaped = re.escape(tool)
+                pattern = rf"<{escaped}\b[^>]*>(.*?)</{escaped}>"
+                for match in re.finditer(pattern, raw, flags=re.IGNORECASE | re.DOTALL):
+                    parsed = _parse_json_object(match.group(1))
+                    if parsed:
+                        if parsed.get("name") != tool:
+                            parsed["name"] = tool
+                        calls.append(parsed)
+
+        if not calls:
+            for tool in allowed_tools:
+                escaped = re.escape(tool)
+                patterns = [
+                    rf"\*+\s*{escaped}\s*\*+\s*(\{{.*?\}})",
+                    rf"(?:^|\s){escaped}\s*(\{{.*?\}})",
+                ]
+                for pattern in patterns:
+                    for match in re.finditer(pattern, raw, flags=re.IGNORECASE | re.DOTALL):
+                        parsed = _parse_json_object(match.group(1))
+                        if parsed:
+                            if parsed.get("name") != tool:
+                                parsed["name"] = tool
+                            calls.append(parsed)
+
+        if not calls and raw.strip().startswith("{") and raw.strip().endswith("}"):
+            parsed = _parse_json_object(raw.strip())
+            if parsed:
+                calls.append(parsed)
+
+        normalized_calls = self._normalize_tool_calls(calls, allowed_tools)
+        clean_text = self._strip_tool_calls_for_tts(raw)
+        return clean_text, normalized_calls, parse_failures
+
+    async def _attempt_tool_call_repair(
+        self,
+        candidate_text: str,
+        allowed_tools: List[str],
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        if not self.llm_model or not allowed_tools:
+            return [], 0
+
+        tool_list = ", ".join(sorted(set(allowed_tools)))
+        preview = (candidate_text or "").strip()
+        if len(preview) > 1200:
+            preview = f"{preview[:700]}\n...\n{preview[-400:]}"
+
+        repair_prompt = (
+            "You are a strict tool-call normalizer.\n"
+            f"Allowed tools: {tool_list}\n"
+            "Return EXACTLY one output:\n"
+            "1) <tool_call>{\"name\":\"tool_name\",\"arguments\":{}}</tool_call>\n"
+            "2) NONE\n"
+            "No prose. No markdown. No extra text.\n\n"
+            "Candidate assistant output:\n"
+            f"{preview}"
+        )
+
+        async with self._llm_lock:
+            try:
+                output = await asyncio.to_thread(
+                    self.llm_model,
+                    repair_prompt,
+                    max_tokens=min(96, max(32, int(getattr(self, "llm_max_tokens", 64) or 64))),
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                choices = output.get("choices", []) if isinstance(output, dict) else []
+                if not choices:
+                    return [], 0
+                repaired_text = str(choices[0].get("text", "") or "").strip()
+            except Exception:
+                logging.debug("Tool-call repair inference failed", exc_info=True)
+                return [], 0
+
+        if repaired_text.upper() == "NONE":
+            return [], 0
+
+        _, repaired_calls, parse_failures = self._extract_tool_calls_from_text(repaired_text, allowed_tools)
+        return repaired_calls, parse_failures
+
+    @staticmethod
+    def _build_tool_decision_prompt(
+        *,
+        latest_user_text: str,
+        assistant_text: str,
+        allowed_tools: List[str],
+        tool_schemas: List[Dict[str, Any]],
+    ) -> str:
+        normalized_tools: List[Dict[str, Any]] = []
+        for schema in tool_schemas or []:
+            if not isinstance(schema, dict):
+                continue
+            name = str(schema.get("name") or "").strip()
+            if not name:
+                continue
+            if allowed_tools and name not in allowed_tools:
+                continue
+            normalized_tools.append(
+                {
+                    "name": name,
+                    "description": str(schema.get("description") or "").strip(),
+                    "parameters": schema.get("parameters") if isinstance(schema.get("parameters"), dict) else {},
+                }
+            )
+        if not normalized_tools:
+            normalized_tools = [{"name": name, "description": "", "parameters": {}} for name in allowed_tools]
+
+        tools_blob = json.dumps(normalized_tools, ensure_ascii=False)
+        return (
+            "You are a deterministic tool router for a phone-call AI assistant.\n"
+            "Decide whether a tool call must be emitted now.\n\n"
+            "OUTPUT FORMAT (strict):\n"
+            "- Return EXACTLY one of:\n"
+            "  1) <tool_call>{\"name\":\"tool_name\",\"arguments\":{...}}</tool_call>\n"
+            "  2) NONE\n"
+            "- No prose, no markdown, no extra text.\n\n"
+            "RULES:\n"
+            "- Only use tool names from the allowed list.\n"
+            "- If latest user utterance indicates call end (goodbye/that's all/thank you/end call), use hangup_call if available.\n"
+            "- If no tool is needed now, return NONE.\n\n"
+            f"Allowed tools JSON: {tools_blob}\n"
+            f"Latest user utterance: {latest_user_text}\n"
+            f"Assistant draft response: {assistant_text}\n"
+        )
+
+    async def _attempt_structured_tool_decision(
+        self,
+        *,
+        latest_user_text: str,
+        assistant_text: str,
+        allowed_tools: List[str],
+        tool_schemas: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        if not self.llm_model or not allowed_tools:
+            return [], 0
+        prompt = self._build_tool_decision_prompt(
+            latest_user_text=latest_user_text or "",
+            assistant_text=assistant_text or "",
+            allowed_tools=allowed_tools,
+            tool_schemas=tool_schemas,
+        )
+        async with self._llm_lock:
+            try:
+                output = await asyncio.to_thread(
+                    self.llm_model,
+                    prompt,
+                    max_tokens=min(128, max(48, int(getattr(self, "llm_max_tokens", 64) or 64))),
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=0.0,
+                    top_p=1.0,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+                choices = output.get("choices", []) if isinstance(output, dict) else []
+                if not choices:
+                    return [], 0
+                decision_text = str(choices[0].get("text", "") or "").strip()
+            except Exception:
+                logging.debug("Structured tool decision inference failed", exc_info=True)
+                return [], 0
+        if decision_text.upper() == "NONE":
+            return [], 0
+        _, calls, parse_failures = self._extract_tool_calls_from_text(decision_text, allowed_tools)
+        return calls, parse_failures
+
+    @staticmethod
+    def _select_farewell_message(clean_text: str) -> str:
+        import re
+        text = str(clean_text or "").strip()
+        if not text:
+            return "Thank you for calling. Goodbye."
+        text = re.sub(r"<\|[^>]*\|>", "", text).strip()
+        text = re.sub(
+            r"\b(?:hangup|hang up)\s+call\s+(?:successful|succeeded|executed|complete(?:d)?|requested)\b[.!]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\btool\s*call(?:s)?\s*(?:successful|succeeded|executed|complete(?:d)?)\b[.!]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bcall\s+duration\s*[:\-]?\s*[^.?!]{0,96}[.?!]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return "Thank you for calling. Goodbye."
+        sentence_match = re.match(r"(.+?[.!?])(?:\s|$)", text)
+        sentence = sentence_match.group(1).strip() if sentence_match else text[:140].strip()
+        if len(sentence) > 160:
+            sentence = sentence[:157].rstrip() + "..."
+        return sentence or "Thank you for calling. Goodbye."
+
+    async def _handle_llm_tool_request(
+        self,
+        websocket,
+        session: SessionContext,
+        data: Dict[str, Any],
+    ) -> None:
+        request_id = str(data.get("request_id") or "").strip()
+        call_id = data.get("call_id")
+        if call_id:
+            session.call_id = call_id
+        text = str(data.get("text") or "")
+        if not text.strip():
+            await self._send_json(
+                websocket,
+                {
+                    "type": "llm_tool_response",
+                    "call_id": session.call_id,
+                    "request_id": request_id,
+                    "text": "",
+                    "tool_calls": [],
+                    "finish_reason": "stop",
+                    "tool_path": "none",
+                    "tool_parse_failures": 0,
+                    "repair_attempts": 0,
+                    "protocol_version": 2,
+                },
+            )
+            return
+
+        allowed_tools = self._extract_allowed_tool_names(data)
+        tool_schemas = data.get("tools") if isinstance(data.get("tools"), list) else []
+        policy = self._normalize_tool_policy(data.get("tool_policy"))
+        if policy == "auto":
+            capability_level = str((self._llm_tool_capability_meta or {}).get("level") or "").strip().lower()
+            if capability_level == "strict":
+                policy = "strict"
+            elif capability_level == "none":
+                policy = "off"
+            else:
+                policy = "compatible"
+        tool_choice = str(data.get("tool_choice") or "auto").strip().lower()
+        latest_user_text = str(data.get("latest_user_text") or "").strip()
+
+        clean_text, tool_calls, parse_failures = self._extract_tool_calls_from_text(text, allowed_tools)
+        tool_path = "parser" if tool_calls else "none"
+        repair_attempts = 0
+        structured_attempts = 0
+
+        # Fast path: hangup_call is extremely common and should never wait on an additional
+        # structured tool-decision LLM pass. If the user clearly expressed end-of-call intent,
+        # immediately emit hangup_call (with a clean farewell) and skip structured/repair work.
+        try:
+            allowed_set = {str(name).strip() for name in (allowed_tools or []) if str(name).strip()}
+        except Exception:
+            allowed_set = set()
+        should_apply_hangup_heuristic = (
+            tool_choice != "none"
+            and not tool_calls
+            and "hangup_call" in allowed_set
+            and self._text_has_end_call_intent(latest_user_text)
+        )
+        if should_apply_hangup_heuristic:
+            tool_calls = [
+                {
+                    "name": "hangup_call",
+                    "parameters": {"farewell_message": self._select_farewell_message(clean_text)},
+                }
+            ]
+            tool_path = "heuristic"
+
+        should_try_structured = (
+            bool(getattr(self, "tool_gateway_enabled", True))
+            and policy in {"strict", "compatible"}
+            and tool_choice != "none"
+            and not tool_calls
+            and bool(allowed_tools)
+        )
+        if should_try_structured:
+            structured_attempts = 1
+            structured_calls, structured_failures = await self._attempt_structured_tool_decision(
+                latest_user_text=latest_user_text,
+                assistant_text=text,
+                allowed_tools=allowed_tools,
+                tool_schemas=tool_schemas if isinstance(tool_schemas, list) else [],
+            )
+            parse_failures += structured_failures
+            if structured_calls:
+                tool_calls = structured_calls
+                tool_path = "structured"
+
+        should_try_repair = (
+            bool(getattr(self, "tool_gateway_enabled", True))
+            and policy in {"strict", "compatible"}
+            and tool_choice != "none"
+            and not tool_calls
+            and bool(allowed_tools)
+            and self._looks_like_tool_output(text, allowed_tools)
+        )
+        if should_try_repair:
+            repair_attempts = 1
+            repaired_calls, repair_failures = await self._attempt_tool_call_repair(text, allowed_tools)
+            parse_failures += repair_failures
+            if repaired_calls:
+                tool_calls = repaired_calls
+                tool_path = "repair"
+
+        if tool_choice == "none":
+            tool_calls = []
+            tool_path = "none"
+
+        finish_reason = "tool_calls" if tool_calls else "stop"
+        payload = {
+            "type": "llm_tool_response",
+            "call_id": session.call_id,
+            "text": clean_text,
+            "tool_calls": tool_calls,
+            "finish_reason": finish_reason,
+            "tool_path": tool_path if finish_reason == "tool_calls" else "none",
+            "tool_parse_failures": parse_failures,
+            "repair_attempts": repair_attempts,
+            "structured_attempts": structured_attempts,
+            "protocol_version": 2,
+        }
+        if request_id:
+            payload["request_id"] = request_id
+
+        logging.info(
+            "🧩 LLM TOOL GATEWAY - call_id=%s policy=%s tool_path=%s tools=%s parse_failures=%s repair_attempts=%s structured_attempts=%s",
+            session.call_id,
+            policy,
+            payload["tool_path"],
+            [tc.get("name") for tc in tool_calls],
+            parse_failures,
+            repair_attempts,
+            structured_attempts,
+        )
+        await self._send_json(websocket, payload)
 
     async def _emit_llm_response(
         self,
@@ -2826,6 +4067,11 @@ class LocalAIServer:
         *,
         source_mode: str,
     ) -> None:
+        # Whisper echo-guard: when Local AI Server is emitting TTS audio, it can be
+        # re-captured via telephony mixing/echo and immediately re-transcribed by
+        # Whisper-family STT, causing talk-loops. We proactively suppress STT for
+        # (estimated playback duration + small grace) whenever we emit agent audio.
+        self._arm_whisper_stt_suppression(session, audio_bytes, source=source_mode)
         if request_id:
             # Milestone7: emit metadata event for selective TTS while keeping binary transport.
             metadata = {
@@ -2842,6 +4088,43 @@ class LocalAIServer:
         if audio_bytes:
             await self._send_bytes(websocket, audio_bytes)
 
+    def _arm_whisper_stt_suppression(self, session: SessionContext, audio_bytes: Optional[bytes], *, source: str) -> None:
+        if self.stt_backend not in {"faster_whisper", "whisper_cpp"}:
+            return
+        if not audio_bytes:
+            return
+
+        duration_s = float(len(audio_bytes)) / float(max(1, ULAW_SAMPLE_RATE))
+        grace_s = 0.25
+        until = monotonic() + duration_s + grace_s
+        if until <= session.stt_suppress_until:
+            return
+
+        session.stt_suppress_until = until
+        self._cancel_idle_timer(session)
+        self._reset_stt_session(session, "")
+        logging.info(
+            "🔇 WHISPER STT SUPPRESS - Holding STT while TTS plays call_id=%s backend=%s source=%s seconds=%.2f",
+            session.call_id,
+            self.stt_backend,
+            source,
+            duration_s + grace_s,
+        )
+
+    def _clear_whisper_stt_suppression(self, session: SessionContext, *, reason: str) -> None:
+        if self.stt_backend not in {"faster_whisper", "whisper_cpp"}:
+            return
+        current_until = float(getattr(session, "stt_suppress_until", 0.0) or 0.0)
+        if current_until <= monotonic():
+            return
+        session.stt_suppress_until = 0.0
+        logging.info(
+            "🔊 WHISPER STT SUPPRESSION CLEARED - call_id=%s backend=%s reason=%s",
+            session.call_id,
+            self.stt_backend,
+            reason,
+        )
+
     async def _handle_final_transcript(
         self,
         websocket,
@@ -2854,6 +4137,50 @@ class LocalAIServer:
         idle_promoted: bool = False,
     ) -> None:
         clean_text = (text or "").strip()
+        # DEBUG: trace non-linguistic check
+        _dbg_has_alnum = any(ch.isalnum() for ch in clean_text) if clean_text else False
+        if clean_text and not _dbg_has_alnum:
+            logging.warning(
+                "📝 NON-LINGUISTIC TRACE - call_id=%s mode=%s text=%r len=%d idle=%s",
+                session.call_id, mode, clean_text[:20], len(clean_text), idle_promoted,
+            )
+        # Guardrail: some STT backends (notably telephony-optimized streaming models) may emit
+        # punctuation-only "finals" like "?" or "." during silence/noise. Treat these as empty
+        # to avoid triggering downstream LLM/TTS loops.
+        try:
+            has_alnum = any(ch.isalnum() for ch in clean_text)
+        except Exception:
+            has_alnum = True
+        if clean_text and not has_alnum:
+            reason = "idle-timeout" if idle_promoted else "recognizer-final"
+            if mode == "stt":
+                # For STT mode, emit an empty final so the engine adapter can complete cleanly.
+                logging.info(
+                    "📝 STT FINAL - Emitting empty transcript (non-linguistic) call_id=%s mode=%s reason=%s",
+                    session.call_id,
+                    mode,
+                    reason,
+                )
+                if await self._emit_stt_result(
+                    websocket,
+                    "",
+                    session,
+                    request_id,
+                    source_mode=mode,
+                    is_final=True,
+                    is_partial=False,
+                    confidence=confidence,
+                ):
+                    self._reset_stt_session(session, "")
+                return
+            logging.info(
+                "📝 STT FINAL SUPPRESSED - Non-linguistic transcript call_id=%s mode=%s reason=%s text=%s",
+                session.call_id,
+                mode,
+                reason,
+                clean_text[:16],
+            )
+            return
         normalized_text = _normalize_text(clean_text)
         last_final_text = session.last_final_text
         last_final_norm = session.last_final_norm
@@ -2938,8 +4265,13 @@ class LocalAIServer:
             return
 
         # LLM path for llm/full modes: instrument, guard with timeout, and fallback on failure
-        if normalized_text and session.llm_user_turns:
-            last_turn_norm = _normalize_text(session.llm_user_turns[-1])
+        if normalized_text:
+            last_user_text = ""
+            for message in reversed(session.llm_messages or []):
+                if (message.get("role") or "").strip().lower() == "user":
+                    last_user_text = (message.get("content") or "").strip()
+                    break
+            last_turn_norm = _normalize_text(last_user_text) if last_user_text else ""
             if normalized_text == last_turn_norm:
                 logging.info(
                     "🧠 LLM SKIPPED - Duplicate final transcript call_id=%s mode=%s text=%s",
@@ -2949,17 +4281,19 @@ class LocalAIServer:
                 )
                 return
 
-        prompt_text, prompt_tokens, truncated, raw_tokens = self._prepare_llm_prompt(
+        prompt_text, prompt_tokens, truncated, raw_tokens, chat_messages = self._prepare_llm_prompt(
             session, clean_text
         )
+        use_chat_path = bool(self.llm_chat_format)
         logging.info(
-            "🧠 LLM PROMPT - call_id=%s tokens=%s raw_tokens=%s max_ctx=%s turns=%s truncated=%s preview=%s",
+            "🧠 LLM PROMPT - call_id=%s tokens=%s raw_tokens=%s max_ctx=%s turns=%s truncated=%s chat_format=%s preview=%s",
             session.call_id,
             prompt_tokens,
             raw_tokens,
             self.llm_context,
             len(session.llm_user_turns),
             truncated,
+            self.llm_chat_format or "(legacy-phi)",
             prompt_text[:120],
         )
 
@@ -2971,9 +4305,14 @@ class LocalAIServer:
                 mode,
                 prompt_text[:80],
             )
-            llm_response = await asyncio.wait_for(
-                asyncio.shield(self.process_llm(prompt_text)), timeout=infer_timeout
-            )
+            if use_chat_path:
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm_chat(chat_messages)), timeout=infer_timeout
+                )
+            else:
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm(prompt_text)), timeout=infer_timeout
+                )
         except asyncio.TimeoutError:
             logging.warning(
                 "🧠 LLM TIMEOUT - Using fallback call_id=%s mode=%s timeout=%.1fs",
@@ -2991,6 +4330,67 @@ class LocalAIServer:
                 exc_info=True,
             )
             llm_response = "I'm here to help you. Could you please repeat that?"
+
+        # Guardrail: some local LLMs occasionally emit a hangup_call tool wrapper even when the user
+        # hasn't indicated they want to end the call (e.g., "how to set up the project").
+        # When this happens, retry once with an explicit "no tools" instruction.
+        if mode == "full" and llm_response and self._text_has_hangup_tool_call(llm_response):
+            if not self._text_has_end_call_intent(clean_text):
+                logging.warning(
+                    "⚠️ LLM emitted hangup_call without end-of-call intent; retrying without tools call_id=%s mode=%s preview=%s",
+                    session.call_id,
+                    mode,
+                    clean_text[:80],
+                )
+                if use_chat_path:
+                    retry_messages = list(chat_messages) + [
+                        {"role": "user", "content": (
+                            "IMPORTANT: Do NOT output any tool calls or tool tags. "
+                            "Do NOT include <tool_call>...</tool_call> or <hangup_call>...</hangup_call>. "
+                            "Respond with plain conversational text only."
+                        )}
+                    ]
+                    try:
+                        llm_retry = await asyncio.wait_for(
+                            asyncio.shield(self.process_llm_chat(retry_messages)), timeout=infer_timeout
+                        )
+                        if llm_retry and isinstance(llm_retry, str):
+                            llm_response = llm_retry
+                    except Exception:
+                        logging.debug(
+                            "LLM retry without tools failed; keeping original response call_id=%s",
+                            session.call_id,
+                            exc_info=True,
+                        )
+                else:
+                    retry_prompt = (
+                        f"{prompt_text}\n\n"
+                        "IMPORTANT: Do NOT output any tool calls or tool tags. "
+                        "Do NOT include <tool_call>...</tool_call> or <hangup_call>...</hangup_call>. "
+                        "Respond with plain conversational text only."
+                    )
+                    try:
+                        llm_retry = await asyncio.wait_for(
+                            asyncio.shield(self.process_llm(retry_prompt)), timeout=infer_timeout
+                        )
+                        if llm_retry and isinstance(llm_retry, str):
+                            llm_response = llm_retry
+                    except Exception:
+                        logging.debug(
+                            "LLM retry without tools failed; keeping original response call_id=%s",
+                            session.call_id,
+                            exc_info=True,
+                        )
+
+        # Record assistant turn for subsequent prompts (avoid tool-call markup in history).
+        assistant_text = self._strip_tool_calls_for_tts(llm_response or "").strip()
+        if assistant_text:
+            session.llm_messages.append({"role": "assistant", "content": assistant_text})
+            session.llm_user_turns = [
+                m.get("content", "")
+                for m in session.llm_messages
+                if (m.get("role") or "").strip().lower() == "user"
+            ]
 
         if not await self._emit_llm_response(
             websocket,
@@ -3128,6 +4528,17 @@ class LocalAIServer:
 
         stt_modes = {"stt", "llm", "full"}
         if mode in stt_modes:
+            if self.stt_backend in {"faster_whisper", "whisper_cpp"} and monotonic() < (session.stt_suppress_until or 0.0):
+                if DEBUG_AUDIO_FLOW:
+                    remaining = max(0.0, float(session.stt_suppress_until - monotonic()))
+                    logging.debug(
+                        "🔇 WHISPER STT SUPPRESSED call_id=%s mode=%s remaining=%.2fs",
+                        session.call_id,
+                        mode,
+                        remaining,
+                    )
+                return
+
             if not self._stt_is_available():
                 logging.error(
                     "STT unavailable - emitting empty final transcript call_id=%s mode=%s stt_backend=%s",
@@ -3143,6 +4554,7 @@ class LocalAIServer:
                     "is_final": True,
                     "is_partial": False,
                     "confidence": None,
+                    "stt_backend": self.stt_backend,
                     "error": "stt_unavailable",
                 }
                 if request_id:
@@ -3223,6 +4635,7 @@ class LocalAIServer:
             session.call_id = call_id
 
         audio_response = await self.process_tts(text)
+        self._arm_whisper_stt_suppression(session, audio_response, source="tts_request")
         
         # Check if this is a direct TTS request (expects tts_response with base64)
         # vs streaming mode which uses binary frames
@@ -3280,15 +4693,26 @@ class LocalAIServer:
         )
 
         infer_timeout = self.config.llm_infer_timeout_sec
+        use_chat_path = bool(self.llm_chat_format)
         try:
             logging.info(
                 "🧠 LLM START - Generating response call_id=%s mode=%s",
                 session.call_id,
                 mode or "llm",
             )
-            llm_response = await asyncio.wait_for(
-                asyncio.shield(self.process_llm(text)), timeout=infer_timeout
-            )
+            if use_chat_path:
+                effective_system = self._get_effective_system_prompt()
+                chat_msgs: List[Dict[str, str]] = []
+                if effective_system:
+                    chat_msgs.append({"role": "system", "content": effective_system})
+                chat_msgs.append({"role": "user", "content": text})
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm_chat(chat_msgs)), timeout=infer_timeout
+                )
+            else:
+                llm_response = await asyncio.wait_for(
+                    asyncio.shield(self.process_llm(text)), timeout=infer_timeout
+                )
         except asyncio.TimeoutError:
             logging.warning(
                 "🧠 LLM TIMEOUT - Using fallback call_id=%s mode=%s timeout=%.1fs",
@@ -3322,9 +4746,19 @@ class LocalAIServer:
             logging.warning("❓ Invalid JSON message: %s", message)
             return
 
-        msg_type = data.get("type")
-        if not msg_type:
+        msg_type_raw = data.get("type")
+        if msg_type_raw is None:
             logging.warning("JSON payload missing 'type': %s", data)
+            return
+        msg_type = (
+            str(msg_type_raw)
+            .replace("\x00", "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
+        if not msg_type:
+            logging.warning("JSON payload has invalid 'type': raw=%r payload=%s", msg_type_raw, data)
             return
 
         # Optional auth gate.
@@ -3390,12 +4824,32 @@ class LocalAIServer:
             await self._handle_audio_payload(websocket, session, data)
             return
 
+        if msg_type == "barge_in":
+            call_id = data.get("call_id")
+            if call_id:
+                session.call_id = call_id
+            self._clear_whisper_stt_suppression(session, reason="engine_barge_in")
+            await self._send_json(
+                websocket,
+                {
+                    "type": "barge_in_ack",
+                    "status": "ok",
+                    "call_id": session.call_id,
+                    "request_id": data.get("request_id"),
+                },
+            )
+            return
+
         if msg_type == "tts_request":
             await self._handle_tts_request(websocket, session, data)
             return
 
         if msg_type == "llm_request":
             await self._handle_llm_request(websocket, session, data)
+            return
+
+        if msg_type == "llm_tool_request":
+            await self._handle_llm_tool_request(websocket, session, data)
             return
 
         if msg_type == "reload_models":
@@ -3458,7 +4912,7 @@ class LocalAIServer:
             await self._send_json(websocket, response)
             return
 
-        logging.warning("❓ Unknown message type: %s", msg_type)
+        logging.warning("❓ Unknown message type: raw=%r normalized=%s", msg_type_raw, msg_type)
 
     async def _handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
         if self.ws_auth_token and not session.authenticated:
@@ -3492,7 +4946,7 @@ async def main():
     """Main server function"""
     server = LocalAIServer()
     try:
-        await server.initialize_models()
+        await server.initialize_models(startup=True)
 
         # SECURITY: Default to localhost. Set LOCAL_WS_HOST=0.0.0.0 for remote access.
         # If binding non-localhost, LOCAL_WS_AUTH_TOKEN should be set (enforced in handler).

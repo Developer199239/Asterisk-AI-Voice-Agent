@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/dialplan"
+	"github.com/hkjarral/ava-ai-voice-agent-for-asterisk/cli/internal/dialplan"
 	"github.com/spf13/cobra"
 )
 

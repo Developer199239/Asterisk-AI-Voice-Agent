@@ -122,7 +122,7 @@ const HelpPage = () => {
     }, [isModalOpen]);
 
     const getGitHubUrl = (file: string) => {
-        return `https://github.com/hkjarral/Asterisk-AI-Voice-Agent/blob/main/docs/${file}`;
+        return `https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/blob/main/docs/${file}`;
     };
 
     return (

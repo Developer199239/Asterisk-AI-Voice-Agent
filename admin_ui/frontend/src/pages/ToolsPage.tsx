@@ -11,6 +11,7 @@ import ToolForm from '../components/config/ToolForm';
 import HTTPToolForm from '../components/config/HTTPToolForm';
 import { useAuth } from '../auth/AuthContext';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
+import { usePendingChanges } from '../hooks/usePendingChanges';
 
 type ToolPhase = 'in_call' | 'pre_call' | 'post_call' | 'catalog';
 
@@ -39,7 +40,7 @@ const ToolsPage = () => {
     const [loading, setLoading] = useState(true);
     const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
-    const [pendingRestart, setPendingRestart] = useState(false);
+    const { pendingRestart, setPendingChanges, clearPendingChanges } = usePendingChanges();
     const [restartingEngine, setRestartingEngine] = useState(false);
     const [activePhase, setActivePhase] = useState<ToolPhase>('in_call');
     const [toolCatalog, setToolCatalog] = useState<ToolDef[]>([]);
@@ -137,7 +138,7 @@ const ToolsPage = () => {
                 headers: { Authorization: `Bearer ${token}` },
                 timeout: 30000  // 30 second timeout
             });
-            setPendingRestart(true);
+            setPendingChanges('restart');
             if (successToast) toast.success(successToast);
         } catch (err: any) {
             console.error('Failed to save config', err);
@@ -179,7 +180,7 @@ const ToolsPage = () => {
                 return;
             }
 
-            setPendingRestart(false);
+            clearPendingChanges();
             toast.success('AI Engine restarted! Changes are now active.');
         } catch (error: any) {
             toast.error('Failed to restart AI Engine', { description: error.response?.data?.detail || error.message });
@@ -197,17 +198,16 @@ const ToolsPage = () => {
         // Built-in tools that ToolForm manages: transfer, hangup_call, leave_voicemail, 
         // send_email_summary, request_transcript
         const builtInToolKeys = ['transfer', 'attended_transfer', 'cancel_transfer', 'hangup_call', 'leave_voicemail', 'send_email_summary', 'request_transcript', 'google_calendar'];
-        
         const existingTools = baseConfig.tools || {};
         const preservedTools: Record<string, any> = {};
-        
+
         Object.entries(existingTools).forEach(([k, v]) => {
             // Preserve if:
             // 1. It's a phase-based HTTP tool (has kind and phase)
             // 2. It's NOT a built-in tool that ToolForm manages (those get updated from toolsOnly)
             const isPhaseHttpTool = v && typeof v === 'object' && (v as any).kind && (v as any).phase;
             const isBuiltInTool = builtInToolKeys.includes(k);
-            
+
             if (isPhaseHttpTool || !isBuiltInTool) {
                 // Only preserve if not being explicitly set in toolsOnly
                 if (!(k in toolsOnly)) {
@@ -265,11 +265,10 @@ const ToolsPage = () => {
                 <button
                     onClick={() => handleRestartAIEngine(false)}
                     disabled={restartingEngine || !pendingRestart}
-                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
-                        pendingRestart
+                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${pendingRestart
                             ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium'
                             : 'bg-yellow-500/20 hover:bg-yellow-500/30'
-                    } disabled:opacity-50`}
+                        } disabled:opacity-50`}
                 >
                     {restartingEngine ? (
                         <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
@@ -301,44 +300,40 @@ const ToolsPage = () => {
                 <div className="flex space-x-1">
                     <button
                         onClick={() => setActivePhase('pre_call')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                            activePhase === 'pre_call'
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'pre_call'
                                 ? 'border-primary text-primary'
                                 : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                        }`}
+                            }`}
                     >
                         <Search className="w-4 h-4" />
                         Pre-Call
                     </button>
                     <button
                         onClick={() => setActivePhase('in_call')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                            activePhase === 'in_call'
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'in_call'
                                 ? 'border-primary text-primary'
                                 : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                        }`}
+                            }`}
                     >
                         <Phone className="w-4 h-4" />
                         In-Call
                     </button>
                     <button
                         onClick={() => setActivePhase('post_call')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                            activePhase === 'post_call'
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'post_call'
                                 ? 'border-primary text-primary'
                                 : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                        }`}
+                            }`}
                     >
                         <Webhook className="w-4 h-4" />
                         Post-Call
                     </button>
                     <button
                         onClick={() => setActivePhase('catalog')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                            activePhase === 'catalog'
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'catalog'
                                 ? 'border-primary text-primary'
                                 : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                        }`}
+                            }`}
                     >
                         <BookOpen className="w-4 h-4" />
                         Catalog
@@ -348,8 +343,8 @@ const ToolsPage = () => {
 
             {/* Pre-Call Phase */}
             {activePhase === 'pre_call' && (
-                <ConfigSection 
-                    title="Pre-Call Tools" 
+                <ConfigSection
+                    title="Pre-Call Tools"
                     description="Tools that run before the AI speaks. Use for CRM lookups, caller enrichment, and context injection."
                 >
                     <ConfigCard>
@@ -377,8 +372,8 @@ const ToolsPage = () => {
                             />
                         </ConfigCard>
                     </ConfigSection>
-                    <ConfigSection 
-                        title="In-Call HTTP Tools" 
+                    <ConfigSection
+                        title="In-Call HTTP Tools"
                         description="HTTP lookup tools the AI can invoke during conversation to fetch data (e.g., check availability, lookup order status)."
                     >
                         <ConfigCard>
@@ -395,8 +390,8 @@ const ToolsPage = () => {
 
             {/* Post-Call Phase */}
             {activePhase === 'post_call' && (
-                <ConfigSection 
-                    title="Post-Call Tools" 
+                <ConfigSection
+                    title="Post-Call Tools"
                     description="Tools that run after the call ends. Use for webhooks, CRM updates, and integrations."
                 >
                     <ConfigCard>

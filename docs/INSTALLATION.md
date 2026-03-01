@@ -1,12 +1,12 @@
-# Asterisk AI Voice Agent - Installation Guide (v6.2.0)
+# Asterisk AI Voice Agent - Installation Guide (v6.3.1)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v6.2.0 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v6.3.1 on your server.
 
 ## Three Setup Paths
 
 Choose the path that best fits your experience level:
 
-## Upgrade to v6.2.0 (Existing Checkout)
+## Upgrade to v6.3.1 (Existing Checkout)
 
 This section is for operators upgrading an existing repo checkout (not a fresh install).
 
@@ -19,11 +19,11 @@ This section is for operators upgrading an existing repo checkout (not a fresh i
 
 ### 1) Pull the new release
 
-To upgrade to the tagged `v6.2.0` release (once the tag is published):
+To upgrade to the tagged `v6.3.1` release (once the tag is published):
 
 ```bash
 git fetch --tags
-git checkout v6.2.0
+git checkout v6.3.1
 ```
 
 If the tag is not published yet, track `main` temporarily:
@@ -117,6 +117,12 @@ Preflight also audits Asterisk configuration (when Asterisk is on the same host)
 - Checks ARI enabled, ARI user, HTTP server, dialplan context, and required modules
 - Writes results to `data/asterisk_status.json` — the Admin UI **System → Asterisk** page reads this manifest to display a configuration checklist with guided fix commands
 
+> **Standalone GPU server?** If this machine only runs `local_ai_server` (no Asterisk, no Admin UI), use the `--local-server` flag to skip Asterisk/media checks:
+> ```bash
+> sudo ./preflight.sh --apply-fixes --local-server
+> ```
+> This only runs GPU detection, `.env` seeding, and port 8765 availability checks. See [LOCAL_ONLY_SETUP.md — Topology 3](LOCAL_ONLY_SETUP.md#topology-3-split-server-remote-gpu) for the full split-server guide.
+
 > Note: Admin UI health checks validate the media directory from within the `admin_ui` container.
 > On some systems Asterisk uses a non-default group ID; newer releases auto-detect this at `admin_ui` startup so the UI doesn't incorrectly warn after reboot.
 
@@ -190,6 +196,11 @@ docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate local_a
 ```bash
 curl -sS http://localhost:15000/health
 agent check
+
+# If using local AI server (GPU or CPU), also verify STT/LLM/TTS:
+agent check --local
+# Or for a remote GPU server:
+# agent check --remote <gpu-ip>
 ```
 
 > ⚠️ **Operator note (production hardening):** `ai_engine` exposes a health/metrics server on port `15000`.
@@ -203,7 +214,7 @@ agent check
 **5-minute visual setup** with the new web-based Admin UI:
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 
 # Run preflight (REQUIRED - creates .env, generates JWT_SECRET)
@@ -248,7 +259,7 @@ See [Admin UI Setup Guide](../admin_ui/UI_Setup_Guide.md) for detailed instructi
 **Command-line wizard** for terminal-based setup:
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 
 ./install.sh
@@ -257,7 +268,7 @@ agent setup
 
 **Best for:** Headless servers, scripted deployments, CLI preference
 
-> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.2.0.
+> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.3.1.
 
 ---
 
@@ -266,7 +277,7 @@ agent setup
 **Traditional installer** with manual configuration:
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 ./install.sh
 ```
@@ -398,7 +409,7 @@ The installation is handled by an interactive script that will guide you through
 First, clone the project repository to a directory on your server.
 
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd Asterisk-AI-Voice-Agent
 ```
 
@@ -426,6 +437,8 @@ You will be asked to choose an AI provider.
 - **[1] OpenAI Realtime**: Out-of-the-box realtime voice path (cloud).
 - **[2] Deepgram Voice Agent**: Cloud STT/TTS with strong latency/quality.
 - **[3] Local Hybrid**: Local STT/TTS + cloud LLM (audio stays local).
+
+> **GPU users:** If you selected Local Hybrid (or plan to run Fully Local), and you have an NVIDIA GPU, build with the GPU compose overlay for dramatically faster inference (~10-30x). See **[LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md)** for full GPU setup including `docker-compose.gpu.yml`, nvidia-container-toolkit, and split-server topologies.
 
 #### Provider Configuration
 
@@ -469,6 +482,13 @@ docker compose -p asterisk-ai-voice-agent up --build -d
 > ```
 >
 > Subsequent restarts are typically much faster due to OS page cache. If startup is too slow for your hardware, consider using MEDIUM or LIGHT tier models and update the `.env` model paths accordingly.
+>
+> **GPU acceleration:** Use `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build local_ai_server` for CUDA-accelerated LLM inference. Set `LOCAL_LLM_GPU_LAYERS=-1` in `.env`. See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for the full guide.
+>
+> **Runtime mode:** `local_ai_server` auto-selects runtime based on GPU availability:
+> - `GPU_AVAILABLE=true` → `full` mode (STT + LLM + TTS preloaded)
+> - `GPU_AVAILABLE=false` → `minimal` mode (STT + TTS only; LLM loaded on demand)
+> Override with `LOCAL_AI_MODE=full` or `LOCAL_AI_MODE=minimal` in `.env`.
 
 ## 3. Verifying the Installation
 

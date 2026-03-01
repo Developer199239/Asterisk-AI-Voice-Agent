@@ -79,7 +79,7 @@ New to the project? Here are some great starting points:
 - **Fix a doc typo or broken link** — Browse `docs/` and submit a quick PR
 - **Add a unit test** — Look at `tests/` for patterns; coverage is at ~28%
 - **Improve CLI help text** — `cli/` is Go; help strings are in `cmd/` files
-- **Browse `good first issue`** — Check [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues?q=label%3A%22good+first+issue%22)
+- **Browse `good first issue`** — Check [GitHub Issues](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=label%3A%22good+first+issue%22)
 
 ## Where To Make Changes
 

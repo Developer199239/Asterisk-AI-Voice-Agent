@@ -320,7 +320,7 @@ If processing EU personal data:
 
 Subscribe to security notifications:
 - **GitHub Watch**: Enable "Releases only" notifications
-- **Security Advisories**: Check [GitHub Security tab](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/security)
+- **Security Advisories**: Check [GitHub Security tab](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/security)
 - **Dependabot Alerts**: Review weekly PR updates
 
 ---

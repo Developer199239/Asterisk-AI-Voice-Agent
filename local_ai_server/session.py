@@ -24,6 +24,7 @@ class SessionContext:
     last_final_norm: str = ""
     last_final_at: float = 0.0
     llm_user_turns: List[str] = field(default_factory=list)
+    llm_messages: List[Dict[str, str]] = field(default_factory=list)
     audio_buffer: bytes = b""
     # Kroko-specific session state
     kroko_ws: Optional[Any] = None
@@ -32,4 +33,10 @@ class SessionContext:
     sherpa_stream: Optional[Any] = None
     # Optional auth state (enabled if LOCAL_WS_AUTH_TOKEN set)
     authenticated: bool = False
-
+    # Whisper-only echo guard: suppress STT while Local AI Server is emitting TTS audio.
+    stt_suppress_until: float = 0.0
+    # Telephony utterance segmentation state (batch STT backends like Whisper).
+    stt_segment_preroll: bytes = b""
+    stt_segment_buffer: bytes = b""
+    stt_segment_last_voice_mono: float = 0.0
+    stt_segment_in_speech: bool = False

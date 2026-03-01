@@ -21,13 +21,19 @@
 - **[ElevenLabs Agent Setup](Provider-ElevenLabs-Setup.md)** - ElevenLabs Conversational AI with premium voices
 - **[Telnyx AI Inference Setup](Provider-Telnyx-Setup.md)** - OpenAI-compatible LLM via Telnyx
 
+## Local AI & GPU Setup
+
+- **[Fully Local Setup](LOCAL_ONLY_SETUP.md)** - Canonical guide: CPU-only, GPU, and split-server topologies
+- **[Ollama Setup](OLLAMA_SETUP.md)** - Self-hosted LLM via Ollama (no API key)
+- **[Local Profiles](LOCAL_PROFILES.md)** - Build profiles (local-core, local-full, local-gpu)
+- **[Hardware Requirements](HARDWARE_REQUIREMENTS.md)** - Specs, GPU sizing, cloud instance types
+
 ## Operations & Production
 
 - **[Production Deployment](PRODUCTION_DEPLOYMENT.md)** - Security, networking, and best practices
 - **[Monitoring Guide](MONITORING_GUIDE.md)** - Observability and BYO Prometheus
 - **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - `.env` reference (secrets + wiring)
 - **[Supported Platforms](SUPPORTED_PLATFORMS.md)** - Tiered OS support matrix
-- **[Local Profiles](LOCAL_PROFILES.md)** - Recommended local model/runtime profiles
 - **[CLI Tools Reference](CLI_TOOLS_GUIDE.md)** - Agent command-line utilities
 
 ## Developer Documentation
