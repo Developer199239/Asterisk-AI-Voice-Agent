@@ -221,6 +221,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
     const isGroqStt = sttKey.includes('groq');
     const isGroqTts = ttsKey.includes('groq');
     const isOllamaLlm = llmKey.includes('ollama');
+    const isAzureStt = sttKey.includes('azure');
+    const isAzureTts = ttsKey.includes('azure');
 
     const timestampGranularities = Array.isArray(localConfig.options?.stt?.timestamp_granularities)
         ? localConfig.options?.stt?.timestamp_granularities
@@ -518,11 +520,11 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                     </div>
                 )}
 
-                {(isOpenAIStt || isGroqStt) && (
+                {(isOpenAIStt || isGroqStt || isAzureStt) && (
                     <div className="space-y-3 border border-amber-300/40 rounded-lg p-4 bg-amber-500/5">
                         <FormSwitch
                             label="STT Expert Settings"
-                            description="Expose advanced STT adapter timestamp options."
+                            description="Expose advanced STT adapter options."
                             checked={showSttExpert}
                             onChange={(e) => setShowSttExpert(e.target.checked)}
                             className="mb-0 border-0 p-0 bg-transparent"
@@ -533,26 +535,48 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                                 : 'Expert values are visible and read-only until STT expert mode is enabled.'}
                         </p>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <FormInput
-                                label="STT Timestamp Granularities"
-                                value={timestampGranularitiesText}
-                                onChange={(e) =>
-                                    updateRoleOptions('stt', {
-                                        timestamp_granularities: (e.target.value || '')
-                                            .split(',')
-                                            .map((v) => v.trim())
-                                            .filter(Boolean),
-                                    })
-                                }
-                                placeholder="segment, word"
-                                tooltip="Comma-separated; only supported on specific models/endpoints."
-                                disabled={!showSttExpert}
-                            />
+                            {(isOpenAIStt || isGroqStt) && (
+                                <FormInput
+                                    label="STT Timestamp Granularities"
+                                    value={timestampGranularitiesText}
+                                    onChange={(e) =>
+                                        updateRoleOptions('stt', {
+                                            timestamp_granularities: (e.target.value || '')
+                                                .split(',')
+                                                .map((v) => v.trim())
+                                                .filter(Boolean),
+                                        })
+                                    }
+                                    placeholder="segment, word"
+                                    tooltip="Comma-separated; only supported on specific models/endpoints."
+                                    disabled={!showSttExpert}
+                                />
+                            )}
+                            {isAzureStt && (
+                                <>
+                                    <FormInput
+                                        label="Azure STT Variant Override"
+                                        value={localConfig.options?.stt?.variant || ''}
+                                        onChange={(e) => updateRoleOptions('stt', { variant: e.target.value || undefined })}
+                                        placeholder="realtime (or fast)"
+                                        tooltip="Override the variant set on the provider: 'realtime' or 'fast'."
+                                        disabled={!showSttExpert}
+                                    />
+                                    <FormInput
+                                        label="Azure STT Language Override"
+                                        value={localConfig.options?.stt?.language || ''}
+                                        onChange={(e) => updateRoleOptions('stt', { language: e.target.value || undefined })}
+                                        placeholder="en-US"
+                                        tooltip="Override the BCP-47 locale for this pipeline slot."
+                                        disabled={!showSttExpert}
+                                    />
+                                </>
+                            )}
                         </div>
                     </div>
                 )}
 
-                {(isOpenAITts || isGroqTts) && (
+                {(isOpenAITts || isGroqTts || isAzureTts) && (
                     <div className="space-y-3 border border-amber-300/40 rounded-lg p-4 bg-amber-500/5">
                         <FormSwitch
                             label="TTS Expert Settings"
@@ -586,6 +610,26 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                                     tooltip="Max characters per TTS chunk before adapter splits text."
                                     disabled={!showTtsExpert}
                                 />
+                            )}
+                            {isAzureTts && (
+                                <>
+                                    <FormInput
+                                        label="Azure TTS Voice Name Override"
+                                        value={localConfig.options?.tts?.voice_name || ''}
+                                        onChange={(e) => updateRoleOptions('tts', { voice_name: e.target.value || undefined })}
+                                        placeholder="en-US-JennyNeural"
+                                        tooltip="Override the neural voice name for this pipeline slot."
+                                        disabled={!showTtsExpert}
+                                    />
+                                    <FormInput
+                                        label="Azure TTS Output Format Override"
+                                        value={localConfig.options?.tts?.output_format || ''}
+                                        onChange={(e) => updateRoleOptions('tts', { output_format: e.target.value || undefined })}
+                                        placeholder="riff-8khz-16bit-mono-pcm"
+                                        tooltip="Override the Azure output format for this pipeline slot."
+                                        disabled={!showTtsExpert}
+                                    />
+                                </>
                             )}
                         </div>
                     </div>

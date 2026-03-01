@@ -359,6 +359,61 @@ class ElevenLabsProviderConfig(BaseModel):
     farewell_hangup_delay_sec: Optional[float] = None
 
 
+class AzureSTTProviderConfig(BaseModel):
+    """Microsoft Azure Speech Service - Speech-to-Text provider configuration.
+
+    Supports two variants:
+    - 'fast': Azure Fast Transcription API (multipart POST, lower latency)
+    - 'realtime': Azure Real-Time STT REST API (binary WAV POST)
+
+    API docs:
+      Fast:     https://learn.microsoft.com/azure/ai-services/speech-service/fast-transcription-create
+      Realtime: https://learn.microsoft.com/azure/ai-services/speech-service/how-to-recognize-speech?pivots=programming-language-rest
+    """
+
+    enabled: bool = Field(default=True)
+    api_key: Optional[str] = None
+    # Azure region, e.g. "eastus", "westeurope". Used to auto-build endpoint URLs.
+    region: str = Field(default="eastus")
+    # Override the fast transcription endpoint URL (defaults to region-derived URL)
+    fast_stt_base_url: Optional[str] = Field(default=None)
+    # Override the real-time STT endpoint URL (defaults to region-derived URL)
+    realtime_stt_base_url: Optional[str] = Field(default=None)
+    # BCP-47 locale, e.g. "en-US", "es-ES"
+    language: str = Field(default="en-US")
+    # Which variant the 'azure_stt' alias resolves to: "fast" | "realtime"
+    variant: str = Field(default="realtime")
+    request_timeout_sec: float = Field(default=15.0)
+
+
+class AzureTTSProviderConfig(BaseModel):
+    """Microsoft Azure Speech Service - Text-to-Speech provider configuration.
+
+    Uses SSML POST to the Azure TTS REST endpoint.
+
+    API docs:
+      https://learn.microsoft.com/azure/ai-services/speech-service/get-started-text-to-speech?pivots=programming-language-rest
+    """
+
+    enabled: bool = Field(default=True)
+    api_key: Optional[str] = None
+    # Azure region, e.g. "eastus", "westeurope"
+    region: str = Field(default="eastus")
+    # Override the TTS endpoint URL (defaults to region-derived URL)
+    tts_base_url: Optional[str] = Field(default=None)
+    # Neural voice name, e.g. "en-US-JennyNeural", "es-ES-AlvaroNeural"
+    voice_name: str = Field(default="en-US-JennyNeural")
+    # Azure output audio format header value (X-Microsoft-OutputFormat).
+    # PCM-based formats (riff-*) are decoded natively; raw-8khz-mulaw is used directly.
+    # See: https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech
+    output_format: str = Field(default="riff-8khz-16bit-mono-pcm")
+    # Downstream encoding the engine expects (ulaw | pcm | slin16)
+    target_encoding: str = Field(default="mulaw")
+    target_sample_rate_hz: int = Field(default=8000)
+    chunk_size_ms: int = Field(default=20)
+    request_timeout_sec: float = Field(default=15.0)
+
+
 class MCPToolConfig(BaseModel):
     """Configuration for a single MCP-backed tool exposed to the LLM."""
 
