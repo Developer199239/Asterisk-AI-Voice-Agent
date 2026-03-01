@@ -194,6 +194,7 @@ exten => s,1,NoOp(AI Agent Call)
         serverStarted: boolean;
         serverLogs: string[];
         serverReady: boolean;
+        serverPhase: 'idle' | 'building' | 'starting' | 'running';
         systemDetected: boolean;
     }>({
         tier: '',
@@ -210,7 +211,8 @@ exten => s,1,NoOp(AI Agent Call)
         downloadCompleted: false,
         serverStarted: false,
         serverLogs: [] as string[],
-        serverReady: false
+        serverReady: false,
+        serverPhase: 'idle'
     });
 
     const [modelsStatus, setModelsStatus] = useState<LocalModelsStatus | null>(null);
@@ -594,7 +596,8 @@ exten => s,1,NoOp(AI Agent Call)
                     setLocalAIStatus((prev) => ({
                         ...prev,
                         serverLogs: logRes.data.logs || [],
-                        serverReady: logRes.data.ready
+                        serverReady: logRes.data.ready,
+                        serverPhase: logRes.data.phase || (logRes.data.ready ? 'running' : 'starting')
                     }));
                 }
                 if (!logRes.data.ready) {
@@ -2534,7 +2537,9 @@ exten => s,1,NoOp(AI Agent Call)
                                                 ) : (
                                                     <span className="text-blue-600 dark:text-blue-400 flex items-center">
                                                         <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
-                                                        Starting up... (loading models)
+                                                        {localAIStatus.serverPhase === 'building' 
+                                                            ? 'Building Docker image (this may take 10-30 minutes)...'
+                                                            : 'Starting up... (loading models)'}
                                                     </span>
                                                 )}
                                             </div>

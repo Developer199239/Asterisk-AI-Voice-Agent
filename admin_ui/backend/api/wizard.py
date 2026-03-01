@@ -2311,11 +2311,66 @@ async def start_local_ai_server():
 
 @router.get("/local/server-logs")
 async def get_local_server_logs():
-    """Get local-ai-server container logs."""
+    """Get local-ai-server container logs.
+    
+    Implements hybrid approach:
+    1. If local_ai_server container exists and has logs -> return those
+    2. If not, check for active aava-update-ephemeral-* build containers -> return build logs
+    3. Fallback to log file if neither available
+    """
     import subprocess
+    import re
+    
+    def _get_updater_build_logs() -> Optional[List[str]]:
+        """Get logs from any active aava-update-ephemeral-* container (build phase)."""
+        try:
+            # Find active updater containers
+            ps_result = subprocess.run(
+                ["docker", "ps", "--filter", "name=aava-update-ephemeral", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            containers = [c.strip() for c in ps_result.stdout.strip().split('\n') if c.strip()]
+            if not containers:
+                return None
+            
+            # Get logs from the most recent updater container
+            container_name = containers[0]
+            log_result = subprocess.run(
+                ["docker", "logs", "--tail", "50", container_name],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            raw_logs = (log_result.stdout or "") + (log_result.stderr or "")
+            if not raw_logs.strip():
+                return None
+            
+            # Parse Docker build output - extract meaningful progress lines
+            lines = raw_logs.strip().split('\n')
+            progress_lines = []
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                # Match Docker build step patterns: "Step X/Y :", "#XX [stage N/M]", etc.
+                if re.match(r'^(Step \d+/\d+|#\d+\s+\[)', line):
+                    # Truncate long lines for UI display
+                    if len(line) > 120:
+                        line = line[:117] + "..."
+                    progress_lines.append(line)
+                elif "Building" in line or "Starting" in line or "Created" in line:
+                    progress_lines.append(line)
+                elif "Successfully" in line or "DONE" in line:
+                    progress_lines.append(line)
+            
+            return progress_lines[-20:] if progress_lines else None
+        except Exception:
+            return None
     
     try:
-        # Get recent logs for display
+        # Primary: Get logs from local_ai_server container
         result = subprocess.run(
             ["docker", "logs", "--tail", "30", "local_ai_server"],
             capture_output=True,
@@ -2326,8 +2381,17 @@ async def get_local_server_logs():
         logs = result.stdout or result.stderr
         lines = logs.strip().split('\n') if logs else []
         
+        # If container exists but has no logs yet, check for build progress
+        if not lines or (len(lines) == 1 and not lines[0].strip()):
+            build_logs = _get_updater_build_logs()
+            if build_logs:
+                return {
+                    "logs": build_logs,
+                    "ready": False,
+                    "phase": "building"
+                }
+        
         # Check if server is ready by looking at ALL logs (not just tail)
-        # The startup message might be pushed out by connection logs
         ready_result = subprocess.run(
             ["docker", "logs", "local_ai_server"],
             capture_output=True,
@@ -2343,20 +2407,28 @@ async def get_local_server_logs():
         
         return {
             "logs": lines[-20:],
-            "ready": ready
+            "ready": ready,
+            "phase": "running" if ready else "starting"
         }
     except subprocess.TimeoutExpired:
         return {"logs": [], "ready": False, "error": "Timeout getting logs"}
     except Exception as e:
-        # Fallback: if container isn't created yet (e.g., still building), show the build/start log if present.
+        # Container doesn't exist - check if we're in build phase
+        build_logs = _get_updater_build_logs()
+        if build_logs:
+            return {
+                "logs": build_logs,
+                "ready": False,
+                "phase": "building"
+            }
+        
+        # Fallback: check log file
         try:
-            import os
-
             log_path = os.path.join(os.getenv("PROJECT_ROOT", "/app/project"), "logs", "local_ai_server_start.log")
             if os.path.exists(log_path):
                 with open(log_path, "r") as f:
                     tail = f.read().splitlines()[-50:]
-                return {"logs": tail[-20:], "ready": False, "error": str(e)}
+                return {"logs": tail[-20:], "ready": False, "phase": "unknown"}
         except Exception:
             pass
         return {"logs": [], "ready": False, "error": str(e)}
