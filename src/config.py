@@ -383,7 +383,13 @@ class AzureSTTProviderConfig(BaseModel):
     language: str = Field(default="en-US")
     # Which variant the 'azure_stt' alias resolves to: "fast" | "realtime"
     variant: str = Field(default="realtime")
+    # API version for Fast Transcription
+    api_version: str = Field(default="2024-11-15")
     request_timeout_sec: float = Field(default=15.0)
+    # VAD end silence timeout for Realtime streaming in milliseconds
+    vad_silence_timeout_ms: int = Field(default=300)
+    # VAD initial silence timeout for Realtime streaming in milliseconds
+    vad_initial_silence_timeout_ms: int = Field(default=5000)
 
 
 class AzureTTSProviderConfig(BaseModel):
@@ -403,15 +409,38 @@ class AzureTTSProviderConfig(BaseModel):
     tts_base_url: Optional[str] = Field(default=None)
     # Neural voice name, e.g. "en-US-JennyNeural", "es-ES-AlvaroNeural"
     voice_name: str = Field(default="en-US-JennyNeural")
+    # Base language for xml:lang on <speak> element.
+    # If None, auto-derived from voice name (e.g. "en-US-JennyNeural" → "en-US").
+    language: Optional[str] = Field(default=None)
+    # Target language for SSML <lang xml:lang="..."> element.
+    # Use this for multilingual voices to specify the spoken language of the text,
+    # e.g. "es-MX" when using a Chinese multilingual voice to speak Spanish.
+    # When set, SSML becomes: <voice><lang xml:lang="lang_tag">text</lang></voice>
+    lang_tag: Optional[str] = Field(default=None)
+    # Override for global downstream_mode setting (how audio is played toward Asterisk).
+    # "auto"   → use the global downstream_mode (default, preserves existing behaviour)
+    # "stream" → force streaming playback via StreamingPlaybackManager, regardless of global mode
+    # "file"   → force file-based playback, regardless of global mode
+    # Useful when you want Azure TTS streaming (chunked HTTP) but file-based Asterisk playback,
+    # or when you want streaming Asterisk playback even if downstream_mode=file globally.
+    downstream_mode_override: str = Field(default="auto")
     # Azure output audio format header value (X-Microsoft-OutputFormat).
     # PCM-based formats (riff-*) are decoded natively; raw-8khz-mulaw is used directly.
     # See: https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech
-    output_format: str = Field(default="riff-8khz-16bit-mono-pcm")
+    output_format: str = Field(default="raw-8khz-16bit-mono-pcm")
     # Downstream encoding the engine expects (ulaw | pcm | slin16)
     target_encoding: str = Field(default="mulaw")
     target_sample_rate_hz: int = Field(default=8000)
     chunk_size_ms: int = Field(default=20)
     request_timeout_sec: float = Field(default=15.0)
+    # Streaming: read response in chunks as they arrive instead of waiting for
+    # the full audio. Reduces time-to-first-audio-chunk significantly.
+    streaming: bool = Field(default=True)
+    # SSML prosody controls (applied via <prosody> tag in generated SSML)
+    # pitch: relative shift e.g. "+10%", "-5%", "high", "low", "default"
+    prosody_pitch: Optional[str] = Field(default=None)
+    # rate: speaking speed e.g. "slow", "medium", "fast", "+20%", "0.8"
+    prosody_rate: Optional[str] = Field(default=None)
 
 
 class MCPToolConfig(BaseModel):

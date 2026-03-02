@@ -200,6 +200,41 @@ const AzureProviderForm: React.FC<AzureProviderFormProps> = ({ config, onChange 
                                     />
                                 </div>
                                 <div className="space-y-2">
+                                    <label className="text-sm font-medium">Fast Transcription API Version (optional)</label>
+                                    <input
+                                        type="text"
+                                        className="w-full p-2 rounded border border-input bg-background font-mono text-sm"
+                                        value={config.api_version || ''}
+                                        onChange={(e) => handleChange('api_version', e.target.value || null)}
+                                        placeholder="2024-11-15"
+                                    />
+                                    <p className="text-xs text-muted-foreground">The API version for the fast transcription endpoint.</p>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Real-Time VAD End Silence Timeout (ms)</label>
+                                    <input
+                                        type="number"
+                                        min="50"
+                                        step="50"
+                                        className="w-full p-2 rounded border border-input bg-background"
+                                        value={config.vad_silence_timeout_ms ?? 300}
+                                        onChange={(e) => handleChange('vad_silence_timeout_ms', parseInt(e.target.value))}
+                                    />
+                                    <p className="text-xs text-muted-foreground">Azure SDK end silence timeout. Default is 300ms since Asterisk handles primary TalkDetect.</p>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Real-Time VAD Initial Silence Timeout (ms)</label>
+                                    <input
+                                        type="number"
+                                        min="1000"
+                                        step="500"
+                                        className="w-full p-2 rounded border border-input bg-background"
+                                        value={config.vad_initial_silence_timeout_ms ?? 5000}
+                                        onChange={(e) => handleChange('vad_initial_silence_timeout_ms', parseInt(e.target.value))}
+                                    />
+                                    <p className="text-xs text-muted-foreground">How long Azure waits for speech to begin before stopping. Default is 5000ms.</p>
+                                </div>
+                                <div className="space-y-2">
                                     <label className="text-sm font-medium">Request Timeout (seconds)</label>
                                     <input
                                         type="number"
@@ -247,12 +282,54 @@ const AzureProviderForm: React.FC<AzureProviderFormProps> = ({ config, onChange 
                             </p>
                         </div>
 
+                        {/* Base language (xml:lang on <speak>) */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Base Language <span className="text-muted-foreground text-xs font-normal">(optional)</span></label>
+                            <input
+                                type="text"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.language || ''}
+                                onChange={(e) => handleChange('language', e.target.value || null)}
+                                placeholder="Auto (derived from voice name, e.g. en-US)"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                BCP-47 locale for the SSML <code>xml:lang</code> attribute on <code>&lt;speak&gt;</code>.
+                                Leave empty to auto-derive from the voice name (e.g. <code>zh-CN-XiaochenMultilingualNeural</code> → <code>zh-CN</code>).
+                            </p>
+                        </div>
+
+                        {/* Multilingual lang tag (<lang xml:lang="...">) */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Multilingual Target Language <span className="text-muted-foreground text-xs font-normal">(optional)</span></label>
+                            <input
+                                type="text"
+                                className="w-full p-2 rounded border border-input bg-background"
+                                value={config.lang_tag || ''}
+                                onChange={(e) => handleChange('lang_tag', e.target.value || null)}
+                                placeholder="e.g. es-MX, en-US, fr-FR"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                For multilingual neural voices. When set, the text is wrapped in{' '}
+                                <code>&lt;lang xml:lang="…"&gt;</code> inside the SSML, telling Azure which language to speak —
+                                even if the voice's native locale is different.
+                                Example: voice <code>zh-CN-XiaochenMultilingualNeural</code> + lang tag <code>es-MX</code>{' '}
+                                will speak Spanish with a multilingual Chinese voice.{' '}
+                                <a
+                                    href="https://learn.microsoft.com/azure/ai-services/speech-service/speech-synthesis-markup-voice#multilingual-voices"
+                                    target="_blank" rel="noopener noreferrer"
+                                    className="text-primary underline"
+                                >
+                                    Learn more
+                                </a>
+                            </p>
+                        </div>
+
                         {/* Output Format */}
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Output Audio Format</label>
                             <select
                                 className="w-full p-2 rounded border border-input bg-background"
-                                value={config.output_format || 'riff-8khz-16bit-mono-pcm'}
+                                value={config.output_format || 'raw-8khz-16bit-mono-pcm'}
                                 onChange={(e) => handleChange('output_format', e.target.value)}
                             >
                                 {AZURE_OUTPUT_FORMATS.map(f => (
@@ -293,6 +370,97 @@ const AzureProviderForm: React.FC<AzureProviderFormProps> = ({ config, onChange 
                                 </select>
                             </div>
                         </div>
+
+                        {/* Streaming */}
+                        <div className="flex items-start gap-3 p-3 border rounded-md">
+                            <input
+                                type="checkbox"
+                                id="azure_tts_streaming"
+                                className="rounded border-input mt-0.5"
+                                checked={config.streaming !== false}
+                                onChange={(e) => handleChange('streaming', e.target.checked)}
+                            />
+                            <div>
+                                <label htmlFor="azure_tts_streaming" className="text-sm font-medium cursor-pointer">
+                                    Streaming (chunked response)
+                                </label>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                    Yield audio chunks as they arrive instead of waiting for the full synthesis.
+                                    Significantly reduces time-to-first-audio.{' '}
+                                    <a
+                                        href="https://learn.microsoft.com/azure/ai-services/speech-service/how-to-lower-speech-synthesis-latency"
+                                        target="_blank" rel="noopener noreferrer"
+                                        className="text-primary underline"
+                                    >
+                                        Learn more
+                                    </a>
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Prosody (SSML) */}
+                        <details className="border border-border rounded-md">
+                            <summary className="p-3 text-sm font-medium cursor-pointer hover:bg-accent">Voice Prosody (pitch &amp; rate)</summary>
+                            <div className="p-3 space-y-3 border-t border-border">
+                                <p className="text-xs text-muted-foreground">
+                                    Controls injected into the SSML <code>&lt;prosody&gt;</code> tag.
+                                    Leave blank to use the voice's default.
+                                    Use <a href="https://learn.microsoft.com/azure/ai-services/speech-service/speech-synthesis-markup-voice#adjust-prosody" target="_blank" rel="noopener noreferrer" className="text-primary underline">Azure SSML prosody syntax</a>.
+                                </p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Pitch</label>
+                                        <select
+                                            className="w-full p-2 rounded border border-input bg-background"
+                                            value={['x-low', 'low', 'medium', 'high', 'x-high', 'default'].includes(config.prosody_pitch || '') ? (config.prosody_pitch || '') : '__custom__'}
+                                            onChange={(e) => {
+                                                if (e.target.value !== '__custom__') handleChange('prosody_pitch', e.target.value || null);
+                                            }}
+                                        >
+                                            <option value="">Default (voice default)</option>
+                                            <option value="x-low">x-low</option>
+                                            <option value="low">low</option>
+                                            <option value="medium">medium</option>
+                                            <option value="high">high</option>
+                                            <option value="x-high">x-high</option>
+                                            <option value="__custom__">Custom value...</option>
+                                        </select>
+                                        <input
+                                            type="text"
+                                            className="w-full p-2 rounded border border-input bg-background font-mono text-sm"
+                                            value={config.prosody_pitch || ''}
+                                            onChange={(e) => handleChange('prosody_pitch', e.target.value || null)}
+                                            placeholder="e.g. +10%, -5%, high"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Speaking Rate</label>
+                                        <select
+                                            className="w-full p-2 rounded border border-input bg-background"
+                                            value={['x-slow', 'slow', 'medium', 'fast', 'x-fast', 'default'].includes(config.prosody_rate || '') ? (config.prosody_rate || '') : '__custom__'}
+                                            onChange={(e) => {
+                                                if (e.target.value !== '__custom__') handleChange('prosody_rate', e.target.value || null);
+                                            }}
+                                        >
+                                            <option value="">Default (voice default)</option>
+                                            <option value="x-slow">x-slow</option>
+                                            <option value="slow">slow</option>
+                                            <option value="medium">medium</option>
+                                            <option value="fast">fast</option>
+                                            <option value="x-fast">x-fast</option>
+                                            <option value="__custom__">Custom value...</option>
+                                        </select>
+                                        <input
+                                            type="text"
+                                            className="w-full p-2 rounded border border-input bg-background font-mono text-sm"
+                                            value={config.prosody_rate || ''}
+                                            onChange={(e) => handleChange('prosody_rate', e.target.value || null)}
+                                            placeholder="e.g. +20%, 0.8, slow"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
 
                         {/* Advanced: Chunk + Timeout + Custom URL */}
                         <details className="border border-border rounded-md">
