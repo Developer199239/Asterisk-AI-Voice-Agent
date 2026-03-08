@@ -30,6 +30,8 @@ class LocalAIConfig:
     stt_model_path: str = "/app/models/stt/vosk-model-en-us-0.22"
 
     sherpa_model_path: str = "/app/models/stt/sherpa"
+    sherpa_model_type: str = "online"
+    sherpa_vad_model_path: str = ""
     faster_whisper_model: str = "base"
     faster_whisper_device: str = "cpu"
     faster_whisper_compute: str = "int8"
@@ -159,6 +161,8 @@ class LocalAIConfig:
                 "LOCAL_STT_MODEL_PATH", "/app/models/stt/vosk-model-en-us-0.22"
             ),
             sherpa_model_path=os.getenv("SHERPA_MODEL_PATH", "/app/models/stt/sherpa"),
+            sherpa_model_type=(os.getenv("SHERPA_MODEL_TYPE", "online") or "online").strip().lower(),
+            sherpa_vad_model_path=os.getenv("SHERPA_VAD_MODEL_PATH", ""),
             faster_whisper_model=os.getenv("FASTER_WHISPER_MODEL", "base"),
             faster_whisper_device=os.getenv("FASTER_WHISPER_DEVICE", "cpu"),
             faster_whisper_compute=os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8"),

@@ -468,29 +468,89 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
 
                         {/* Sherpa settings */}
                         {config.stt_backend === 'sherpa' && (
+                            <>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Sherpa Model Path</label>
+                                    <input
+                                        type="text"
+                                        className="w-full p-2 rounded border border-input bg-background"
+                                        value={config.sherpa_model_path || ''}
+                                        onChange={(e) => handleChange('sherpa_model_path', e.target.value)}
+                                        placeholder={getModelPathPlaceholder('sherpa', 'stt')}
+                                    />
+                                    {modelCatalog.stt.some((m: any) => m.backend === 'sherpa') && (
+                                        <div className="mt-1 text-xs text-muted-foreground">
+                                            Available: {modelCatalog.stt.filter((m: any) => m.backend === 'sherpa').map((m: any) => (
+                                                <button
+                                                    key={m.id || m.path}
+                                                    type="button"
+                                                    className="underline mr-2 text-primary"
+                                                    onClick={() => handleChange('sherpa_model_path', m.path)}
+                                                >
+                                                    {m.path}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Model Type</label>
+                                    <select
+                                        className="w-full p-2 rounded border border-input bg-background"
+                                        value={config.sherpa_model_type || 'online'}
+                                        onChange={(e) => handleChange('sherpa_model_type', e.target.value)}
+                                    >
+                                        <option value="online">Online (Streaming)</option>
+                                        <option value="offline">Offline (VAD-gated, e.g. GigaAM)</option>
+                                    </select>
+                                </div>
+                                {config.sherpa_model_type === 'offline' && (
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Silero VAD Model Path</label>
+                                        <input
+                                            type="text"
+                                            className="w-full p-2 rounded border border-input bg-background"
+                                            value={config.sherpa_vad_model_path || ''}
+                                            onChange={(e) => handleChange('sherpa_vad_model_path', e.target.value)}
+                                            placeholder="/app/models/vad/silero_vad.onnx"
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            Required for offline mode. Download from sherpa-onnx releases.
+                                        </p>
+                                    </div>
+                                )}
+                            </>
+                        )}
+
+                        {config.stt_backend === 'faster_whisper' && (
                             <div className="space-y-2">
-                                <label className="text-sm font-medium">Sherpa Model Path</label>
+                                <label className="text-sm font-medium">Language</label>
                                 <input
                                     type="text"
                                     className="w-full p-2 rounded border border-input bg-background"
-                                    value={config.sherpa_model_path || ''}
-                                    onChange={(e) => handleChange('sherpa_model_path', e.target.value)}
-                                    placeholder={getModelPathPlaceholder('sherpa', 'stt')}
+                                    value={config.faster_whisper_language || 'en'}
+                                    onChange={(e) => handleChange('faster_whisper_language', e.target.value)}
+                                    placeholder="en"
                                 />
-                                {modelCatalog.stt.some((m: any) => m.backend === 'sherpa') && (
-                                    <div className="mt-1 text-xs text-muted-foreground">
-                                        Available: {modelCatalog.stt.filter((m: any) => m.backend === 'sherpa').map((m: any) => (
-                                            <button
-                                                key={m.id || m.path}
-                                                type="button"
-                                                className="underline mr-2 text-primary"
-                                                onClick={() => handleChange('sherpa_model_path', m.path)}
-                                            >
-                                                {m.path}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
+                                <p className="text-xs text-muted-foreground">
+                                    ISO 639-1 code (e.g. en, ru, es). Leave as &quot;en&quot; for English.
+                                </p>
+                            </div>
+                        )}
+
+                        {config.stt_backend === 'whisper_cpp' && (
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Language</label>
+                                <input
+                                    type="text"
+                                    className="w-full p-2 rounded border border-input bg-background"
+                                    value={config.whisper_cpp_language || 'en'}
+                                    onChange={(e) => handleChange('whisper_cpp_language', e.target.value)}
+                                    placeholder="en"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    ISO 639-1 code (e.g. en, ru, es). Leave as &quot;en&quot; for English.
+                                </p>
                             </div>
                         )}
 

@@ -334,6 +334,256 @@ class SherpaONNXSTTBackend:
         logging.info("🛑 SHERPA - Recognizer shutdown")
 
 
+class SherpaOfflineSTTBackend:
+    """
+    Offline (non-streaming) STT backend using sherpa-onnx OfflineRecognizer + Silero VAD.
+
+    Used for models that only support offline/batch inference (e.g., GigaAM for Russian).
+    Silero VAD detects speech segments, and each complete segment is transcribed via
+    OfflineRecognizer.from_transducer().
+
+    The OfflineRecognizer is shared across sessions (thread-safe for decode_stream).
+    VAD instances are per-session to prevent cross-session contamination — create one
+    via ``create_session_vad()`` and pass it into ``process_audio()`` / ``finalize()``.
+
+    Requires:
+      - Transducer model files (tokens.txt, encoder*.onnx, decoder*.onnx, joiner*.onnx)
+      - Silero VAD model (silero_vad.onnx)
+    """
+
+    def __init__(
+        self,
+        model_path: str,
+        vad_model_path: str,
+        sample_rate: int = PCM16_TARGET_RATE,
+    ):
+        self.model_path = model_path
+        self.vad_model_path = vad_model_path
+        self.sample_rate = sample_rate
+        self.recognizer = None
+        self._vad_config = None  # Stored for per-session VAD creation
+        self._initialized = False
+        self._min_audio_length = int(sample_rate * 0.5)
+
+    def initialize(self) -> bool:
+        try:
+            import sherpa_onnx
+
+            if not os.path.exists(self.model_path):
+                logging.error("❌ SHERPA-OFFLINE - Model not found at %s", self.model_path)
+                return False
+
+            if not self.vad_model_path or not os.path.exists(self.vad_model_path):
+                logging.error(
+                    "❌ SHERPA-OFFLINE - Silero VAD model not found at %s. "
+                    "Download from: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+                    self.vad_model_path,
+                )
+                return False
+
+            tokens_file = self._find_file("tokens.txt", ".txt")
+            encoder_file = self._find_onnx("encoder")
+            decoder_file = self._find_onnx("decoder")
+            joiner_file = self._find_onnx("joiner")
+
+            if not all([tokens_file, encoder_file, decoder_file, joiner_file]):
+                missing = []
+                if not tokens_file:
+                    missing.append("tokens.txt")
+                if not encoder_file:
+                    missing.append("encoder*.onnx")
+                if not decoder_file:
+                    missing.append("decoder*.onnx")
+                if not joiner_file:
+                    missing.append("joiner*.onnx")
+                logging.error("❌ SHERPA-OFFLINE - Missing model files: %s", ", ".join(missing))
+                return False
+
+            logging.info("📁 SHERPA-OFFLINE - Model files found:")
+            logging.info("   tokens: %s", tokens_file)
+            logging.info("   encoder: %s", encoder_file)
+            logging.info("   decoder: %s", decoder_file)
+            logging.info("   joiner: %s", joiner_file)
+            logging.info("   vad: %s", self.vad_model_path)
+
+            self.recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
+                tokens=tokens_file,
+                encoder=encoder_file,
+                decoder=decoder_file,
+                joiner=joiner_file,
+                num_threads=2,
+                sample_rate=self.sample_rate,
+                decoding_method="greedy_search",
+            )
+
+            # Store VAD config for per-session creation (no shared VAD instance).
+            self._vad_config = sherpa_onnx.VadModelConfig()
+            self._vad_config.silero_vad.model = self.vad_model_path
+            self._vad_config.silero_vad.threshold = 0.5
+            self._vad_config.silero_vad.min_silence_duration = 0.25
+            self._vad_config.silero_vad.min_speech_duration = 0.25
+            self._vad_config.silero_vad.max_speech_duration = 20.0
+            self._vad_config.sample_rate = self.sample_rate
+
+            # Validate VAD config by creating (and discarding) a test instance.
+            _test_vad = sherpa_onnx.VoiceActivityDetector(self._vad_config, buffer_size_in_seconds=30)
+            del _test_vad
+
+            self._initialized = True
+            logging.info(
+                "✅ SHERPA-OFFLINE - OfflineRecognizer + Silero VAD initialized with model %s",
+                self.model_path,
+            )
+            return True
+        except ImportError:
+            logging.error("❌ SHERPA-OFFLINE - sherpa-onnx not installed")
+            return False
+        except Exception as exc:
+            logging.error("❌ SHERPA-OFFLINE - Failed to initialize: %s", exc)
+            return False
+
+    # ------------------------------------------------------------------
+    # Per-session VAD lifecycle
+    # ------------------------------------------------------------------
+
+    def create_session_vad(self) -> Optional[Any]:
+        """Create a per-session Silero VAD instance. Returns None on failure."""
+        if not self._initialized or self._vad_config is None:
+            return None
+        try:
+            import sherpa_onnx
+            return sherpa_onnx.VoiceActivityDetector(self._vad_config, buffer_size_in_seconds=30)
+        except Exception as exc:
+            logging.error("❌ SHERPA-OFFLINE - Failed to create session VAD: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # File helpers
+    # ------------------------------------------------------------------
+
+    def _find_file(self, name: str, suffix: str) -> str:
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        path = os.path.join(search_dir, name)
+        if os.path.exists(path):
+            return path
+        return ""
+
+    def _find_onnx(self, prefix: str) -> str:
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        if not os.path.isdir(search_dir):
+            return ""
+        exact = os.path.join(search_dir, f"{prefix}.onnx")
+        if os.path.exists(exact):
+            return exact
+        for filename in os.listdir(search_dir):
+            if filename.startswith(prefix) and filename.endswith(".int8.onnx"):
+                return os.path.join(search_dir, filename)
+        for filename in os.listdir(search_dir):
+            if filename.startswith(prefix) and filename.endswith(".onnx"):
+                return os.path.join(search_dir, filename)
+        return ""
+
+    # ------------------------------------------------------------------
+    # Audio processing (all methods require a per-session VAD)
+    # ------------------------------------------------------------------
+
+    def process_audio(self, vad: Any, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
+        """Feed audio through a per-session VAD; transcribe complete speech segments."""
+        if not self._initialized or self.recognizer is None or vad is None:
+            return None
+
+        try:
+            samples = np.frombuffer(pcm16_audio, dtype=np.int16)
+            float_samples = samples.astype(np.float32) / 32768.0
+
+            vad.accept_waveform(float_samples)
+
+            if not vad.empty():
+                speech_segment = vad.front()
+                vad.pop()
+
+                speech_samples = np.array(speech_segment.samples, dtype=np.float32)
+
+                if len(speech_samples) < self._min_audio_length:
+                    return None
+
+                stream = self.recognizer.create_stream()
+                stream.accept_waveform(self.sample_rate, speech_samples)
+                self.recognizer.decode_stream(stream)
+
+                text = stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+
+                if text:
+                    return {"type": "final", "text": text}
+
+            return None
+
+        except Exception as exc:
+            logging.error("❌ SHERPA-OFFLINE - Process error: %s", exc)
+            return None
+
+    def finalize(self, vad: Any) -> Optional[Dict[str, Any]]:
+        """Flush remaining speech from a per-session VAD and transcribe it."""
+        if not self._initialized or self.recognizer is None or vad is None:
+            return None
+
+        try:
+            vad.flush()
+
+            texts = []
+            while not vad.empty():
+                speech_segment = vad.front()
+                vad.pop()
+
+                speech_samples = np.array(speech_segment.samples, dtype=np.float32)
+                if len(speech_samples) < self._min_audio_length:
+                    continue
+
+                stream = self.recognizer.create_stream()
+                stream.accept_waveform(self.sample_rate, speech_samples)
+                self.recognizer.decode_stream(stream)
+
+                text = stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+                if text:
+                    texts.append(text)
+
+            if texts:
+                return {"type": "final", "text": " ".join(texts)}
+            return None
+
+        except Exception as exc:
+            logging.error("❌ SHERPA-OFFLINE - Finalize error: %s", exc)
+            return None
+
+    def transcribe_pcm16(self, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
+        """Direct transcription without VAD (for pre-segmented audio)."""
+        if not self._initialized or self.recognizer is None:
+            return None
+
+        try:
+            samples = np.frombuffer(pcm16_audio, dtype=np.int16)
+            float_samples = samples.astype(np.float32) / 32768.0
+
+            stream = self.recognizer.create_stream()
+            stream.accept_waveform(self.sample_rate, float_samples)
+            self.recognizer.decode_stream(stream)
+
+            text = stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+            if text:
+                return {"type": "final", "text": text}
+            return None
+
+        except Exception as exc:
+            logging.error("❌ SHERPA-OFFLINE - Transcribe error: %s", exc)
+            return None
+
+    def shutdown(self) -> None:
+        self.recognizer = None
+        self._vad_config = None
+        self._initialized = False
+        logging.info("🛑 SHERPA-OFFLINE - Recognizer shutdown")
+
+
 class FasterWhisperSTTBackend:
     """
     Faster-Whisper STT backend using CTranslate2-optimized Whisper.
@@ -671,7 +921,7 @@ class WhisperCppSTTBackend:
                 return None
             
             # Transcribe the buffered audio
-            segments = self.model.transcribe(self._audio_buffer)
+            segments = self.model.transcribe(self._audio_buffer, language=self.language)
             
             # Collect all segment texts
             text = " ".join(seg.text.strip() for seg in segments if seg.text)
@@ -717,7 +967,7 @@ class WhisperCppSTTBackend:
                 return None
             
             # Transcribe remaining audio
-            segments = self.model.transcribe(self._audio_buffer)
+            segments = self.model.transcribe(self._audio_buffer, language=self.language)
             
             text = " ".join(seg.text.strip() for seg in segments if seg.text)
             
@@ -752,7 +1002,7 @@ class WhisperCppSTTBackend:
         try:
             samples = np.frombuffer(pcm16_audio, dtype=np.int16)
             float_samples = samples.astype(np.float32) / 32768.0
-            segments = self.model.transcribe(float_samples)
+            segments = self.model.transcribe(float_samples, language=self.language)
             text = " ".join(seg.text.strip() for seg in segments if getattr(seg, "text", None))
             text = (text or "").strip()
             if text and self._is_hallucination(text):

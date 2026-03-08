@@ -145,12 +145,16 @@ class SwitchModelRequest(BaseModel):
     model_path: Optional[str] = None  # For models with paths
     voice: Optional[str] = None  # For Kokoro TTS
     language: Optional[str] = None  # For Kroko STT
+    faster_whisper_language: Optional[str] = None  # Language code for Faster-Whisper (e.g., en, ru)
+    whisper_cpp_language: Optional[str] = None  # Language code for Whisper.cpp (e.g., en, ru)
     # Kroko embedded tuning (optional)
     kroko_embedded: Optional[bool] = None
     kroko_port: Optional[int] = None
     kroko_url: Optional[str] = None
     # Sherpa explicit path (optional; preferred over model_path)
     sherpa_model_path: Optional[str] = None
+    sherpa_model_type: Optional[str] = None  # online (streaming) | offline (VAD-gated)
+    sherpa_vad_model_path: Optional[str] = None  # Required when sherpa_model_type=offline
     # Whisper.cpp explicit path (optional; preferred over model_path)
     whisper_cpp_model_path: Optional[str] = None
     # Kokoro mode/model controls (optional)
@@ -268,15 +272,27 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 if sherpa_path:
                     env_updates["SHERPA_MODEL_PATH"] = sherpa_path
                     yaml_updates["sherpa_model_path"] = sherpa_path
+                if request.sherpa_model_type:
+                    env_updates["SHERPA_MODEL_TYPE"] = request.sherpa_model_type
+                    yaml_updates["sherpa_model_type"] = request.sherpa_model_type
+                if request.sherpa_vad_model_path:
+                    env_updates["SHERPA_VAD_MODEL_PATH"] = request.sherpa_vad_model_path
+                    yaml_updates["sherpa_vad_model_path"] = request.sherpa_vad_model_path
             elif request.backend == "whisper_cpp":
                 whisper_path = request.whisper_cpp_model_path or request.model_path
                 if whisper_path:
                     env_updates["WHISPER_CPP_MODEL_PATH"] = whisper_path
                     yaml_updates["whisper_cpp_model_path"] = whisper_path
+                if request.whisper_cpp_language:
+                    env_updates["WHISPER_CPP_LANGUAGE"] = request.whisper_cpp_language
+                    yaml_updates["whisper_cpp_language"] = request.whisper_cpp_language
             elif request.backend == "faster_whisper":
                 if request.model_path:
                     env_updates["FASTER_WHISPER_MODEL"] = request.model_path
                     yaml_updates["stt_model"] = request.model_path
+                if request.faster_whisper_language:
+                    env_updates["FASTER_WHISPER_LANGUAGE"] = request.faster_whisper_language
+                    yaml_updates["faster_whisper_language"] = request.faster_whisper_language
 
     elif request.model_type == "tts":
         if request.backend:
@@ -340,12 +356,21 @@ def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[D
             sherpa_path = request.sherpa_model_path or request.model_path
             if sherpa_path:
                 payload["sherpa_model_path"] = sherpa_path
+            if request.sherpa_model_type:
+                payload["sherpa_model_type"] = request.sherpa_model_type
+            if request.sherpa_vad_model_path:
+                payload["sherpa_vad_model_path"] = request.sherpa_vad_model_path
         if request.backend == "whisper_cpp":
             whisper_path = request.whisper_cpp_model_path or request.model_path
             if whisper_path:
                 payload["stt_model_path"] = whisper_path
-        if request.backend == "faster_whisper" and request.model_path:
-            payload["stt_config"] = {"model": request.model_path}
+            if request.whisper_cpp_language:
+                payload["whisper_cpp_language"] = request.whisper_cpp_language
+        if request.backend == "faster_whisper":
+            if request.model_path:
+                payload["stt_config"] = {"model": request.model_path}
+            if request.faster_whisper_language:
+                payload["faster_whisper_language"] = request.faster_whisper_language
         if request.backend == "kroko":
             effective_embedded = _infer_kroko_embedded(
                 backend="kroko",

@@ -771,7 +771,7 @@ class LocalAIServer:
             self.runtime_mode = (getattr(self.config, "runtime_mode", "full") or "full").strip().lower()
         except Exception:
             self.runtime_mode = "full"
-        self.sherpa_backend: Optional[SherpaONNXSTTBackend] = None
+        self.sherpa_backend: Optional[Any] = None  # SherpaONNXSTTBackend or SherpaOfflineSTTBackend
         self.faster_whisper_backend: Optional["FasterWhisperSTTBackend"] = None
         self.whisper_cpp_backend: Optional["WhisperCppSTTBackend"] = None
         self.kokoro_backend: Optional[KokoroTTSBackend] = None
@@ -1212,22 +1212,43 @@ class LocalAIServer:
                 raise
 
     async def _load_sherpa_backend(self):
-        """Initialize Sherpa-onnx STT backend for local streaming ASR."""
+        """Initialize Sherpa-onnx STT backend for local ASR (online or offline)."""
+        model_type = getattr(self, "sherpa_model_type", "online")
         try:
-            logging.info("🎤 STT backend: Sherpa-onnx (local streaming ASR)")
+            if model_type == "offline":
+                from stt_backends import SherpaOfflineSTTBackend
 
-            self.sherpa_backend = SherpaONNXSTTBackend(
-                model_path=self.sherpa_model_path,
-                sample_rate=PCM16_TARGET_RATE,
-            )
+                vad_path = getattr(self, "sherpa_vad_model_path", "")
+                logging.info(
+                    "🎤 STT backend: Sherpa-onnx OFFLINE (VAD-gated, model=%s, vad=%s)",
+                    self.sherpa_model_path,
+                    vad_path,
+                )
+
+                self.sherpa_backend = SherpaOfflineSTTBackend(
+                    model_path=self.sherpa_model_path,
+                    vad_model_path=vad_path,
+                    sample_rate=PCM16_TARGET_RATE,
+                )
+            else:
+                logging.info("🎤 STT backend: Sherpa-onnx (local streaming ASR)")
+
+                self.sherpa_backend = SherpaONNXSTTBackend(
+                    model_path=self.sherpa_model_path,
+                    sample_rate=PCM16_TARGET_RATE,
+                )
 
             if not self.sherpa_backend.initialize():
-                raise RuntimeError("Failed to initialize Sherpa-onnx recognizer")
+                raise RuntimeError(f"Failed to initialize Sherpa-onnx ({model_type}) recognizer")
 
-            logging.info("✅ STT backend: Sherpa-onnx initialized with model %s", self.sherpa_model_path)
+            logging.info(
+                "✅ STT backend: Sherpa-onnx (%s) initialized with model %s",
+                model_type,
+                self.sherpa_model_path,
+            )
 
         except Exception as exc:
-            logging.error("❌ Failed to initialize Sherpa STT backend: %s", exc)
+            logging.error("❌ Failed to initialize Sherpa STT backend (%s): %s", model_type, exc)
             self.sherpa_backend = None
             self.startup_errors["stt"] = str(exc)
             if self.fail_fast:
@@ -1258,11 +1279,24 @@ class LocalAIServer:
                 )
             
             logging.info(
-                "🎤 STT backend: Faster-Whisper (model=%s, device=%s, compute=%s)",
+                "🎤 STT backend: Faster-Whisper (model=%s, device=%s, compute=%s, lang=%s)",
                 self.faster_whisper_model,
                 requested_device,
                 requested_compute,
+                self.faster_whisper_language,
             )
+
+            if (
+                self.faster_whisper_language
+                and self.faster_whisper_language != "en"
+                and ".en" in self.faster_whisper_model
+            ):
+                logging.warning(
+                    "⚠️ FASTER-WHISPER language mismatch: language=%s but model '%s' is English-only. "
+                    "Use a multilingual model (e.g., 'base', 'small', 'medium', 'large-v3') for non-English.",
+                    self.faster_whisper_language,
+                    self.faster_whisper_model,
+                )
 
             self.faster_whisper_backend = _build_backend(requested_device, requested_compute)
 
@@ -1336,9 +1370,22 @@ class LocalAIServer:
             from stt_backends import WhisperCppSTTBackend
             
             logging.info(
-                "🎤 STT backend: Whisper.cpp (model=%s)",
+                "🎤 STT backend: Whisper.cpp (model=%s, lang=%s)",
                 self.whisper_cpp_model_path,
+                self.whisper_cpp_language,
             )
+
+            if (
+                self.whisper_cpp_language
+                and self.whisper_cpp_language != "en"
+                and ".en." in os.path.basename(self.whisper_cpp_model_path)
+            ):
+                logging.warning(
+                    "⚠️ WHISPER.CPP language mismatch: language=%s but model '%s' is English-only. "
+                    "Use a multilingual model (e.g., 'ggml-base.bin') for non-English.",
+                    self.whisper_cpp_language,
+                    os.path.basename(self.whisper_cpp_model_path),
+                )
 
             self.whisper_cpp_backend = WhisperCppSTTBackend(
                 model_path=self.whisper_cpp_model_path,
@@ -2888,11 +2935,58 @@ class LocalAIServer:
             session.fw_audio_buffer = b""
         if hasattr(session, "wcpp_audio_buffer"):
             session.wcpp_audio_buffer = b""
+        # Sherpa offline: clear per-session VAD reference.
+        # The actual flush + emit should happen via the async
+        # _flush_sherpa_offline_trailing() *before* calling this method
+        # whenever a websocket is available.
+        session.sherpa_offline_vad = None
         session.last_request_meta.clear()
         session.last_final_text = last_text
         session.last_final_norm = _normalize_text(last_text)
         session.last_final_at = monotonic()
         # Note: Kroko WebSocket is kept open for session reuse, closed on disconnect
+
+    async def _flush_sherpa_offline_trailing(self, websocket, session: SessionContext) -> None:
+        """Flush per-session Sherpa offline VAD and emit any trailing speech.
+
+        Must be called *before* ``_reset_stt_session()`` while the websocket is
+        still (potentially) open.  If the connection has already closed,
+        ``_emit_stt_result`` will silently fail, which is acceptable for the
+        disconnect path.
+        """
+        vad = session.sherpa_offline_vad
+        if vad is None or self.sherpa_backend is None:
+            return
+        if not hasattr(self.sherpa_backend, "finalize"):
+            return
+        try:
+            trailing = self.sherpa_backend.finalize(vad)
+            if not trailing:
+                return
+            trailing_text = (trailing.get("text") or "").strip()
+            if not trailing_text:
+                return
+            meta = session.last_request_meta or {}
+            mode = meta.get("mode", "stt")
+            request_id = meta.get("request_id")
+            logging.info(
+                "📝 SHERPA-OFFLINE - Emitting trailing speech: '%s' call_id=%s mode=%s",
+                trailing_text,
+                session.call_id,
+                mode,
+            )
+            await self._emit_stt_result(
+                websocket,
+                trailing_text,
+                session,
+                request_id,
+                source_mode=mode,
+                is_final=True,
+                is_partial=False,
+                confidence=None,
+            )
+        except Exception as exc:
+            logging.debug("Sherpa offline trailing flush error: %s", exc)
 
     async def _close_kroko_session(self, session: SessionContext) -> None:
         """Close Kroko WebSocket connection for a session."""
@@ -3226,15 +3320,27 @@ class LocalAIServer:
         except RuntimeError:
             session.last_audio_at = 0.0
 
-        # Ensure sherpa stream exists for this session
-        if session.sherpa_stream is None:
-            session.sherpa_stream = self.sherpa_backend.create_stream()
-            if session.sherpa_stream is None:
-                logging.error("❌ SHERPA - Failed to create stream")
-                return []
+        # Offline backend uses per-session VAD + process_audio(vad, bytes);
+        # online uses stream-based API.
+        is_offline = hasattr(self.sherpa_backend, "create_session_vad")
 
-        # Process audio and get results
-        result = self.sherpa_backend.process_audio(session.sherpa_stream, audio_bytes)
+        if is_offline:
+            if session.sherpa_offline_vad is None:
+                session.sherpa_offline_vad = self.sherpa_backend.create_session_vad()
+                if session.sherpa_offline_vad is None:
+                    logging.error("❌ SHERPA-OFFLINE - Failed to create session VAD")
+                    return []
+            result = self.sherpa_backend.process_audio(session.sherpa_offline_vad, audio_bytes)
+        else:
+            # Ensure sherpa stream exists for this session
+            if session.sherpa_stream is None:
+                session.sherpa_stream = self.sherpa_backend.create_stream()
+                if session.sherpa_stream is None:
+                    logging.error("❌ SHERPA - Failed to create stream")
+                    return []
+
+            # Process audio and get results
+            result = self.sherpa_backend.process_audio(session.sherpa_stream, audio_bytes)
         
         if result:
             result_type = result.get("type", "")
@@ -4067,6 +4173,8 @@ class LocalAIServer:
         *,
         source_mode: str,
     ) -> None:
+        # Sherpa offline: flush any trailing speech before we suppress STT.
+        await self._flush_sherpa_offline_trailing(websocket, session)
         # Whisper echo-guard: when Local AI Server is emitting TTS audio, it can be
         # re-captured via telephony mixing/echo and immediately re-transcribed by
         # Whisper-family STT, causing talk-loops. We proactively suppress STT for
@@ -4528,7 +4636,9 @@ class LocalAIServer:
 
         stt_modes = {"stt", "llm", "full"}
         if mode in stt_modes:
-            if self.stt_backend in {"faster_whisper", "whisper_cpp"} and monotonic() < (session.stt_suppress_until or 0.0):
+            _suppress_backends = {"faster_whisper", "whisper_cpp"}
+            _sherpa_offline = self.stt_backend == "sherpa" and getattr(self, "sherpa_model_type", "online") == "offline"
+            if (self.stt_backend in _suppress_backends or _sherpa_offline) and monotonic() < (session.stt_suppress_until or 0.0):
                 if DEBUG_AUDIO_FLOW:
                     remaining = max(0.0, float(session.stt_suppress_until - monotonic()))
                     logging.debug(

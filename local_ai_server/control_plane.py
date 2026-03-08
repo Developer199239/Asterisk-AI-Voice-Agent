@@ -23,6 +23,10 @@ _STT_CONFIG_MAP = {
     "model": "faster_whisper_model",
     "device": "faster_whisper_device",
     "compute_type": "faster_whisper_compute",
+    "faster_whisper_language": "faster_whisper_language",
+    "whisper_cpp_language": "whisper_cpp_language",
+    "sherpa_model_type": "sherpa_model_type",
+    "sherpa_vad_model_path": "sherpa_vad_model_path",
 }
 
 _TTS_CONFIG_MAP = {
@@ -144,6 +148,27 @@ def apply_switch_model_request(
         value = data["kroko_language"]
         new_config = replace(new_config, kroko_language=value)
         changed.append(f"kroko_language={value}")
+
+    if "faster_whisper_language" in data:
+        value = str(data["faster_whisper_language"]).strip().lower()
+        new_config = replace(new_config, faster_whisper_language=value)
+        changed.append(f"faster_whisper_language={value}")
+
+    if "whisper_cpp_language" in data:
+        value = str(data["whisper_cpp_language"]).strip().lower()
+        new_config = replace(new_config, whisper_cpp_language=value)
+        changed.append(f"whisper_cpp_language={value}")
+
+    if "sherpa_model_type" in data:
+        value = str(data["sherpa_model_type"]).strip().lower()
+        if value in ("online", "offline"):
+            new_config = replace(new_config, sherpa_model_type=value)
+            changed.append(f"sherpa_model_type={value}")
+
+    if "sherpa_vad_model_path" in data:
+        value = str(data["sherpa_vad_model_path"])
+        new_config = replace(new_config, sherpa_vad_model_path=value)
+        changed.append(f"sherpa_vad_model_path={os.path.basename(value)}")
 
     if "kroko_url" in data:
         new_config = replace(new_config, kroko_url=data["kroko_url"])

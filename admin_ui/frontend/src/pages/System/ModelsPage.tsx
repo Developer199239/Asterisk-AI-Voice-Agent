@@ -55,7 +55,7 @@ interface DownloadProgress {
 }
 
 interface ActiveModels {
-    stt: { backend: string; path: string; loaded: boolean; display?: string };
+    stt: { backend: string; path: string; loaded: boolean; display?: string; language?: string | null };
     tts: { backend: string; path: string; loaded: boolean; display?: string };
     llm: {
         path: string;
@@ -152,6 +152,7 @@ const ModelsPage = () => {
     const [serverStatus, setServerStatus] = useState<'connected' | 'error' | 'loading'>('loading');
     const [restarting, setRestarting] = useState(false);
     const [pendingChanges, setPendingChanges] = useState<{ stt?: string; tts?: string; llm?: string }>({});
+    const [pendingSttExtra, setPendingSttExtra] = useState<{ language?: string; sherpa_model_type?: string; sherpa_vad_model_path?: string }>({});
     const [pendingLlmConfig, setPendingLlmConfig] = useState<{ context?: number; max_tokens?: number }>({});
     const [startingServer, setStartingServer] = useState(false);
     const [capabilities, setCapabilities] = useState<BackendCapabilities | null>(null);
@@ -395,14 +396,19 @@ const ModelsPage = () => {
         modelType: 'stt' | 'tts' | 'llm',
         backend: string,
         modelPath: string,
-        forceIncompatibleApplyRequest = false
+        forceIncompatibleApplyRequest = false,
+        extra?: Record<string, any>
     ) => {
-        return axios.post('/api/local-ai/switch', {
+        const payload: any = {
             model_type: modelType,
             backend: backend,
             model_path: modelPath,
             force_incompatible_apply: forceIncompatibleApplyRequest
-        });
+        };
+        if (extra) {
+            Object.assign(payload, extra);
+        }
+        return axios.post('/api/local-ai/switch', payload);
     };
 
     // Get model name from path
@@ -772,11 +778,23 @@ const ModelsPage = () => {
                 if (!value) continue;
                 updateApplyProgress('switching', 88, `Applying ${type.toUpperCase()} change...`, `Switching ${type} backend/model`);
                 const [backend, ...pathParts] = value.split(':');
-                await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'), forceIncompatibleApply);
+                const extra: Record<string, any> = {};
+                if (type === 'stt') {
+                    if (backend === 'faster_whisper' && pendingSttExtra.language) {
+                        extra.faster_whisper_language = pendingSttExtra.language;
+                    } else if (backend === 'whisper_cpp' && pendingSttExtra.language) {
+                        extra.whisper_cpp_language = pendingSttExtra.language;
+                    } else if (backend === 'sherpa') {
+                        if (pendingSttExtra.sherpa_model_type) extra.sherpa_model_type = pendingSttExtra.sherpa_model_type;
+                        if (pendingSttExtra.sherpa_vad_model_path) extra.sherpa_vad_model_path = pendingSttExtra.sherpa_vad_model_path;
+                    }
+                }
+                await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'), forceIncompatibleApply, Object.keys(extra).length > 0 ? extra : undefined);
             }
 
             showToast(requiresAnyRebuild ? 'Compatibility override applied. Local AI has been rebuilt/restarted.' : 'Model switch requested. Server will restart.', 'success');
             setPendingChanges({});
+            setPendingSttExtra({});
             setPendingLlmConfig({});
             setForceIncompatibleApply(false);
             updateApplyProgress('verifying', 95, 'Waiting for Local AI to come back online...', 'Refreshing active model status');
@@ -965,6 +983,72 @@ const ModelsPage = () => {
                                     <div className="mt-2 text-xs text-muted-foreground truncate" title={activeModels.stt.display || activeModels.stt.path}>
                                         {activeModels.stt.display || getModelName(activeModels.stt.path)}
                                     </div>
+                                    {activeModels.stt.language && (
+                                        <div className="mt-1 text-xs text-muted-foreground">
+                                            Language: <span className="font-medium">{activeModels.stt.language}</span>
+                                        </div>
+                                    )}
+                                    {/* Language / mode quick-switch for STT backends that support it */}
+                                    {(() => {
+                                        const selectedStt = pendingChanges.stt || `${activeModels.stt.backend}:${activeModels.stt.path}`;
+                                        const selectedBackend = selectedStt.split(':')[0];
+                                        if (selectedBackend === 'faster_whisper' || selectedBackend === 'whisper_cpp') {
+                                            return (
+                                                <div className="mt-2">
+                                                    <label className="text-[10px] text-muted-foreground">Language (ISO 639-1)</label>
+                                                    <input
+                                                        type="text"
+                                                        className={`w-full text-xs p-1.5 rounded border bg-background ${pendingSttExtra.language ? 'border-yellow-500' : 'border-border'}`}
+                                                        value={pendingSttExtra.language ?? (activeModels.stt.language || 'en')}
+                                                        onChange={(e) => {
+                                                            const lang = e.target.value.trim().toLowerCase();
+                                                            setPendingSttExtra(prev => ({ ...prev, language: lang }));
+                                                            if (!pendingChanges.stt) setPendingChanges(prev => ({ ...prev, stt: selectedStt }));
+                                                        }}
+                                                        placeholder="en"
+                                                        disabled={restarting}
+                                                    />
+                                                </div>
+                                            );
+                                        }
+                                        if (selectedBackend === 'sherpa') {
+                                            return (
+                                                <div className="mt-2 space-y-1.5">
+                                                    <div>
+                                                        <label className="text-[10px] text-muted-foreground">Model Type</label>
+                                                        <select
+                                                            className={`w-full text-xs p-1.5 rounded border bg-background ${pendingSttExtra.sherpa_model_type ? 'border-yellow-500' : 'border-border'}`}
+                                                            value={pendingSttExtra.sherpa_model_type || 'online'}
+                                                            onChange={(e) => {
+                                                                setPendingSttExtra(prev => ({ ...prev, sherpa_model_type: e.target.value }));
+                                                                if (!pendingChanges.stt) setPendingChanges(prev => ({ ...prev, stt: selectedStt }));
+                                                            }}
+                                                            disabled={restarting}
+                                                        >
+                                                            <option value="online">Online (Streaming)</option>
+                                                            <option value="offline">Offline (VAD-gated)</option>
+                                                        </select>
+                                                    </div>
+                                                    {(pendingSttExtra.sherpa_model_type === 'offline') && (
+                                                        <div>
+                                                            <label className="text-[10px] text-muted-foreground">Silero VAD Path</label>
+                                                            <input
+                                                                type="text"
+                                                                className={`w-full text-xs p-1.5 rounded border bg-background ${pendingSttExtra.sherpa_vad_model_path ? 'border-yellow-500' : 'border-border'}`}
+                                                                value={pendingSttExtra.sherpa_vad_model_path || ''}
+                                                                onChange={(e) => {
+                                                                    setPendingSttExtra(prev => ({ ...prev, sherpa_vad_model_path: e.target.value }));
+                                                                }}
+                                                                placeholder="/app/models/vad/silero_vad.onnx"
+                                                                disabled={restarting}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        }
+                                        return null;
+                                    })()}
                                 </div>
 
                                 {/* LLM Model */}

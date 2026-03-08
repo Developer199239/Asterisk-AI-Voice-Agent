@@ -479,6 +479,18 @@ Request (examples):
 }
 ```
 
+```json
+{ "type": "switch_model", "stt_backend": "faster_whisper", "faster_whisper_language": "ru" }
+```
+
+```json
+{ "type": "switch_model", "stt_backend": "whisper_cpp", "whisper_cpp_language": "ru", "stt_model_path": "/app/models/stt/ggml-base.bin" }
+```
+
+```json
+{ "type": "switch_model", "stt_backend": "sherpa", "sherpa_model_type": "offline", "sherpa_model_path": "/app/models/stt/sherpa-gigaam", "sherpa_vad_model_path": "/app/models/vad/silero_vad.onnx" }
+```
+
 Response:
 
 ```json
@@ -491,9 +503,9 @@ Optional fields:
 
 Accepted payload shapes:
 
-- Top-level keys (for compatibility): `stt_backend`, `tts_backend`, `llm_model_path`, `kokoro_*`, `kroko_*`, `sherpa_model_path`, `stt_model_path`, `tts_model_path`.
+- Top-level keys (for compatibility): `stt_backend`, `tts_backend`, `llm_model_path`, `kokoro_*`, `kroko_*`, `sherpa_model_path`, `sherpa_model_type`, `sherpa_vad_model_path`, `faster_whisper_language`, `whisper_cpp_language`, `stt_model_path`, `tts_model_path`.
 - Nested config objects:
-  - `stt_config`: `model`, `device`, `compute_type`, plus Kroko aliases (`url`, `language`, `port`, `embedded`, `model_path`)
+  - `stt_config`: `model`, `device`, `compute_type`, `faster_whisper_language`, `whisper_cpp_language`, `sherpa_model_type`, `sherpa_vad_model_path`, plus Kroko aliases (`url`, `language`, `port`, `embedded`, `model_path`)
   - `tts_config`: `voice`, `mode`, `lang`, `api_base_url`, `api_key`, `api_model`, `device`, `speed`, `model_path`
   - `llm_config`: `model_path`, `threads`, `context`, `batch`, `max_tokens`, `temperature`, `top_p`, `repeat_penalty`, `gpu_layers`, `system_prompt`, `use_mlock`, `chat_format`
 

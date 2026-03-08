@@ -5,6 +5,17 @@ from typing import Any, Dict, Optional, Tuple
 
 from constants import DEBUG_AUDIO_FLOW, _level_name
 
+def _stt_language(server) -> Optional[str]:
+    backend = server.stt_backend
+    if backend == "kroko":
+        return getattr(server, "kroko_language", None)
+    if backend == "faster_whisper":
+        return getattr(server, "faster_whisper_language", None)
+    if backend == "whisper_cpp":
+        return getattr(server, "whisper_cpp_language", None)
+    return None
+
+
 def _stt_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
     if server.stt_backend == "vosk":
         loaded = server.mock_models or server.stt_model is not None
@@ -23,17 +34,23 @@ def _stt_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
     if server.stt_backend == "sherpa":
         loaded = server.mock_models or server.sherpa_backend is not None
         path = server.sherpa_model_path
-        display = os.path.basename(server.sherpa_model_path)
+        model_type = getattr(server, "sherpa_model_type", "online")
+        display = f"Sherpa ({os.path.basename(server.sherpa_model_path)}, {model_type})"
         return loaded, path, display
     if server.stt_backend == "faster_whisper":
         loaded = server.mock_models or server.faster_whisper_backend is not None
         path = server.faster_whisper_model
-        display = f"Faster-Whisper ({server.faster_whisper_model})"
+        lang = getattr(server, "faster_whisper_language", "en")
+        display = f"Faster-Whisper ({server.faster_whisper_model}, {lang})"
         return loaded, path, display
     if server.stt_backend == "whisper_cpp":
         loaded = server.mock_models or server.whisper_cpp_backend is not None
         path = getattr(server, "whisper_cpp_model_path", None)
-        display = "Whisper.cpp" if loaded else "Whisper.cpp (not loaded)"
+        lang = getattr(server, "whisper_cpp_language", "en")
+        if loaded:
+            display = f"Whisper.cpp ({lang})"
+        else:
+            display = "Whisper.cpp (not loaded)"
         return loaded, path, display
     return False, None, None
 
@@ -121,6 +138,7 @@ def build_status_response(server) -> Dict[str, Any]:
                 "loaded": stt_loaded,
                 "path": stt_path,
                 "display": stt_display,
+                "language": _stt_language(server),
             },
             "llm": {
                 "loaded": llm_loaded,
