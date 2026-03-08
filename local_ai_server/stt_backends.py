@@ -560,10 +560,15 @@ class SherpaOfflineSTTBackend:
 
                 speech_samples = np.array(speech_segment.samples, dtype=np.float32)
                 seg_dur_ms = int(len(speech_samples) / self.sample_rate * 1000)
-                seg_rms = float(np.sqrt(np.mean(speech_samples ** 2)))
+                seg_rms = float(np.sqrt(np.mean(speech_samples.astype(np.float64) ** 2)))
+                seg_min = float(np.min(speech_samples)) if len(speech_samples) > 0 else 0.0
+                seg_max = float(np.max(speech_samples)) if len(speech_samples) > 0 else 0.0
+                first5 = speech_samples[:5].tolist() if len(speech_samples) >= 5 else speech_samples.tolist()
                 logging.info(
-                    "🔍 SHERPA-OFFLINE VAD segment[%d] - samples=%d duration_ms=%d rms=%.6f min_required=%d",
-                    seg_idx, len(speech_samples), seg_dur_ms, seg_rms, self._min_audio_length,
+                    "🔍 SHERPA-OFFLINE VAD segment[%d] - samples=%d duration_ms=%d rms=%.6f "
+                    "min=%.6f max=%.6f first5=%s min_required=%d",
+                    seg_idx, len(speech_samples), seg_dur_ms, seg_rms,
+                    seg_min, seg_max, first5, self._min_audio_length,
                 )
                 seg_idx += 1
 
@@ -575,6 +580,10 @@ class SherpaOfflineSTTBackend:
                     continue
 
                 text = self._transcribe_segment(speech_samples)
+                logging.info(
+                    "🔍 SHERPA-OFFLINE transcribe seg[%d] result: '%s' (empty=%s)",
+                    seg_idx - 1, text or "", text is None or text == "",
+                )
                 if text:
                     texts.append(text)
 
