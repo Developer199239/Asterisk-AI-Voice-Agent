@@ -1246,6 +1246,7 @@ class LocalAIServer:
                     model_path=self.sherpa_model_path,
                     vad_model_path=vad_path,
                     sample_rate=PCM16_TARGET_RATE,
+                    preroll_ms=getattr(self.config, "stt_segment_preroll_ms", 0),
                 )
             else:
                 logging.info("🎤 STT backend: Sherpa-onnx (local streaming ASR)")
@@ -3342,6 +3343,14 @@ class LocalAIServer:
         is_offline = hasattr(self.sherpa_backend, "create_session_vad")
 
         if is_offline:
+            preroll_max = int(
+                PCM16_TARGET_RATE * 2 * (max(getattr(self.config, "stt_segment_preroll_ms", 0), 0) / 1000.0)
+            )
+            if preroll_max > 0:
+                session.stt_segment_preroll = (session.stt_segment_preroll + audio_bytes)[-preroll_max:]
+            else:
+                session.stt_segment_preroll = b""
+
             if session.sherpa_offline_vad is None:
                 session.sherpa_offline_vad = self.sherpa_backend.create_session_vad()
                 if session.sherpa_offline_vad is None:
@@ -3351,7 +3360,11 @@ class LocalAIServer:
                     "🔍 SHERPA-OFFLINE - New session VAD created call_id=%s",
                     session.call_id,
                 )
-            result = self.sherpa_backend.process_audio(session.sherpa_offline_vad, audio_bytes)
+            result = self.sherpa_backend.process_audio(
+                session.sherpa_offline_vad,
+                audio_bytes,
+                preroll_pcm16=session.stt_segment_preroll,
+            )
         else:
             # Ensure sherpa stream exists for this session
             if session.sherpa_stream is None:
@@ -3369,6 +3382,7 @@ class LocalAIServer:
 
             if result_type == "final":
                 logging.info("📝 STT RESULT - Sherpa final transcript: '%s'", text)
+                session.stt_segment_preroll = b""
                 updates.append({
                     "text": text,
                     "is_final": True,

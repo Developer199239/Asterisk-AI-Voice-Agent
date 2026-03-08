@@ -356,10 +356,13 @@ class SherpaOfflineSTTBackend:
         model_path: str,
         vad_model_path: str,
         sample_rate: int = PCM16_TARGET_RATE,
+        preroll_ms: int = 0,
     ):
         self.model_path = model_path
         self.vad_model_path = vad_model_path
         self.sample_rate = sample_rate
+        self.preroll_ms = max(0, int(preroll_ms))
+        self._preroll_samples = int(self.sample_rate * (self.preroll_ms / 1000.0))
         self.recognizer = None
         self._vad_config = None  # Stored for per-session VAD creation
         self._initialized = False
@@ -544,6 +547,43 @@ class SherpaOfflineSTTBackend:
             "first5": speech_samples[:5].tolist() if len(speech_samples) >= 5 else speech_samples.tolist(),
         }
 
+    def _pcm16_to_float32(self, pcm16_audio: bytes) -> np.ndarray:
+        if not pcm16_audio:
+            return np.array([], dtype=np.float32)
+        samples = np.frombuffer(pcm16_audio, dtype=np.int16)
+        return samples.astype(np.float32) / 32768.0
+
+    def _merge_preroll(
+        self,
+        speech_samples: np.ndarray,
+        preroll_pcm16: Optional[bytes],
+    ) -> np.ndarray:
+        if self._preroll_samples <= 0 or not preroll_pcm16:
+            return speech_samples
+
+        preroll_samples = self._pcm16_to_float32(preroll_pcm16)
+        if len(preroll_samples) == 0:
+            return speech_samples
+
+        # Keep only the requested preroll window and remove any exact overlap with
+        # the segment prefix so we don't duplicate audio when the VAD already kept
+        # part of the utterance.
+        preroll_samples = preroll_samples[-self._preroll_samples:]
+        max_overlap = min(len(preroll_samples), len(speech_samples))
+        overlap = 0
+        for candidate in range(max_overlap, 0, -1):
+            if np.allclose(preroll_samples[-candidate:], speech_samples[:candidate], atol=1e-4):
+                overlap = candidate
+                break
+
+        if overlap:
+            preroll_samples = preroll_samples[:-overlap]
+
+        if len(preroll_samples) == 0:
+            return speech_samples
+
+        return np.concatenate([preroll_samples, speech_samples]).astype(np.float32, copy=False)
+
     def _validate_segment_samples(self, speech_samples: np.ndarray) -> Optional[str]:
         if len(speech_samples) == 0:
             return "empty"
@@ -588,7 +628,12 @@ class SherpaOfflineSTTBackend:
             suffix,
         )
 
-    def process_audio(self, vad: Any, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
+    def process_audio(
+        self,
+        vad: Any,
+        pcm16_audio: bytes,
+        preroll_pcm16: Optional[bytes] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Feed audio through a per-session VAD; transcribe complete speech segments."""
         if not self._initialized or self.recognizer is None or vad is None:
             return None
@@ -623,6 +668,7 @@ class SherpaOfflineSTTBackend:
                 speech_segment = vad.front
                 speech_samples = self._copy_segment_samples(speech_segment)
                 vad.pop()
+                speech_samples = self._merge_preroll(speech_samples, preroll_pcm16)
                 validation_error = self._validate_segment_samples(speech_samples)
                 stats = self._segment_stats(speech_samples)
                 self._log_segment(seg_idx, stats, validation_error)

@@ -482,6 +482,7 @@ class TestSherpaOfflineBackendSessionVAD:
         backend = sb.SherpaOfflineSTTBackend(
             model_path="/fake/model",
             vad_model_path="/fake/vad.onnx",
+            preroll_ms=200,
         )
         backend.recognizer = _FakeOfflineRecognizer()
         backend._vad_config = "fake_config"
@@ -582,6 +583,44 @@ class TestSherpaOfflineBackendSessionVAD:
 
         assert result is None
         backend._transcribe_segment.assert_not_called()
+
+    def test_process_audio_prepends_preroll_without_duplicate_overlap(self):
+        backend = self._make_backend()
+        seg = [0.10, 0.20, 0.30, 0.40]
+        preroll = [0.01, 0.02, 0.10, 0.20]
+        vad = _FakeVAD(segments=[_FakeSpeechSegment(seg * 4000)])
+        captured = {}
+
+        def _capture(samples):
+            captured["samples"] = samples
+            return "hello world"
+
+        backend._transcribe_segment = _capture
+        preroll_pcm16 = (np.array(preroll * 1000, dtype=np.float32) * 32768.0).astype(np.int16).tobytes()
+
+        result = backend.process_audio(vad, b"\x00\x00" * 160, preroll_pcm16=preroll_pcm16)
+
+        assert result == {"type": "final", "text": "hello world"}
+        assert "samples" in captured
+        assert captured["samples"][0] == pytest.approx(0.01, abs=1e-3)
+        assert captured["samples"][1] == pytest.approx(0.02, abs=1e-3)
+        assert captured["samples"][2] == pytest.approx(0.10, abs=1e-3)
+
+    def test_process_audio_without_preroll_does_not_prepend_audio(self):
+        backend = self._make_backend()
+        speech = [0.10] * 16000
+        vad = _FakeVAD(segments=[_FakeSpeechSegment(speech)])
+        captured = {}
+
+        def _capture(samples):
+            captured["samples"] = samples
+            return "hello world"
+
+        backend._transcribe_segment = _capture
+        result = backend.process_audio(vad, b"\x00\x00" * 160, preroll_pcm16=b"")
+
+        assert result == {"type": "final", "text": "hello world"}
+        assert len(captured["samples"]) == len(speech)
 
     def test_initialize_rejects_streaming_model_in_offline_mode(self):
         sb = _load_stt_backends()
