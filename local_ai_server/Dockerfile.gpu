@@ -6,6 +6,7 @@ ARG INCLUDE_VOSK=true
 ARG INCLUDE_SHERPA=true
 ARG INCLUDE_FASTER_WHISPER=true
 ARG INCLUDE_WHISPER_CPP=true
+ARG INCLUDE_TONE=false
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false
@@ -61,6 +62,10 @@ RUN if [ "$INCLUDE_FASTER_WHISPER" = "true" ]; then \
 
 RUN if [ "$INCLUDE_WHISPER_CPP" = "true" ]; then \
         pip install --no-cache-dir pywhispercpp==1.2.0; \
+    fi
+
+RUN if [ "$INCLUDE_TONE" = "true" ]; then \
+        pip install --no-cache-dir "git+https://github.com/voicekit-team/T-one.git@3c5b6c015038173840e62cea99e10cdb1c759116#egg=tone"; \
     fi
 
 RUN if [ "$INCLUDE_PIPER" = "true" ]; then \

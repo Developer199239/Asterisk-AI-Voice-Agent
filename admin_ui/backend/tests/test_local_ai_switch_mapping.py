@@ -1,8 +1,12 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
+
+pytest.importorskip("fastapi")
 
 from api.local_ai import (  # noqa: E402
     SwitchModelRequest,
@@ -42,6 +46,23 @@ def test_ws_payload_whisper_cpp_uses_stt_model_path() -> None:
     }
 
 
+def test_ws_payload_tone_uses_tone_specific_fields() -> None:
+    req = SwitchModelRequest(
+        model_type="stt",
+        backend="tone",
+        model_path="/app/models/stt/t-one",
+        tone_decoder_type="beam_search",
+        tone_kenlm_path="/app/models/stt/t-one/kenlm.bin",
+    )
+    assert _build_local_ai_ws_switch_payload(req) == {
+        "type": "switch_model",
+        "stt_backend": "tone",
+        "tone_model_path": "/app/models/stt/t-one",
+        "tone_decoder_type": "beam_search",
+        "tone_kenlm_path": "/app/models/stt/t-one/kenlm.bin",
+    }
+
+
 def test_env_and_yaml_updates_whisper_cpp_persists_model_path() -> None:
     req = SwitchModelRequest(
         model_type="stt",
@@ -53,6 +74,24 @@ def test_env_and_yaml_updates_whisper_cpp_persists_model_path() -> None:
     assert env_updates["WHISPER_CPP_MODEL_PATH"] == "/app/models/stt/ggml-base.en.bin"
     assert yaml_updates["stt_backend"] == "whisper_cpp"
     assert yaml_updates["whisper_cpp_model_path"] == "/app/models/stt/ggml-base.en.bin"
+
+
+def test_env_and_yaml_updates_tone_persists_model_and_decoder() -> None:
+    req = SwitchModelRequest(
+        model_type="stt",
+        backend="tone",
+        model_path="/app/models/stt/t-one",
+        tone_decoder_type="greedy",
+        tone_kenlm_path="/app/models/stt/t-one/kenlm.bin",
+    )
+    env_updates, yaml_updates = _build_local_ai_env_and_yaml_updates(req)
+    assert env_updates["LOCAL_STT_BACKEND"] == "tone"
+    assert env_updates["TONE_MODEL_PATH"] == "/app/models/stt/t-one"
+    assert env_updates["TONE_DECODER_TYPE"] == "greedy"
+    assert env_updates["TONE_KENLM_PATH"] == "/app/models/stt/t-one/kenlm.bin"
+    assert yaml_updates["stt_backend"] == "tone"
+    assert yaml_updates["tone_model_path"] == "/app/models/stt/t-one"
+    assert yaml_updates["tone_decoder_type"] == "greedy"
 
 
 def test_ws_payload_kroko_infers_embedded_when_model_path_points_to_models_kroko() -> None:

@@ -147,6 +147,9 @@ class SwitchModelRequest(BaseModel):
     language: Optional[str] = None  # For Kroko STT
     faster_whisper_language: Optional[str] = None  # Language code for Faster-Whisper (e.g., en, ru)
     whisper_cpp_language: Optional[str] = None  # Language code for Whisper.cpp (e.g., en, ru)
+    tone_model_path: Optional[str] = None
+    tone_decoder_type: Optional[str] = None  # beam_search | greedy
+    tone_kenlm_path: Optional[str] = None
     # Kroko embedded tuning (optional)
     kroko_embedded: Optional[bool] = None
     kroko_port: Optional[int] = None
@@ -286,6 +289,17 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 if request.whisper_cpp_language:
                     env_updates["WHISPER_CPP_LANGUAGE"] = request.whisper_cpp_language
                     yaml_updates["whisper_cpp_language"] = request.whisper_cpp_language
+            elif request.backend == "tone":
+                tone_path = request.tone_model_path or request.model_path
+                if tone_path:
+                    env_updates["TONE_MODEL_PATH"] = tone_path
+                    yaml_updates["tone_model_path"] = tone_path
+                if request.tone_decoder_type:
+                    env_updates["TONE_DECODER_TYPE"] = request.tone_decoder_type
+                    yaml_updates["tone_decoder_type"] = request.tone_decoder_type
+                if request.tone_kenlm_path:
+                    env_updates["TONE_KENLM_PATH"] = request.tone_kenlm_path
+                    yaml_updates["tone_kenlm_path"] = request.tone_kenlm_path
             elif request.backend == "faster_whisper":
                 if request.model_path:
                     env_updates["FASTER_WHISPER_MODEL"] = request.model_path
@@ -366,6 +380,14 @@ def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[D
                 payload["stt_model_path"] = whisper_path
             if request.whisper_cpp_language:
                 payload["whisper_cpp_language"] = request.whisper_cpp_language
+        if request.backend == "tone":
+            tone_path = request.tone_model_path or request.model_path
+            if tone_path:
+                payload["tone_model_path"] = tone_path
+            if request.tone_decoder_type:
+                payload["tone_decoder_type"] = request.tone_decoder_type
+            if request.tone_kenlm_path:
+                payload["tone_kenlm_path"] = request.tone_kenlm_path
         if request.backend == "faster_whisper":
             if request.model_path:
                 payload["stt_config"] = {"model": request.model_path}
@@ -452,6 +474,7 @@ async def list_available_models():
         "vosk": [],
         "sherpa": [],
         "kroko": [],
+        "tone": [],
         "faster_whisper": [],
         "whisper_cpp": [],
     }
@@ -484,6 +507,15 @@ async def list_available_models():
                         path=f"/app/models/stt/{item}",
                         type="stt",
                         backend="sherpa",
+                        size_mb=get_dir_size_mb(item_path)
+                    ))
+                elif item.lower() in {"t-one", "tone"} or item.lower().startswith("t-one"):
+                    stt_models["tone"].append(ModelInfo(
+                        id=f"tone_{item}",
+                        name=f"T-one ({item})",
+                        path=f"/app/models/stt/{item}",
+                        type="stt",
+                        backend="tone",
                         size_mb=get_dir_size_mb(item_path)
                     ))
                 elif "kroko" in item.lower():
@@ -612,6 +644,7 @@ async def get_backend_capabilities():
             "sherpa": {"available": False, "reason": ""},
             "kroko_embedded": {"available": False, "reason": ""},
             "kroko_cloud": {"available": True, "reason": "Cloud API (requires KROKO_API_KEY)"},
+            "tone": {"available": False, "reason": ""},
             "faster_whisper": {"available": False, "reason": ""},
             "whisper_cpp": {"available": False, "reason": ""},
         },
@@ -654,6 +687,10 @@ async def get_backend_capabilities():
                     capabilities["stt"]["kroko_embedded"] = {"available": True, "reason": "Kroko binary installed"}
                 else:
                     capabilities["stt"]["kroko_embedded"]["reason"] = "Rebuild with INCLUDE_KROKO_EMBEDDED=true"
+                if server_caps.get("tone"):
+                    capabilities["stt"]["tone"] = {"available": True, "reason": "T-one installed"}
+                else:
+                    capabilities["stt"]["tone"]["reason"] = "Rebuild with INCLUDE_TONE=true"
                 if server_caps.get("faster_whisper"):
                     capabilities["stt"]["faster_whisper"] = {"available": True, "reason": "Faster-Whisper installed"}
                 else:
@@ -865,6 +902,9 @@ async def switch_model(request: SwitchModelRequest):
                 return stt.get("path") == request.model_path
             if request.backend == "whisper_cpp":
                 expected = request.whisper_cpp_model_path or request.model_path
+                return (not expected) or stt.get("path") == expected
+            if request.backend == "tone":
+                expected = request.tone_model_path or request.model_path
                 return (not expected) or stt.get("path") == expected
             if request.backend == "kroko":
                 if request.kroko_embedded is not None and bool(kroko.get("embedded")) != bool(request.kroko_embedded):
@@ -1229,6 +1269,7 @@ class RebuildRequest(BaseModel):
     include_whisper_cpp: bool = False
     include_melotts: bool = False
     include_kroko_embedded: bool = False
+    include_tone: bool = False
     # STT/TTS config to apply after rebuild
     stt_backend: Optional[str] = None
     stt_model: Optional[str] = None
@@ -1276,6 +1317,9 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         if sha:
             build_args.append("--build-arg")
             build_args.append(f"KROKO_SERVER_SHA256={sha}")
+    if request.include_tone:
+        build_args.append("--build-arg")
+        build_args.append("INCLUDE_TONE=true")
     
     if not build_args:
         return RebuildResponse(
@@ -1305,6 +1349,8 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         env_updates["INCLUDE_MELOTTS"] = "true"
     if request.include_kroko_embedded:
         env_updates["INCLUDE_KROKO_EMBEDDED"] = "true"
+    if request.include_tone:
+        env_updates["INCLUDE_TONE"] = "true"
     
     if request.stt_backend:
         env_updates["LOCAL_STT_BACKEND"] = request.stt_backend
@@ -1318,6 +1364,8 @@ async def rebuild_local_ai_server(request: RebuildRequest):
                 env_updates["KROKO_MODEL_PATH"] = request.stt_model
             elif request.stt_backend == "sherpa":
                 env_updates["SHERPA_MODEL_PATH"] = request.stt_model
+            elif request.stt_backend == "tone":
+                env_updates["TONE_MODEL_PATH"] = request.stt_model
             elif request.stt_backend == "vosk":
                 env_updates["LOCAL_STT_MODEL_PATH"] = request.stt_model
 

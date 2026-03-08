@@ -732,7 +732,7 @@ class _LegacyAudioProcessor:
 
 
 # Backends and audio processor are maintained in separate modules for easier development.
-from stt_backends import KrokoSTTBackend, SherpaONNXSTTBackend
+from stt_backends import KrokoSTTBackend, SherpaONNXSTTBackend, ToneSTTBackend
 from tts_backends import KokoroTTSBackend
 from audio_processor import AudioProcessor
 
@@ -772,6 +772,7 @@ class LocalAIServer:
         except Exception:
             self.runtime_mode = "full"
         self.sherpa_backend: Optional[Any] = None  # SherpaONNXSTTBackend or SherpaOfflineSTTBackend
+        self.tone_backend: Optional[ToneSTTBackend] = None
         self.faster_whisper_backend: Optional["FasterWhisperSTTBackend"] = None
         self.whisper_cpp_backend: Optional["WhisperCppSTTBackend"] = None
         self.kokoro_backend: Optional[KokoroTTSBackend] = None
@@ -1011,6 +1012,13 @@ class LocalAIServer:
         self.sherpa_model_path = config.sherpa_model_path
         self.sherpa_model_type = config.sherpa_model_type
         self.sherpa_vad_model_path = config.sherpa_vad_model_path
+        self.sherpa_vad_threshold = config.sherpa_vad_threshold
+        self.sherpa_vad_min_silence_ms = config.sherpa_vad_min_silence_ms
+        self.sherpa_vad_min_speech_ms = config.sherpa_vad_min_speech_ms
+        self.sherpa_offline_preroll_ms = config.sherpa_offline_preroll_ms
+        self.tone_model_path = config.tone_model_path
+        self.tone_decoder_type = config.tone_decoder_type
+        self.tone_kenlm_path = config.tone_kenlm_path
         self.faster_whisper_model = config.faster_whisper_model
         self.faster_whisper_device = config.faster_whisper_device
         self.faster_whisper_compute = config.faster_whisper_compute
@@ -1121,11 +1129,13 @@ class LocalAIServer:
             logging.info("✅ All models loaded successfully for MVP pipeline")
 
     async def _load_stt_model(self):
-        """Load STT model based on configured backend (vosk, kroko, sherpa, faster_whisper, or whisper_cpp)."""
+        """Load STT model based on configured backend."""
         if self.stt_backend == "kroko":
             await self._load_kroko_backend()
         elif self.stt_backend == "sherpa":
             await self._load_sherpa_backend()
+        elif self.stt_backend == "tone":
+            await self._load_tone_backend()
         elif self.stt_backend == "faster_whisper":
             await self._load_faster_whisper_backend()
         elif self.stt_backend == "whisper_cpp":
@@ -1271,6 +1281,32 @@ class LocalAIServer:
         except Exception as exc:
             logging.error("❌ Failed to initialize Sherpa STT backend (%s): %s", model_type, exc)
             self.sherpa_backend = None
+            self.startup_errors["stt"] = str(exc)
+            if self.fail_fast:
+                raise
+
+    async def _load_tone_backend(self):
+        """Initialize native T-one streaming CTC backend."""
+        try:
+            logging.info(
+                "🎤 STT backend: T-one (model=%s, decoder=%s, kenlm=%s)",
+                self.tone_model_path,
+                self.tone_decoder_type,
+                self.tone_kenlm_path or "(auto)",
+            )
+
+            self.tone_backend = ToneSTTBackend(
+                model_path=self.tone_model_path,
+                decoder_type=self.tone_decoder_type,
+                kenlm_path=self.tone_kenlm_path,
+            )
+            if not self.tone_backend.initialize():
+                raise RuntimeError("Failed to initialize T-one backend")
+
+            logging.info("✅ STT backend: T-one initialized")
+        except Exception as exc:
+            logging.error("❌ Failed to initialize T-one STT backend: %s", exc)
+            self.tone_backend = None
             self.startup_errors["stt"] = str(exc)
             if self.fail_fast:
                 raise
@@ -2136,6 +2172,12 @@ class LocalAIServer:
             except Exception as exc:  # pragma: no cover
                 logging.debug("Sherpa backend shutdown failed: %s", exc, exc_info=True)
             self.sherpa_backend = None
+        if self.tone_backend:
+            try:
+                self.tone_backend.shutdown()
+            except Exception as exc:  # pragma: no cover
+                logging.debug("T-one backend shutdown failed: %s", exc, exc_info=True)
+            self.tone_backend = None
         if self.kokoro_backend:
             try:
                 self.kokoro_backend.shutdown()
@@ -2956,6 +2998,8 @@ class LocalAIServer:
             session.fw_audio_buffer = b""
         if hasattr(session, "wcpp_audio_buffer"):
             session.wcpp_audio_buffer = b""
+        session.tone_buffer_8k = b""
+        session.tone_state = None
         # Sherpa offline: clear per-session VAD reference.
         # The actual flush + emit should happen via the async
         # _flush_sherpa_offline_trailing() *before* calling this method
@@ -3009,6 +3053,53 @@ class LocalAIServer:
         except Exception as exc:
             logging.debug("Sherpa offline trailing flush error: %s", exc)
 
+    async def _flush_tone_trailing(self, websocket, session: SessionContext) -> None:
+        """Flush pending T-one audio/state into final transcript events."""
+        if self.tone_backend is None or session.tone_state is None:
+            return
+        try:
+            pending = session.tone_buffer_8k or b""
+            if pending:
+                remainder = np.frombuffer(pending, dtype=np.int16).astype(np.int32)
+                if len(remainder) > 0:
+                    padded = np.pad(
+                        remainder,
+                        (0, max(0, ToneSTTBackend.CHUNK_SAMPLES - len(remainder))),
+                        mode="constant",
+                    )[: ToneSTTBackend.CHUNK_SAMPLES]
+                    self.tone_backend.process_audio(session.tone_state, padded)
+                session.tone_buffer_8k = b""
+
+            updates = self.tone_backend.finalize(session.tone_state)
+            if not updates:
+                return
+
+            meta = session.last_request_meta or {}
+            mode = meta.get("mode", "stt")
+            request_id = meta.get("request_id")
+            for update in updates:
+                final_text = (update.get("text") or "").strip()
+                if not final_text:
+                    continue
+                logging.info(
+                    "📝 T-ONE - Emitting trailing speech: '%s' call_id=%s mode=%s",
+                    final_text,
+                    session.call_id,
+                    mode,
+                )
+                await self._emit_stt_result(
+                    websocket,
+                    final_text,
+                    session,
+                    request_id,
+                    source_mode=mode,
+                    is_final=True,
+                    is_partial=False,
+                    confidence=update.get("confidence"),
+                )
+        except Exception as exc:
+            logging.debug("T-one trailing flush error: %s", exc)
+
     async def _close_kroko_session(self, session: SessionContext) -> None:
         """Close Kroko WebSocket connection for a session."""
         if session.kroko_ws and self.kroko_backend:
@@ -3037,6 +3128,8 @@ class LocalAIServer:
             return self.kroko_backend is not None
         if self.stt_backend == "sherpa":
             return self.sherpa_backend is not None
+        if self.stt_backend == "tone":
+            return self.tone_backend is not None
         if self.stt_backend == "faster_whisper":
             return self.faster_whisper_backend is not None
         if self.stt_backend == "whisper_cpp":
@@ -3056,6 +3149,8 @@ class LocalAIServer:
             return await self._process_stt_stream_kroko(session, audio_data, input_rate)
         elif self.stt_backend == "sherpa":
             return await self._process_stt_stream_sherpa(session, audio_data, input_rate)
+        elif self.stt_backend == "tone":
+            return await self._process_stt_stream_tone(session, audio_data, input_rate)
         elif self.stt_backend == "faster_whisper":
             return await self._process_stt_stream_faster_whisper(session, audio_data, input_rate)
         elif self.stt_backend == "whisper_cpp":
@@ -3403,6 +3498,52 @@ class LocalAIServer:
                         "is_partial": True,
                         "confidence": None,
                     })
+
+        return updates
+
+    async def _process_stt_stream_tone(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into T-one after resampling to 8kHz and framing into 300ms chunks."""
+        if not self.tone_backend:
+            logging.error("T-one backend not initialized")
+            return []
+
+        target_rate = ToneSTTBackend.SAMPLE_RATE
+        if input_rate != target_rate:
+            audio_bytes = await asyncio.to_thread(
+                self.audio_processor.resample_audio,
+                audio_data,
+                input_rate,
+                target_rate,
+                "raw",
+                "raw",
+            )
+        else:
+            audio_bytes = audio_data
+
+        try:
+            session.last_audio_at = asyncio.get_running_loop().time()
+        except RuntimeError:
+            session.last_audio_at = 0.0
+
+        if session.tone_state is None:
+            session.tone_state = self.tone_backend.create_session_state()
+            if session.tone_state is None:
+                logging.error("❌ T-ONE - Failed to create session state")
+                return []
+
+        session.tone_buffer_8k = (session.tone_buffer_8k or b"") + audio_bytes
+        chunk_bytes = ToneSTTBackend.CHUNK_SAMPLES * 2
+        updates: List[Dict[str, Any]] = []
+        while len(session.tone_buffer_8k) >= chunk_bytes:
+            chunk = session.tone_buffer_8k[:chunk_bytes]
+            session.tone_buffer_8k = session.tone_buffer_8k[chunk_bytes:]
+            int32_samples = np.frombuffer(chunk, dtype=np.int16).astype(np.int32)
+            updates.extend(self.tone_backend.process_audio(session.tone_state, int32_samples))
 
         return updates
 
@@ -4213,6 +4354,7 @@ class LocalAIServer:
     ) -> None:
         # Sherpa offline: flush any trailing speech before we suppress STT.
         await self._flush_sherpa_offline_trailing(websocket, session)
+        await self._flush_tone_trailing(websocket, session)
         # Whisper echo-guard: when Local AI Server is emitting TTS audio, it can be
         # re-captured via telephony mixing/echo and immediately re-transcribed by
         # Whisper-family STT, causing talk-loops. We proactively suppress STT for

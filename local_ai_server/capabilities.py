@@ -13,6 +13,7 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
         "kroko_embedded": False,
         "faster_whisper": False,
         "whisper_cpp": False,
+        "tone": False,
         "piper": False,
         "kokoro": False,
         "melotts": False,
@@ -44,6 +45,12 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
     try:
         from pywhispercpp.model import Model  # noqa: F401
         capabilities["whisper_cpp"] = True
+    except ImportError:
+        pass
+
+    try:
+        from tone.pipeline import StreamingCTCPipeline  # noqa: F401
+        capabilities["tone"] = True
     except ImportError:
         pass
 

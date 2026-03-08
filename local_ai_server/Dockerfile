@@ -11,6 +11,7 @@ ARG INCLUDE_VOSK=true
 ARG INCLUDE_SHERPA=true
 ARG INCLUDE_FASTER_WHISPER=false
 ARG INCLUDE_WHISPER_CPP=false
+ARG INCLUDE_TONE=false
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false
@@ -22,7 +23,7 @@ WORKDIR /usr/src/app
 # Some optional backends require native builds (e.g., llama-cpp-python) or git installs (MeloTTS).
 # Install build tooling only when those backends are enabled to keep CI "ci-min" builds lean.
 RUN apt-get -o Acquire::Retries=5 update && \
-    if [ "$INCLUDE_LLAMA" = "true" ] || [ "$INCLUDE_MELOTTS" = "true" ] || [ "$INCLUDE_WHISPER_CPP" = "true" ]; then \
+    if [ "$INCLUDE_LLAMA" = "true" ] || [ "$INCLUDE_MELOTTS" = "true" ] || [ "$INCLUDE_WHISPER_CPP" = "true" ] || [ "$INCLUDE_TONE" = "true" ]; then \
         apt-get install -y --no-install-recommends \
             build-essential \
             cmake \
@@ -62,6 +63,11 @@ RUN if [ "$INCLUDE_FASTER_WHISPER" = "true" ]; then \
 RUN if [ "$INCLUDE_WHISPER_CPP" = "true" ]; then \
         echo "📦 Installing Whisper.cpp (pywhispercpp)..." && \
         pip install --no-cache-dir pywhispercpp==1.2.0; \
+    fi
+
+RUN if [ "$INCLUDE_TONE" = "true" ]; then \
+        echo "📦 Installing T-one STT..." && \
+        pip install --no-cache-dir "git+https://github.com/voicekit-team/T-one.git@3c5b6c015038173840e62cea99e10cdb1c759116#egg=tone"; \
     fi
 
 RUN if [ "$INCLUDE_PIPER" = "true" ]; then \

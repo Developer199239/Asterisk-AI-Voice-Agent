@@ -27,6 +27,9 @@ _STT_CONFIG_MAP = {
     "whisper_cpp_language": "whisper_cpp_language",
     "sherpa_model_type": "sherpa_model_type",
     "sherpa_vad_model_path": "sherpa_vad_model_path",
+    "tone_model_path": "tone_model_path",
+    "tone_decoder_type": "tone_decoder_type",
+    "tone_kenlm_path": "tone_kenlm_path",
 }
 
 _TTS_CONFIG_MAP = {
@@ -110,7 +113,7 @@ def apply_switch_model_request(
 
     if "stt_backend" in data:
         backend = (data["stt_backend"] or "").strip().lower()
-        if backend in ("vosk", "sherpa", "kroko", "faster_whisper", "whisper_cpp"):
+        if backend in ("vosk", "sherpa", "kroko", "faster_whisper", "whisper_cpp", "tone"):
             new_config = replace(new_config, stt_backend=backend)
             changed.append(f"stt_backend={backend}")
 
@@ -125,6 +128,9 @@ def apply_switch_model_request(
         elif new_config.stt_backend == "whisper_cpp":
             new_config = replace(new_config, whisper_cpp_model_path=stt_path)
             changed.append(f"whisper_cpp_model_path={os.path.basename(stt_path)}")
+        elif new_config.stt_backend == "tone":
+            new_config = replace(new_config, tone_model_path=stt_path)
+            changed.append(f"tone_model_path={os.path.basename(stt_path)}")
         else:
             new_config = replace(new_config, stt_model_path=stt_path)
             changed.append(f"stt_model_path={os.path.basename(stt_path)}")
@@ -143,6 +149,11 @@ def apply_switch_model_request(
         value = data["whisper_cpp_model_path"]
         new_config = replace(new_config, whisper_cpp_model_path=value)
         changed.append(f"whisper_cpp_model_path={os.path.basename(value)}")
+
+    if "tone_model_path" in data:
+        value = data["tone_model_path"]
+        new_config = replace(new_config, tone_model_path=value)
+        changed.append(f"tone_model_path={os.path.basename(value)}")
 
     if "kroko_language" in data:
         value = data["kroko_language"]
@@ -169,6 +180,17 @@ def apply_switch_model_request(
         value = str(data["sherpa_vad_model_path"])
         new_config = replace(new_config, sherpa_vad_model_path=value)
         changed.append(f"sherpa_vad_model_path={os.path.basename(value)}")
+
+    if "tone_decoder_type" in data:
+        value = str(data["tone_decoder_type"]).strip().lower()
+        if value in ("beam_search", "greedy"):
+            new_config = replace(new_config, tone_decoder_type=value)
+            changed.append(f"tone_decoder_type={value}")
+
+    if "tone_kenlm_path" in data:
+        value = str(data["tone_kenlm_path"])
+        new_config = replace(new_config, tone_kenlm_path=value)
+        changed.append(f"tone_kenlm_path={os.path.basename(value)}")
 
     if "kroko_url" in data:
         new_config = replace(new_config, kroko_url=data["kroko_url"])

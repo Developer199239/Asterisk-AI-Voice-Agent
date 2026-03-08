@@ -9,6 +9,8 @@ def _stt_language(server) -> Optional[str]:
     backend = server.stt_backend
     if backend == "kroko":
         return getattr(server, "kroko_language", None)
+    if backend == "tone":
+        return "ru"
     if backend == "faster_whisper":
         return getattr(server, "faster_whisper_language", None)
     if backend == "whisper_cpp":
@@ -36,6 +38,12 @@ def _stt_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
         path = server.sherpa_model_path
         model_type = getattr(server, "sherpa_model_type", "online")
         display = f"Sherpa ({os.path.basename(server.sherpa_model_path)}, {model_type})"
+        return loaded, path, display
+    if server.stt_backend == "tone":
+        loaded = server.mock_models or getattr(server, "tone_backend", None) is not None
+        path = getattr(server, "tone_model_path", None)
+        decoder = getattr(server, "tone_decoder_type", "beam_search")
+        display = f"T-one ({os.path.basename(path or 't-one')}, {decoder})"
         return loaded, path, display
     if server.stt_backend == "faster_whisper":
         loaded = server.mock_models or server.faster_whisper_backend is not None
@@ -140,6 +148,7 @@ def build_status_response(server) -> Dict[str, Any]:
                 "display": stt_display,
                 "language": _stt_language(server),
                 "sherpa_model_type": getattr(server, "sherpa_model_type", None) if server.stt_backend == "sherpa" else None,
+                "tone_decoder_type": getattr(server, "tone_decoder_type", None) if server.stt_backend == "tone" else None,
             },
             "llm": {
                 "loaded": llm_loaded,

@@ -571,6 +571,16 @@ Models are **not bundled** in Docker images. Download them via:
   - `SHERPA_OFFLINE_DEBUG_SEGMENTS=true` for targeted diagnostics only
 - See [Sherpa-ONNX Models](https://github.com/k2-fsa/sherpa-onnx/releases)
 
+**T-one** (Russian telephony streaming CTC):
+- Requires rebuild: `docker compose build --build-arg INCLUDE_TONE=true local_ai_server`
+- Set `LOCAL_STT_BACKEND=tone`
+- Provide:
+  - `TONE_MODEL_PATH=/app/models/stt/t-one`
+  - `TONE_DECODER_TYPE=beam_search` or `greedy`
+  - `TONE_KENLM_PATH=/app/models/stt/t-one/kenlm.bin` when using `beam_search`
+- T-one expects 8 kHz audio internally; `local_ai_server` handles 16 kHz to 8 kHz conversion and 300 ms chunk framing.
+- Recommended for Russian community validation when you want the upstream T-one path instead of Sherpa/Whisper.
+
 **Kroko Embedded** (optional, requires rebuild):
 - `docker compose build --build-arg INCLUDE_KROKO_EMBEDDED=true local_ai_server`
 - Models: Download from Admin UI → Models Page

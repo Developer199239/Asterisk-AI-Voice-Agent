@@ -36,6 +36,9 @@ class LocalAIConfig:
     sherpa_vad_min_silence_ms: int = 700
     sherpa_vad_min_speech_ms: int = 200
     sherpa_offline_preroll_ms: int = 350
+    tone_model_path: str = "/app/models/stt/t-one"
+    tone_decoder_type: str = "beam_search"
+    tone_kenlm_path: str = ""
     faster_whisper_model: str = "base"
     faster_whisper_device: str = "cpu"
     faster_whisper_compute: str = "int8"
@@ -171,6 +174,9 @@ class LocalAIConfig:
             sherpa_vad_min_silence_ms=int(os.getenv("SHERPA_VAD_MIN_SILENCE_MS", "700")),
             sherpa_vad_min_speech_ms=int(os.getenv("SHERPA_VAD_MIN_SPEECH_MS", "200")),
             sherpa_offline_preroll_ms=int(os.getenv("SHERPA_OFFLINE_PREROLL_MS", "350")),
+            tone_model_path=os.getenv("TONE_MODEL_PATH", "/app/models/stt/t-one"),
+            tone_decoder_type=(os.getenv("TONE_DECODER_TYPE", "beam_search") or "beam_search").strip().lower(),
+            tone_kenlm_path=os.getenv("TONE_KENLM_PATH", ""),
             faster_whisper_model=os.getenv("FASTER_WHISPER_MODEL", "base"),
             faster_whisper_device=os.getenv("FASTER_WHISPER_DEVICE", "cpu"),
             faster_whisper_compute=os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8"),

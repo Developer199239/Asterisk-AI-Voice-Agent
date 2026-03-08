@@ -1143,6 +1143,7 @@ const EnvPage = () => {
                                 { value: 'vosk', label: 'Vosk (Local)' },
                                 { value: 'kroko', label: 'Kroko (Cloud/Embedded)' },
                                 { value: 'sherpa', label: 'Sherpa-ONNX (Local)' },
+                                { value: 'tone', label: `T-one${localCaps && !localCaps.stt?.tone?.available ? ' (requires rebuild)' : ''}` },
                                 { value: 'faster_whisper', label: `Faster Whisper${localCaps && !localCaps.stt?.faster_whisper?.available ? ' (requires rebuild)' : ''}` },
                                 { value: 'whisper_cpp', label: `Whisper.cpp (GGML)${localCaps && !localCaps.stt?.whisper_cpp?.available ? ' (requires rebuild)' : ''}` },
                             ]}
@@ -1333,6 +1334,35 @@ const EnvPage = () => {
                                             tooltip="Audio padding retained before VAD start so Sherpa offline does not clip the beginning of utterances."
                                         />
                                     </>
+                                )}
+                            </>
+                        )}
+
+                        {sttBackend === 'tone' && (
+                            <>
+                                <FormInput
+                                    label="T-one Model Path"
+                                    value={env['TONE_MODEL_PATH'] || '/app/models/stt/t-one'}
+                                    onChange={(e) => updateEnv('TONE_MODEL_PATH', e.target.value)}
+                                    tooltip="Path to the T-one model directory containing model.onnx."
+                                />
+                                <FormSelect
+                                    label="T-one Decoder"
+                                    value={env['TONE_DECODER_TYPE'] || 'beam_search'}
+                                    onChange={(e) => updateEnv('TONE_DECODER_TYPE', e.target.value)}
+                                    options={[
+                                        { value: 'beam_search', label: 'Beam Search' },
+                                        { value: 'greedy', label: 'Greedy' },
+                                    ]}
+                                    tooltip="Beam search uses KenLM and is recommended for Russian quality. Greedy is lighter but less accurate."
+                                />
+                                {(env['TONE_DECODER_TYPE'] || 'beam_search') === 'beam_search' && (
+                                    <FormInput
+                                        label="T-one KenLM Path"
+                                        value={env['TONE_KENLM_PATH'] || '/app/models/stt/t-one/kenlm.bin'}
+                                        onChange={(e) => updateEnv('TONE_KENLM_PATH', e.target.value)}
+                                        tooltip="Path to kenlm.bin used for beam search decoding."
+                                    />
                                 )}
                             </>
                         )}
@@ -1981,6 +2011,13 @@ const EnvPage = () => {
                                         description="Whisper.cpp STT (requires local ggml .bin model file)"
                                         checked={isTrue(env['INCLUDE_WHISPER_CPP'])}
                                         onChange={(e) => updateEnv('INCLUDE_WHISPER_CPP', e.target.checked ? 'true' : 'false')}
+                                    />
+                                    <FormSwitch
+                                        id="include-tone"
+                                        label="T-one"
+                                        description="Russian telephony STT with ONNX + pyctcdecode + KenLM"
+                                        checked={isTrue(env['INCLUDE_TONE'])}
+                                        onChange={(e) => updateEnv('INCLUDE_TONE', e.target.checked ? 'true' : 'false')}
                                     />
                                 </div>
                                 

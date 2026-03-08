@@ -782,6 +782,177 @@ class SherpaOfflineSTTBackend:
         logging.info("🛑 SHERPA-OFFLINE - Recognizer shutdown")
 
 
+class ToneSTTBackend:
+    """
+    Native T-one streaming CTC backend.
+
+    T-one expects:
+    - 8 kHz mono audio
+    - 300 ms chunks (2400 samples)
+    - int32 samples in the int16 range
+    - per-session streaming state
+    """
+
+    CHUNK_SAMPLES = 2400
+    SAMPLE_RATE = 8000
+
+    def __init__(
+        self,
+        model_path: str,
+        decoder_type: str = "beam_search",
+        kenlm_path: str = "",
+    ):
+        self.model_path = model_path
+        self.decoder_type = (decoder_type or "beam_search").strip().lower()
+        self.kenlm_path = kenlm_path or ""
+        self.pipeline = None
+        self._initialized = False
+
+    def initialize(self) -> bool:
+        try:
+            from tone.decoder import BeamSearchCTCDecoder, DecoderType
+            from tone.logprob_splitter import StreamingLogprobSplitter
+            from tone.onnx_wrapper import StreamingCTCModel
+            from tone.pipeline import StreamingCTCPipeline
+
+            model_file = os.path.join(self.model_path, "model.onnx")
+            if not os.path.isfile(model_file):
+                logging.error("❌ T-ONE - model.onnx not found at %s", model_file)
+                return False
+
+            if self.decoder_type not in {"beam_search", "greedy"}:
+                logging.error("❌ T-ONE - Unsupported decoder type: %s", self.decoder_type)
+                return False
+
+            if self.decoder_type == "beam_search":
+                kenlm_path = self.kenlm_path or os.path.join(self.model_path, "kenlm.bin")
+                if not os.path.isfile(kenlm_path):
+                    logging.error(
+                        "❌ T-ONE - beam_search requires kenlm.bin at %s (set TONE_KENLM_PATH if stored elsewhere)",
+                        kenlm_path,
+                    )
+                    return False
+                decoder = BeamSearchCTCDecoder.from_local(kenlm_path)
+                self.kenlm_path = kenlm_path
+            else:
+                decoder = None
+
+            model = StreamingCTCModel.from_local(model_file)
+            splitter = StreamingLogprobSplitter()
+            if decoder is None:
+                from tone.decoder import GreedyCTCDecoder
+
+                decoder = GreedyCTCDecoder()
+
+            self.pipeline = StreamingCTCPipeline(model, splitter, decoder)
+            self._initialized = True
+            logging.info(
+                "✅ T-ONE - Initialized (model=%s decoder=%s kenlm=%s)",
+                self.model_path,
+                self.decoder_type,
+                self.kenlm_path or "(not used)",
+            )
+            return True
+        except ImportError:
+            logging.error("❌ T-ONE - tone package not installed")
+            return False
+        except Exception as exc:
+            logging.error("❌ T-ONE - Failed to initialize: %s", exc)
+            return False
+
+    def create_session_state(self) -> Optional[Dict[str, Any]]:
+        if not self._initialized or self.pipeline is None:
+            return None
+        return {"pipeline_state": None, "last_partial": ""}
+
+    def _decode_partial_text(self, state: Optional[Dict[str, Any]]) -> str:
+        if not state or self.pipeline is None:
+            return ""
+        try:
+            pipeline_state = state.get("pipeline_state")
+            if not pipeline_state:
+                return ""
+            logprob_state = pipeline_state[1]
+            past_logprobs = getattr(logprob_state, "past_logprobs", None)
+            if past_logprobs is None or len(past_logprobs) == 0:
+                return ""
+            text = self.pipeline.decoder.forward(past_logprobs)
+            return (text or "").strip()
+        except Exception:
+            return ""
+
+    def process_audio(self, state: Dict[str, Any], chunk_samples: np.ndarray) -> List[Dict[str, Any]]:
+        if not self._initialized or self.pipeline is None:
+            return []
+        if chunk_samples.shape != (self.CHUNK_SAMPLES,):
+            raise ValueError(
+                f"T-one expects {self.CHUNK_SAMPLES} samples per chunk, got {chunk_samples.shape}"
+            )
+
+        phrases, next_state = self.pipeline.forward(chunk_samples, state.get("pipeline_state"))
+        state["pipeline_state"] = next_state
+
+        updates: List[Dict[str, Any]] = []
+        for phrase in phrases:
+            text = (getattr(phrase, "text", "") or "").strip()
+            if not text:
+                continue
+            updates.append(
+                {
+                    "text": text,
+                    "is_final": True,
+                    "is_partial": False,
+                    "confidence": None,
+                }
+            )
+            state["last_partial"] = ""
+
+        partial_text = self._decode_partial_text(state)
+        last_partial = (state.get("last_partial") or "").strip()
+        if partial_text and partial_text != last_partial:
+            state["last_partial"] = partial_text
+            updates.append(
+                {
+                    "text": partial_text,
+                    "is_final": False,
+                    "is_partial": True,
+                    "confidence": None,
+                }
+            )
+
+        return updates
+
+    def finalize(self, state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not self._initialized or self.pipeline is None or not state:
+            return []
+        try:
+            phrases, next_state = self.pipeline.finalize(state.get("pipeline_state"))
+            state["pipeline_state"] = next_state
+            state["last_partial"] = ""
+            updates: List[Dict[str, Any]] = []
+            for phrase in phrases:
+                text = (getattr(phrase, "text", "") or "").strip()
+                if not text:
+                    continue
+                updates.append(
+                    {
+                        "text": text,
+                        "is_final": True,
+                        "is_partial": False,
+                        "confidence": None,
+                    }
+                )
+            return updates
+        except Exception as exc:
+            logging.error("❌ T-ONE - Finalize failed: %s", exc)
+            return []
+
+    def shutdown(self) -> None:
+        self.pipeline = None
+        self._initialized = False
+        logging.info("🛑 T-ONE - Pipeline shutdown")
+
+
 class FasterWhisperSTTBackend:
     """
     Faster-Whisper STT backend using CTranslate2-optimized Whisper.

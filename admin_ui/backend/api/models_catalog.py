@@ -237,6 +237,20 @@ KROKO_STT_MODELS = [
      "supported_languages": ["en-US", "nl-NL", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-PT", "bg-BG", "sv-SE", "tr-TR", "he-IL"]},
 ]
 
+TONE_STT_MODELS = [
+    {"id": "tone_ru", "name": "T-one Russian (Streaming CTC)", "language": "ru-RU", "region": "europe", "backend": "tone",
+     "size_mb": 460, "size_display": "460 MB", "model_path": "t-one",
+     "download_url": "https://huggingface.co/t-tech/T-one/resolve/main/model.onnx",
+     "recommended": True,
+     "description": "Native T-one acoustic model for Russian telephony streaming.",
+     "note": "Requires INCLUDE_TONE=true in Docker build. Pair with kenlm.bin for beam_search."},
+    {"id": "tone_ru_kenlm", "name": "T-one Russian KenLM", "language": "ru-RU", "region": "europe", "backend": "tone",
+     "size_mb": 140, "size_display": "140 MB", "model_path": "t-one/kenlm.bin",
+     "download_url": "https://huggingface.co/t-tech/T-one/resolve/main/kenlm.bin",
+     "description": "Optional KenLM language model for beam search decoding.",
+     "note": "Set TONE_KENLM_PATH when using TONE_DECODER_TYPE=beam_search."},
+]
+
 FASTER_WHISPER_STT_MODELS = [
     # Faster-Whisper models auto-download from HuggingFace on first use
     # Requires: docker build --build-arg INCLUDE_FASTER_WHISPER=true
@@ -688,7 +702,7 @@ LLM_MODELS = [
 def get_full_catalog():
     """Get the complete model catalog organized by type."""
     return {
-        "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + FASTER_WHISPER_STT_MODELS + WHISPER_CPP_STT_MODELS,
+        "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + TONE_STT_MODELS + FASTER_WHISPER_STT_MODELS + WHISPER_CPP_STT_MODELS,
         "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS + MELOTTS_MODELS,
         "llm": LLM_MODELS,
     }
