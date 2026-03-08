@@ -510,13 +510,18 @@ class SherpaOfflineSTTBackend:
         stream.accept_waveform(self.sample_rate, speech_samples)
 
         if getattr(self, '_is_streaming_model', False):
+            # OnlineRecognizer: signal end-of-audio, decode all frames, get result
             stream.input_finished()
             while self.recognizer.is_ready(stream):
                 self.recognizer.decode_stream(stream)
+            result = self.recognizer.get_result(stream)
+            if isinstance(result, str):
+                return result.strip()
+            return result.text.strip() if hasattr(result, "text") and result.text else ""
         else:
+            # OfflineRecognizer: single decode call, result on stream
             self.recognizer.decode_stream(stream)
-
-        return stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+            return stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
 
     def process_audio(self, vad: Any, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
         """Feed audio through a per-session VAD; transcribe complete speech segments."""
