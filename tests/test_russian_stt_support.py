@@ -73,6 +73,26 @@ class TestConfigNewFields:
         cfg = self._load_config(monkeypatch, SHERPA_VAD_MODEL_PATH="/app/models/vad/silero.onnx")
         assert cfg.sherpa_vad_model_path == "/app/models/vad/silero.onnx"
 
+    def test_sherpa_offline_tuning_defaults(self, monkeypatch):
+        cfg = self._load_config(monkeypatch)
+        assert cfg.sherpa_vad_threshold == pytest.approx(0.35)
+        assert cfg.sherpa_vad_min_silence_ms == 700
+        assert cfg.sherpa_vad_min_speech_ms == 200
+        assert cfg.sherpa_offline_preroll_ms == 350
+
+    def test_sherpa_offline_tuning_reads_env(self, monkeypatch):
+        cfg = self._load_config(
+            monkeypatch,
+            SHERPA_VAD_THRESHOLD="0.42",
+            SHERPA_VAD_MIN_SILENCE_MS="850",
+            SHERPA_VAD_MIN_SPEECH_MS="300",
+            SHERPA_OFFLINE_PREROLL_MS="500",
+        )
+        assert cfg.sherpa_vad_threshold == pytest.approx(0.42)
+        assert cfg.sherpa_vad_min_silence_ms == 850
+        assert cfg.sherpa_vad_min_speech_ms == 300
+        assert cfg.sherpa_offline_preroll_ms == 500
+
 
 # ---------------------------------------------------------------------------
 # Control-plane tests
@@ -482,7 +502,10 @@ class TestSherpaOfflineBackendSessionVAD:
         backend = sb.SherpaOfflineSTTBackend(
             model_path="/fake/model",
             vad_model_path="/fake/vad.onnx",
-            preroll_ms=200,
+            preroll_ms=350,
+            vad_threshold=0.35,
+            vad_min_silence_ms=700,
+            vad_min_speech_ms=200,
         )
         backend.recognizer = _FakeOfflineRecognizer()
         backend._vad_config = "fake_config"
@@ -499,6 +522,13 @@ class TestSherpaOfflineBackendSessionVAD:
             vad1 = backend.create_session_vad()
             vad2 = backend.create_session_vad()
             assert vad1 is not vad2
+
+    def test_backend_stores_offline_tuning(self):
+        backend = self._make_backend()
+        assert backend.preroll_ms == 350
+        assert backend.vad_threshold == pytest.approx(0.35)
+        assert backend.vad_min_silence_ms == 700
+        assert backend.vad_min_speech_ms == 200
 
     def test_process_audio_uses_provided_vad(self):
         backend = self._make_backend()

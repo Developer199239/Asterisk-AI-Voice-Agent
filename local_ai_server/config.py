@@ -32,6 +32,10 @@ class LocalAIConfig:
     sherpa_model_path: str = "/app/models/stt/sherpa"
     sherpa_model_type: str = "online"
     sherpa_vad_model_path: str = ""
+    sherpa_vad_threshold: float = 0.35
+    sherpa_vad_min_silence_ms: int = 700
+    sherpa_vad_min_speech_ms: int = 200
+    sherpa_offline_preroll_ms: int = 350
     faster_whisper_model: str = "base"
     faster_whisper_device: str = "cpu"
     faster_whisper_compute: str = "int8"
@@ -163,6 +167,10 @@ class LocalAIConfig:
             sherpa_model_path=os.getenv("SHERPA_MODEL_PATH", "/app/models/stt/sherpa"),
             sherpa_model_type=(os.getenv("SHERPA_MODEL_TYPE", "online") or "online").strip().lower(),
             sherpa_vad_model_path=os.getenv("SHERPA_VAD_MODEL_PATH", ""),
+            sherpa_vad_threshold=float(os.getenv("SHERPA_VAD_THRESHOLD", "0.35")),
+            sherpa_vad_min_silence_ms=int(os.getenv("SHERPA_VAD_MIN_SILENCE_MS", "700")),
+            sherpa_vad_min_speech_ms=int(os.getenv("SHERPA_VAD_MIN_SPEECH_MS", "200")),
+            sherpa_offline_preroll_ms=int(os.getenv("SHERPA_OFFLINE_PREROLL_MS", "350")),
             faster_whisper_model=os.getenv("FASTER_WHISPER_MODEL", "base"),
             faster_whisper_device=os.getenv("FASTER_WHISPER_DEVICE", "cpu"),
             faster_whisper_compute=os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8"),

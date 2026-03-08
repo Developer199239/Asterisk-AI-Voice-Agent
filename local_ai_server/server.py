@@ -1246,7 +1246,10 @@ class LocalAIServer:
                     model_path=self.sherpa_model_path,
                     vad_model_path=vad_path,
                     sample_rate=PCM16_TARGET_RATE,
-                    preroll_ms=getattr(self.config, "stt_segment_preroll_ms", 0),
+                    preroll_ms=getattr(self.config, "sherpa_offline_preroll_ms", 0),
+                    vad_threshold=getattr(self.config, "sherpa_vad_threshold", 0.5),
+                    vad_min_silence_ms=getattr(self.config, "sherpa_vad_min_silence_ms", 500),
+                    vad_min_speech_ms=getattr(self.config, "sherpa_vad_min_speech_ms", 250),
                 )
             else:
                 logging.info("🎤 STT backend: Sherpa-onnx (local streaming ASR)")
@@ -3344,7 +3347,7 @@ class LocalAIServer:
 
         if is_offline:
             preroll_max = int(
-                PCM16_TARGET_RATE * 2 * (max(getattr(self.config, "stt_segment_preroll_ms", 0), 0) / 1000.0)
+                PCM16_TARGET_RATE * 2 * (max(getattr(self.config, "sherpa_offline_preroll_ms", 0), 0) / 1000.0)
             )
             if preroll_max > 0:
                 session.stt_segment_preroll = (session.stt_segment_preroll + audio_bytes)[-preroll_max:]

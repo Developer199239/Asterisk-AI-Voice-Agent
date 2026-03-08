@@ -1301,12 +1301,38 @@ const EnvPage = () => {
                                         : 'Path to a streaming Sherpa model directory.'}
                                 />
                                 {(env['SHERPA_MODEL_TYPE'] || 'online') === 'offline' && (
-                                    <FormInput
-                                        label="Sherpa VAD Model Path"
-                                        value={env['SHERPA_VAD_MODEL_PATH'] || '/app/models/vad/silero_vad.onnx'}
-                                        onChange={(e) => updateEnv('SHERPA_VAD_MODEL_PATH', e.target.value)}
-                                        tooltip="Path to the Silero VAD ONNX model used to segment speech before offline decoding."
-                                    />
+                                    <>
+                                        <FormInput
+                                            label="Sherpa VAD Model Path"
+                                            value={env['SHERPA_VAD_MODEL_PATH'] || '/app/models/vad/silero_vad.onnx'}
+                                            onChange={(e) => updateEnv('SHERPA_VAD_MODEL_PATH', e.target.value)}
+                                            tooltip="Path to the Silero VAD ONNX model used to segment speech before offline decoding."
+                                        />
+                                        <FormInput
+                                            label="Sherpa VAD Threshold"
+                                            value={env['SHERPA_VAD_THRESHOLD'] || '0.35'}
+                                            onChange={(e) => updateEnv('SHERPA_VAD_THRESHOLD', e.target.value)}
+                                            tooltip="Speech sensitivity for Sherpa offline Silero VAD. Lower values hear softer speech earlier but can admit more noise."
+                                        />
+                                        <FormInput
+                                            label="Sherpa Min Silence (ms)"
+                                            value={env['SHERPA_VAD_MIN_SILENCE_MS'] || '700'}
+                                            onChange={(e) => updateEnv('SHERPA_VAD_MIN_SILENCE_MS', e.target.value)}
+                                            tooltip="Silence required before Sherpa offline closes a segment. Higher values reduce short-phrase fragmentation."
+                                        />
+                                        <FormInput
+                                            label="Sherpa Min Speech (ms)"
+                                            value={env['SHERPA_VAD_MIN_SPEECH_MS'] || '200'}
+                                            onChange={(e) => updateEnv('SHERPA_VAD_MIN_SPEECH_MS', e.target.value)}
+                                            tooltip="Minimum voiced duration before Sherpa offline accepts a speech segment."
+                                        />
+                                        <FormInput
+                                            label="Sherpa Offline Preroll (ms)"
+                                            value={env['SHERPA_OFFLINE_PREROLL_MS'] || '350'}
+                                            onChange={(e) => updateEnv('SHERPA_OFFLINE_PREROLL_MS', e.target.value)}
+                                            tooltip="Audio padding retained before VAD start so Sherpa offline does not clip the beginning of utterances."
+                                        />
+                                    </>
                                 )}
                             </>
                         )}

@@ -357,12 +357,18 @@ class SherpaOfflineSTTBackend:
         vad_model_path: str,
         sample_rate: int = PCM16_TARGET_RATE,
         preroll_ms: int = 0,
+        vad_threshold: float = 0.5,
+        vad_min_silence_ms: int = 500,
+        vad_min_speech_ms: int = 250,
     ):
         self.model_path = model_path
         self.vad_model_path = vad_model_path
         self.sample_rate = sample_rate
         self.preroll_ms = max(0, int(preroll_ms))
         self._preroll_samples = int(self.sample_rate * (self.preroll_ms / 1000.0))
+        self.vad_threshold = max(0.0, min(1.0, float(vad_threshold)))
+        self.vad_min_silence_ms = max(0, int(vad_min_silence_ms))
+        self.vad_min_speech_ms = max(0, int(vad_min_speech_ms))
         self.recognizer = None
         self._vad_config = None  # Stored for per-session VAD creation
         self._initialized = False
@@ -444,9 +450,9 @@ class SherpaOfflineSTTBackend:
             # Store VAD config for per-session creation (no shared VAD instance).
             self._vad_config = sherpa_onnx.VadModelConfig()
             self._vad_config.silero_vad.model = self.vad_model_path
-            self._vad_config.silero_vad.threshold = 0.5
-            self._vad_config.silero_vad.min_silence_duration = 0.5
-            self._vad_config.silero_vad.min_speech_duration = 0.25
+            self._vad_config.silero_vad.threshold = self.vad_threshold
+            self._vad_config.silero_vad.min_silence_duration = self.vad_min_silence_ms / 1000.0
+            self._vad_config.silero_vad.min_speech_duration = self.vad_min_speech_ms / 1000.0
             self._vad_config.silero_vad.max_speech_duration = 20.0
             self._vad_config.sample_rate = self.sample_rate
 
@@ -456,8 +462,13 @@ class SherpaOfflineSTTBackend:
 
             self._initialized = True
             logging.info(
-                "✅ SHERPA-OFFLINE - OfflineRecognizer + Silero VAD initialized with model %s",
+                "✅ SHERPA-OFFLINE - OfflineRecognizer + Silero VAD initialized with model %s "
+                "(preroll_ms=%d threshold=%.2f min_silence_ms=%d min_speech_ms=%d)",
                 self.model_path,
+                self.preroll_ms,
+                self.vad_threshold,
+                self.vad_min_silence_ms,
+                self.vad_min_speech_ms,
             )
             return True
         except ImportError:
