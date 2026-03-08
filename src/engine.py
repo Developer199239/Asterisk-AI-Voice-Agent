@@ -9970,13 +9970,7 @@ class Engine:
                     chars = len(aggregated.replace(" ", ""))
                     threshold_met = words >= 3 or chars >= 12
                     if not threshold_met:
-                        if force:
-                            pending_segments.clear()
-                            if from_flush:
-                                flush_task = None
-                            else:
-                                await cancel_flush()
-                        else:
+                        if not force:
                             logger.debug(
                                 "Accumulating transcript before LLM",
                                 call_id=call_id,
@@ -9984,7 +9978,7 @@ class Engine:
                                 chars=chars,
                                 words=words,
                             )
-                        return
+                            return
                     if from_flush:
                         flush_task = None
                     else:
