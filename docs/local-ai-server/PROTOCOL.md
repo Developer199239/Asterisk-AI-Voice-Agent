@@ -696,6 +696,13 @@ Server-side (see `local_ai_server/config.py`, `local_ai_server/server.py`):
   - `LOCAL_TOOL_GATEWAY_ENABLED` (default `1`)
 - STT:
   - Backend select: `LOCAL_STT_BACKEND`
+  - Sherpa: `SHERPA_MODEL_PATH`, `SHERPA_MODEL_TYPE`, `SHERPA_VAD_MODEL_PATH`
+  - Sherpa offline tuning:
+    - `SHERPA_VAD_THRESHOLD` (default `0.35`)
+    - `SHERPA_VAD_MIN_SILENCE_MS` (default `700`)
+    - `SHERPA_VAD_MIN_SPEECH_MS` (default `200`)
+    - `SHERPA_OFFLINE_PREROLL_MS` (default `350`)
+    - `SHERPA_OFFLINE_DEBUG_SEGMENTS` (default `false`; debug only)
   - Whisper.cpp: `WHISPER_CPP_MODEL_PATH` (legacy alias: `LOCAL_WHISPER_CPP_MODEL_PATH`), `WHISPER_CPP_LANGUAGE`
   - Faster-Whisper: `FASTER_WHISPER_MODEL`, `FASTER_WHISPER_DEVICE`, `FASTER_WHISPER_COMPUTE_TYPE`, `FASTER_WHISPER_LANGUAGE`
   - Kroko: `KROKO_EMBEDDED`, `KROKO_MODEL_PATH`, `KROKO_PORT`, `KROKO_URL`, `KROKO_API_KEY`, `KROKO_LANGUAGE`

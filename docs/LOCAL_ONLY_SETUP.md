@@ -562,6 +562,13 @@ Models are **not bundled** in Docker images. Download them via:
 - `sherpa-onnx-zipformer-ru-2024-09-18` (Russian follow-up after English passes)
 - Use with `SHERPA_MODEL_TYPE=offline`
 - Offline mode requires a non-streaming transducer model. Do not point offline mode at `sherpa-onnx-streaming-*` models.
+- Typical offline tuning knobs:
+  - `SHERPA_VAD_MODEL_PATH=/app/models/vad/silero_vad.onnx`
+  - `SHERPA_VAD_THRESHOLD=0.35`
+  - `SHERPA_VAD_MIN_SILENCE_MS=700`
+  - `SHERPA_VAD_MIN_SPEECH_MS=200`
+  - `SHERPA_OFFLINE_PREROLL_MS=350`
+  - `SHERPA_OFFLINE_DEBUG_SEGMENTS=true` for targeted diagnostics only
 - See [Sherpa-ONNX Models](https://github.com/k2-fsa/sherpa-onnx/releases)
 
 **Kroko Embedded** (optional, requires rebuild):
