@@ -556,9 +556,8 @@ class SherpaOfflineSTTBackend:
             seg_idx = 0
             while not vad.empty():
                 speech_segment = vad.front
-                vad.pop()
-
                 speech_samples = np.array(speech_segment.samples, dtype=np.float32)
+                vad.pop()
                 seg_dur_ms = int(len(speech_samples) / self.sample_rate * 1000)
                 seg_rms = float(np.sqrt(np.mean(speech_samples.astype(np.float64) ** 2)))
                 seg_min = float(np.min(speech_samples)) if len(speech_samples) > 0 else 0.0
@@ -607,9 +606,8 @@ class SherpaOfflineSTTBackend:
             texts = []
             while not vad.empty():
                 speech_segment = vad.front
-                vad.pop()
-
                 speech_samples = np.array(speech_segment.samples, dtype=np.float32)
+                vad.pop()
                 if len(speech_samples) < self._min_audio_length:
                     continue
 
