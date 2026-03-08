@@ -399,22 +399,39 @@ class SherpaOfflineSTTBackend:
                 logging.error("❌ SHERPA-OFFLINE - Missing model files: %s", ", ".join(missing))
                 return False
 
+            # Detect streaming vs offline model by encoder filename.
+            # Streaming models contain "chunk" in their encoder name.
+            is_streaming = "chunk" in os.path.basename(encoder_file).lower()
+            self._is_streaming_model = is_streaming
+
             logging.info("📁 SHERPA-OFFLINE - Model files found:")
             logging.info("   tokens: %s", tokens_file)
             logging.info("   encoder: %s", encoder_file)
             logging.info("   decoder: %s", decoder_file)
             logging.info("   joiner: %s", joiner_file)
             logging.info("   vad: %s", self.vad_model_path)
+            logging.info("   model type: %s", "streaming (OnlineRecognizer)" if is_streaming else "offline (OfflineRecognizer)")
 
-            self.recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
-                tokens=tokens_file,
-                encoder=encoder_file,
-                decoder=decoder_file,
-                joiner=joiner_file,
-                num_threads=2,
-                sample_rate=self.sample_rate,
-                decoding_method="greedy_search",
-            )
+            if is_streaming:
+                self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+                    tokens=tokens_file,
+                    encoder=encoder_file,
+                    decoder=decoder_file,
+                    joiner=joiner_file,
+                    num_threads=2,
+                    sample_rate=self.sample_rate,
+                    decoding_method="greedy_search",
+                )
+            else:
+                self.recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
+                    tokens=tokens_file,
+                    encoder=encoder_file,
+                    decoder=decoder_file,
+                    joiner=joiner_file,
+                    num_threads=2,
+                    sample_rate=self.sample_rate,
+                    decoding_method="greedy_search",
+                )
 
             # Store VAD config for per-session creation (no shared VAD instance).
             self._vad_config = sherpa_onnx.VadModelConfig()
@@ -487,6 +504,20 @@ class SherpaOfflineSTTBackend:
     # Audio processing (all methods require a per-session VAD)
     # ------------------------------------------------------------------
 
+    def _transcribe_segment(self, speech_samples: np.ndarray) -> str:
+        """Transcribe a single speech segment using the appropriate recognizer API."""
+        stream = self.recognizer.create_stream()
+        stream.accept_waveform(self.sample_rate, speech_samples)
+
+        if getattr(self, '_is_streaming_model', False):
+            stream.input_finished()
+            while self.recognizer.is_ready(stream):
+                self.recognizer.decode_stream(stream)
+        else:
+            self.recognizer.decode_stream(stream)
+
+        return stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+
     def process_audio(self, vad: Any, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
         """Feed audio through a per-session VAD; transcribe complete speech segments."""
         if not self._initialized or self.recognizer is None or vad is None:
@@ -507,11 +538,7 @@ class SherpaOfflineSTTBackend:
                 if len(speech_samples) < self._min_audio_length:
                     return None
 
-                stream = self.recognizer.create_stream()
-                stream.accept_waveform(self.sample_rate, speech_samples)
-                self.recognizer.decode_stream(stream)
-
-                text = stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+                text = self._transcribe_segment(speech_samples)
 
                 if text:
                     return {"type": "final", "text": text}
@@ -539,11 +566,7 @@ class SherpaOfflineSTTBackend:
                 if len(speech_samples) < self._min_audio_length:
                     continue
 
-                stream = self.recognizer.create_stream()
-                stream.accept_waveform(self.sample_rate, speech_samples)
-                self.recognizer.decode_stream(stream)
-
-                text = stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+                text = self._transcribe_segment(speech_samples)
                 if text:
                     texts.append(text)
 
@@ -564,11 +587,7 @@ class SherpaOfflineSTTBackend:
             samples = np.frombuffer(pcm16_audio, dtype=np.int16)
             float_samples = samples.astype(np.float32) / 32768.0
 
-            stream = self.recognizer.create_stream()
-            stream.accept_waveform(self.sample_rate, float_samples)
-            self.recognizer.decode_stream(stream)
-
-            text = stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+            text = self._transcribe_segment(float_samples)
             if text:
                 return {"type": "final", "text": text}
             return None
