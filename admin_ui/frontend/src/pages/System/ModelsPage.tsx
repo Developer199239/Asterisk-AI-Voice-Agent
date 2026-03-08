@@ -55,7 +55,7 @@ interface DownloadProgress {
 }
 
 interface ActiveModels {
-    stt: { backend: string; path: string; loaded: boolean; display?: string; language?: string | null };
+    stt: { backend: string; path: string; loaded: boolean; display?: string; language?: string | null; sherpa_model_type?: string | null };
     tts: { backend: string; path: string; loaded: boolean; display?: string };
     llm: {
         path: string;
@@ -353,7 +353,9 @@ const ModelsPage = () => {
                         backend: localAI.details?.models?.stt?.backend || 'unknown',
                         path: localAI.details?.models?.stt?.path || '',
                         loaded: localAI.details?.models?.stt?.loaded || false,
-                        display: localAI.details?.models?.stt?.display || ''
+                        display: localAI.details?.models?.stt?.display || '',
+                        language: localAI.details?.models?.stt?.language || null,
+                        sherpa_model_type: localAI.details?.models?.stt?.sherpa_model_type || null,
                     },
                     tts: {
                         backend: localAI.details?.models?.tts?.backend || 'unknown',

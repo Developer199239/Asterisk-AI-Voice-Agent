@@ -1220,7 +1220,22 @@ class LocalAIServer:
             if model_type == "offline":
                 from stt_backends import SherpaOfflineSTTBackend
 
-                vad_path = getattr(self, "sherpa_vad_model_path", "")
+                vad_path = getattr(self, "sherpa_vad_model_path", "") or ""
+                default_vad = "/app/models/vad/silero_vad.onnx"
+                if not vad_path:
+                    vad_path = default_vad
+                # Auto-download Silero VAD if missing
+                if not os.path.isfile(vad_path):
+                    vad_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+                    vad_dir = os.path.dirname(vad_path)
+                    os.makedirs(vad_dir, exist_ok=True)
+                    logging.info("📥 SHERPA-OFFLINE - Downloading Silero VAD model to %s …", vad_path)
+                    try:
+                        import urllib.request
+                        urllib.request.urlretrieve(vad_url, vad_path)
+                        logging.info("✅ SHERPA-OFFLINE - Silero VAD downloaded successfully (%d bytes)", os.path.getsize(vad_path))
+                    except Exception as dl_exc:
+                        logging.error("❌ SHERPA-OFFLINE - Failed to download Silero VAD: %s", dl_exc)
                 logging.info(
                     "🎤 STT backend: Sherpa-onnx OFFLINE (VAD-gated, model=%s, vad=%s)",
                     self.sherpa_model_path,
