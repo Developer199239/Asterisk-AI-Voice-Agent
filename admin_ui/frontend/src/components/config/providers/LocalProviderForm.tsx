@@ -93,7 +93,11 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
     const getModelPathPlaceholder = (backend: string, type: 'stt' | 'tts') => {
         if (loading) return "Loading...";
         if (backend === 'vosk') return '/app/models/stt/vosk-model-en-us-0.22';
-        if (backend === 'sherpa') return '/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26';
+        if (backend === 'sherpa') {
+            return config.sherpa_model_type === 'offline'
+                ? '/app/models/stt/sherpa-onnx-zipformer-en-2023-06-26'
+                : '/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26';
+        }
         if (backend === 'piper') return '/app/models/tts/en_US-lessac-medium.onnx';
         if (backend === 'kokoro') return '/app/models/tts/kokoro';
         return '';

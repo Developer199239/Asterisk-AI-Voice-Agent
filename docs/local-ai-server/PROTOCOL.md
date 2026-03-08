@@ -488,8 +488,13 @@ Request (examples):
 ```
 
 ```json
-{ "type": "switch_model", "stt_backend": "sherpa", "sherpa_model_type": "offline", "sherpa_model_path": "/app/models/stt/sherpa-gigaam", "sherpa_vad_model_path": "/app/models/vad/silero_vad.onnx" }
+{ "type": "switch_model", "stt_backend": "sherpa", "sherpa_model_type": "offline", "sherpa_model_path": "/app/models/stt/sherpa-onnx-zipformer-en-2023-06-26", "sherpa_vad_model_path": "/app/models/vad/silero_vad.onnx" }
 ```
+
+Notes:
+- `sherpa_model_type=online` expects a streaming Sherpa model directory such as `sherpa-onnx-streaming-zipformer-en-2023-06-26`
+- `sherpa_model_type=offline` expects a non-streaming Sherpa transducer model directory such as `sherpa-onnx-zipformer-en-2023-06-26`
+- Offline mode will reject streaming Sherpa model directories
 
 Response:
 

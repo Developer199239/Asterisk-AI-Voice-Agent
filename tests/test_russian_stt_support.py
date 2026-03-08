@@ -389,6 +389,25 @@ class _FakeSpeechSegment:
         self.samples = samples
 
 
+class _ArrayPoisonedSamples:
+    """Behaves correctly when iterated, but returns garbage via __array__()."""
+
+    def __init__(self, values):
+        self._values = list(values)
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+    def __array__(self, dtype=None):
+        arr = np.full(len(self._values), np.nan, dtype=np.float32)
+        if dtype is not None:
+            return arr.astype(dtype)
+        return arr
+
+
 class _FakeStreamResult:
     """Simulates the result attribute on a sherpa_onnx offline stream."""
     def __init__(self, text: str):
@@ -444,6 +463,15 @@ class _FakeVAD:
 
     def flush(self):
         self._flushed = True
+
+
+class _MutatingPopVAD(_FakeVAD):
+    def pop(self):
+        if self._segments:
+            segment = self._segments[0]
+            if hasattr(segment.samples, "_values"):
+                segment.samples._values[:] = [float("nan")] * len(segment.samples._values)
+        super().pop()
 
 
 class TestSherpaOfflineBackendSessionVAD:
@@ -525,6 +553,58 @@ class TestSherpaOfflineBackendSessionVAD:
         """After init, backend should not store a shared VAD — only _vad_config."""
         backend = self._make_backend()
         assert not hasattr(backend, "vad") or backend.__dict__.get("vad") is None
+
+    def test_process_audio_copies_samples_before_pop(self):
+        backend = self._make_backend()
+        good_samples = [0.05] * 16000
+        vad = _MutatingPopVAD(segments=[_FakeSpeechSegment(_ArrayPoisonedSamples(good_samples))])
+        captured = {}
+
+        def _capture(samples):
+            captured["samples"] = samples
+            return "hello world"
+
+        backend._transcribe_segment = _capture
+        result = backend.process_audio(vad, b"\x00\x00" * 160)
+
+        assert result == {"type": "final", "text": "hello world"}
+        assert "samples" in captured
+        assert np.isfinite(captured["samples"]).all()
+        assert captured["samples"][0] == pytest.approx(0.05)
+
+    def test_process_audio_rejects_invalid_segment_samples(self):
+        backend = self._make_backend()
+        bad_samples = [0.0] * 15999 + [float("nan")]
+        vad = _FakeVAD(segments=[_FakeSpeechSegment(bad_samples)])
+        backend._transcribe_segment = MagicMock(return_value="should-not-run")
+
+        result = backend.process_audio(vad, b"\x00\x00" * 160)
+
+        assert result is None
+        backend._transcribe_segment.assert_not_called()
+
+    def test_initialize_rejects_streaming_model_in_offline_mode(self):
+        sb = _load_stt_backends()
+        backend = sb.SherpaOfflineSTTBackend(
+            model_path="/fake/streaming-model",
+            vad_model_path="/fake/vad.onnx",
+        )
+
+        fake_sherpa = MagicMock()
+        with patch("os.path.exists", return_value=True), \
+             patch.object(backend, "_find_file", return_value="/fake/tokens.txt"), \
+             patch.object(
+                 backend,
+                 "_find_onnx",
+                 side_effect=[
+                     "/fake/encoder-epoch-99-avg-1-chunk-16-left-128.onnx",
+                     "/fake/decoder.onnx",
+                     "/fake/joiner.onnx",
+                 ],
+             ), \
+             patch.dict(sys.modules, {"sherpa_onnx": fake_sherpa}):
+            assert backend.initialize() is False
+            fake_sherpa.OfflineRecognizer.from_transducer.assert_not_called()
 
 
 class TestSherpaOfflineBackendShutdown:

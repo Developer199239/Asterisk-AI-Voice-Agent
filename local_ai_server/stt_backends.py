@@ -364,6 +364,12 @@ class SherpaOfflineSTTBackend:
         self._vad_config = None  # Stored for per-session VAD creation
         self._initialized = False
         self._min_audio_length = int(sample_rate * 0.25)
+        self._debug_segments = str(os.getenv("SHERPA_OFFLINE_DEBUG_SEGMENTS", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     def initialize(self) -> bool:
         try:
@@ -399,10 +405,11 @@ class SherpaOfflineSTTBackend:
                 logging.error("❌ SHERPA-OFFLINE - Missing model files: %s", ", ".join(missing))
                 return False
 
-            # Detect streaming vs offline model by encoder filename.
-            # Streaming models contain "chunk" in their encoder name.
-            is_streaming = "chunk" in os.path.basename(encoder_file).lower()
-            self._is_streaming_model = is_streaming
+            # Offline mode only supports non-streaming transducer models. Streaming
+            # zipformer models belong in SherpaONNXSTTBackend.
+            encoder_name = os.path.basename(encoder_file).lower()
+            model_name = os.path.basename(os.path.normpath(self.model_path)).lower()
+            is_streaming = "chunk" in encoder_name or "streaming" in model_name
 
             logging.info("📁 SHERPA-OFFLINE - Model files found:")
             logging.info("   tokens: %s", tokens_file)
@@ -410,28 +417,26 @@ class SherpaOfflineSTTBackend:
             logging.info("   decoder: %s", decoder_file)
             logging.info("   joiner: %s", joiner_file)
             logging.info("   vad: %s", self.vad_model_path)
-            logging.info("   model type: %s", "streaming (OnlineRecognizer)" if is_streaming else "offline (OfflineRecognizer)")
+            logging.info("   model type: %s", "streaming" if is_streaming else "offline")
 
             if is_streaming:
-                self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-                    tokens=tokens_file,
-                    encoder=encoder_file,
-                    decoder=decoder_file,
-                    joiner=joiner_file,
-                    num_threads=2,
-                    sample_rate=self.sample_rate,
-                    decoding_method="greedy_search",
+                logging.error(
+                    "❌ SHERPA-OFFLINE - Offline mode requires a non-streaming Sherpa transducer model. "
+                    "Got streaming model at %s. Use SHERPA_MODEL_TYPE=online for streaming models "
+                    "or switch SHERPA_MODEL_PATH to an offline model such as sherpa-onnx-zipformer-en-2023-06-26.",
+                    self.model_path,
                 )
-            else:
-                self.recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
-                    tokens=tokens_file,
-                    encoder=encoder_file,
-                    decoder=decoder_file,
-                    joiner=joiner_file,
-                    num_threads=2,
-                    sample_rate=self.sample_rate,
-                    decoding_method="greedy_search",
-                )
+                return False
+
+            self.recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
+                tokens=tokens_file,
+                encoder=encoder_file,
+                decoder=decoder_file,
+                joiner=joiner_file,
+                num_threads=2,
+                sample_rate=self.sample_rate,
+                decoding_method="greedy_search",
+            )
 
             # Store VAD config for per-session creation (no shared VAD instance).
             self._vad_config = sherpa_onnx.VadModelConfig()
@@ -505,23 +510,83 @@ class SherpaOfflineSTTBackend:
     # ------------------------------------------------------------------
 
     def _transcribe_segment(self, speech_samples: np.ndarray) -> str:
-        """Transcribe a single speech segment using the appropriate recognizer API."""
+        """Transcribe a single speech segment using a non-streaming recognizer."""
         stream = self.recognizer.create_stream()
         stream.accept_waveform(self.sample_rate, speech_samples)
+        self.recognizer.decode_stream(stream)
+        return stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
 
-        if getattr(self, '_is_streaming_model', False):
-            # OnlineRecognizer: signal end-of-audio, decode all frames, get result
-            stream.input_finished()
-            while self.recognizer.is_ready(stream):
-                self.recognizer.decode_stream(stream)
-            result = self.recognizer.get_result(stream)
-            if isinstance(result, str):
-                return result.strip()
-            return result.text.strip() if hasattr(result, "text") and result.text else ""
-        else:
-            # OfflineRecognizer: single decode call, result on stream
-            self.recognizer.decode_stream(stream)
-            return stream.result.text.strip() if hasattr(stream.result, "text") else str(stream.result).strip()
+    def _copy_segment_samples(self, speech_segment: Any) -> np.ndarray:
+        """Materialize VAD output into Python-owned float32 memory before pop/decode."""
+        samples = list(speech_segment.samples)
+        return np.asarray(samples, dtype=np.float32).copy()
+
+    def _segment_stats(self, speech_samples: np.ndarray) -> Dict[str, Any]:
+        if len(speech_samples) == 0:
+            return {
+                "samples": 0,
+                "duration_ms": 0,
+                "rms": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "max_abs": 0.0,
+                "first5": [],
+            }
+
+        speech64 = speech_samples.astype(np.float64, copy=False)
+        return {
+            "samples": len(speech_samples),
+            "duration_ms": int(len(speech_samples) / self.sample_rate * 1000),
+            "rms": float(np.sqrt(np.mean(speech64 ** 2))),
+            "min": float(np.min(speech_samples)),
+            "max": float(np.max(speech_samples)),
+            "max_abs": float(np.max(np.abs(speech_samples))),
+            "first5": speech_samples[:5].tolist() if len(speech_samples) >= 5 else speech_samples.tolist(),
+        }
+
+    def _validate_segment_samples(self, speech_samples: np.ndarray) -> Optional[str]:
+        if len(speech_samples) == 0:
+            return "empty"
+        if not np.isfinite(speech_samples).all():
+            return "non-finite samples"
+        max_abs = float(np.max(np.abs(speech_samples)))
+        if max_abs > 1.5:
+            return f"out-of-range samples (max_abs={max_abs:.6f})"
+        return None
+
+    def _log_segment(self, seg_idx: int, stats: Dict[str, Any], validation_error: Optional[str]) -> None:
+        level = logging.warning if validation_error else logging.info
+        suffix = f" validation={validation_error}" if validation_error else " validation=ok"
+        if self._debug_segments:
+            level(
+                "🔍 SHERPA-OFFLINE VAD segment[%d] - samples=%d duration_ms=%d rms=%.6f "
+                "min=%.6f max=%.6f max_abs=%.6f first5=%s min_required=%d%s",
+                seg_idx,
+                stats["samples"],
+                stats["duration_ms"],
+                stats["rms"],
+                stats["min"],
+                stats["max"],
+                stats["max_abs"],
+                stats["first5"],
+                self._min_audio_length,
+                suffix,
+            )
+            return
+
+        level(
+            "🔍 SHERPA-OFFLINE VAD segment[%d] - samples=%d duration_ms=%d rms=%.6f "
+            "min=%.6f max=%.6f max_abs=%.6f min_required=%d%s",
+            seg_idx,
+            stats["samples"],
+            stats["duration_ms"],
+            stats["rms"],
+            stats["min"],
+            stats["max"],
+            stats["max_abs"],
+            self._min_audio_length,
+            suffix,
+        )
 
     def process_audio(self, vad: Any, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
         """Feed audio through a per-session VAD; transcribe complete speech segments."""
@@ -556,20 +621,20 @@ class SherpaOfflineSTTBackend:
             seg_idx = 0
             while not vad.empty():
                 speech_segment = vad.front
-                speech_samples = np.array(speech_segment.samples, dtype=np.float32)
+                speech_samples = self._copy_segment_samples(speech_segment)
                 vad.pop()
-                seg_dur_ms = int(len(speech_samples) / self.sample_rate * 1000)
-                seg_rms = float(np.sqrt(np.mean(speech_samples.astype(np.float64) ** 2)))
-                seg_min = float(np.min(speech_samples)) if len(speech_samples) > 0 else 0.0
-                seg_max = float(np.max(speech_samples)) if len(speech_samples) > 0 else 0.0
-                first5 = speech_samples[:5].tolist() if len(speech_samples) >= 5 else speech_samples.tolist()
-                logging.info(
-                    "🔍 SHERPA-OFFLINE VAD segment[%d] - samples=%d duration_ms=%d rms=%.6f "
-                    "min=%.6f max=%.6f first5=%s min_required=%d",
-                    seg_idx, len(speech_samples), seg_dur_ms, seg_rms,
-                    seg_min, seg_max, first5, self._min_audio_length,
-                )
+                validation_error = self._validate_segment_samples(speech_samples)
+                stats = self._segment_stats(speech_samples)
+                self._log_segment(seg_idx, stats, validation_error)
                 seg_idx += 1
+
+                if validation_error:
+                    logging.warning(
+                        "⚠️ SHERPA-OFFLINE - Segment[%d] rejected before decode: %s",
+                        seg_idx - 1,
+                        validation_error,
+                    )
+                    continue
 
                 if len(speech_samples) < self._min_audio_length:
                     logging.info(
@@ -604,10 +669,22 @@ class SherpaOfflineSTTBackend:
             vad.flush()
 
             texts = []
+            seg_idx = 0
             while not vad.empty():
                 speech_segment = vad.front
-                speech_samples = np.array(speech_segment.samples, dtype=np.float32)
+                speech_samples = self._copy_segment_samples(speech_segment)
                 vad.pop()
+                validation_error = self._validate_segment_samples(speech_samples)
+                stats = self._segment_stats(speech_samples)
+                self._log_segment(seg_idx, stats, validation_error)
+                seg_idx += 1
+                if validation_error:
+                    logging.warning(
+                        "⚠️ SHERPA-OFFLINE - Finalize segment[%d] rejected before decode: %s",
+                        seg_idx - 1,
+                        validation_error,
+                    )
+                    continue
                 if len(speech_samples) < self._min_audio_length:
                     continue
 

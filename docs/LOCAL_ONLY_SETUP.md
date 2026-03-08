@@ -551,8 +551,17 @@ Models are **not bundled** in Docker images. Download them via:
 - `vosk-model-nl-0.22` (Dutch)
 - See [Vosk Models](https://alphacephei.com/vosk/models)
 
-**Sherpa-ONNX** (streaming, lower latency):
+**Sherpa-ONNX Streaming** (lower latency):
 - `sherpa-onnx-streaming-zipformer-en-2023-06-26` (English)
+- Use with `SHERPA_MODEL_TYPE=online`
+- Best fit for the existing online Sherpa backend
+
+**Sherpa-ONNX Offline Transducer** (VAD-gated):
+- `sherpa-onnx-zipformer-en-2023-06-26` (English verification model)
+- `sherpa-onnx-zipformer-gigaspeech-2023-12-12` (English fallback)
+- `sherpa-onnx-zipformer-ru-2024-09-18` (Russian follow-up after English passes)
+- Use with `SHERPA_MODEL_TYPE=offline`
+- Offline mode requires a non-streaming transducer model. Do not point offline mode at `sherpa-onnx-streaming-*` models.
 - See [Sherpa-ONNX Models](https://github.com/k2-fsa/sherpa-onnx/releases)
 
 **Kroko Embedded** (optional, requires rebuild):

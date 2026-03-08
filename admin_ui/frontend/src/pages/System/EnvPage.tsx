@@ -1279,12 +1279,36 @@ const EnvPage = () => {
 
                         {/* Sherpa Settings */}
                         {sttBackend === 'sherpa' && (
-                            <FormInput
-                                label="Sherpa Model Path"
-                                value={env['SHERPA_MODEL_PATH'] || '/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26'}
-                                onChange={(e) => updateEnv('SHERPA_MODEL_PATH', e.target.value)}
-                                tooltip="Path to the Sherpa ONNX streaming model directory."
-                            />
+                            <>
+                                <FormSelect
+                                    label="Sherpa Model Type"
+                                    value={env['SHERPA_MODEL_TYPE'] || 'online'}
+                                    onChange={(e) => updateEnv('SHERPA_MODEL_TYPE', e.target.value)}
+                                    options={[
+                                        { value: 'online', label: 'Online (Streaming)' },
+                                        { value: 'offline', label: 'Offline (VAD-Gated)' },
+                                    ]}
+                                    tooltip="Offline mode requires a non-streaming Sherpa transducer model. Streaming models must stay on online mode."
+                                />
+                                <FormInput
+                                    label="Sherpa Model Path"
+                                    value={env['SHERPA_MODEL_PATH'] || ((env['SHERPA_MODEL_TYPE'] || 'online') === 'offline'
+                                        ? '/app/models/stt/sherpa-onnx-zipformer-en-2023-06-26'
+                                        : '/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26')}
+                                    onChange={(e) => updateEnv('SHERPA_MODEL_PATH', e.target.value)}
+                                    tooltip={(env['SHERPA_MODEL_TYPE'] || 'online') === 'offline'
+                                        ? 'Path to a non-streaming Sherpa transducer model directory such as sherpa-onnx-zipformer-en-2023-06-26.'
+                                        : 'Path to a streaming Sherpa model directory.'}
+                                />
+                                {(env['SHERPA_MODEL_TYPE'] || 'online') === 'offline' && (
+                                    <FormInput
+                                        label="Sherpa VAD Model Path"
+                                        value={env['SHERPA_VAD_MODEL_PATH'] || '/app/models/vad/silero_vad.onnx'}
+                                        onChange={(e) => updateEnv('SHERPA_VAD_MODEL_PATH', e.target.value)}
+                                        tooltip="Path to the Silero VAD ONNX model used to segment speech before offline decoding."
+                                    />
+                                )}
+                            </>
                         )}
 
                         {/* Faster Whisper Settings */}
