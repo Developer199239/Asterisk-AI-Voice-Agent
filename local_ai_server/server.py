@@ -3347,6 +3347,10 @@ class LocalAIServer:
                 if session.sherpa_offline_vad is None:
                     logging.error("❌ SHERPA-OFFLINE - Failed to create session VAD")
                     return []
+                logging.info(
+                    "🔍 SHERPA-OFFLINE - New session VAD created call_id=%s",
+                    session.call_id,
+                )
             result = self.sherpa_backend.process_audio(session.sherpa_offline_vad, audio_bytes)
         else:
             # Ensure sherpa stream exists for this session

@@ -532,7 +532,24 @@ class SherpaOfflineSTTBackend:
             samples = np.frombuffer(pcm16_audio, dtype=np.int16)
             float_samples = samples.astype(np.float32) / 32768.0
 
+            rms = float(np.sqrt(np.mean(float_samples ** 2)))
+            if not hasattr(self, '_vad_chunk_count'):
+                self._vad_chunk_count = 0
+            self._vad_chunk_count += 1
+            if self._vad_chunk_count % 50 == 1:
+                logging.debug(
+                    "🔍 SHERPA-OFFLINE VAD - chunk=%d samples=%d rms=%.6f",
+                    self._vad_chunk_count, len(float_samples), rms,
+                )
+
             vad.accept_waveform(float_samples)
+
+            has_segments = not vad.empty()
+            if has_segments:
+                logging.info(
+                    "🔍 SHERPA-OFFLINE VAD - Speech segment(s) detected at chunk=%d",
+                    self._vad_chunk_count,
+                )
 
             # Process ALL queued speech segments (not just the first).
             texts = []
