@@ -553,13 +553,25 @@ class SherpaOfflineSTTBackend:
 
             # Process ALL queued speech segments (not just the first).
             texts = []
+            seg_idx = 0
             while not vad.empty():
                 speech_segment = vad.front
                 vad.pop()
 
                 speech_samples = np.array(speech_segment.samples, dtype=np.float32)
+                seg_dur_ms = int(len(speech_samples) / self.sample_rate * 1000)
+                seg_rms = float(np.sqrt(np.mean(speech_samples ** 2)))
+                logging.info(
+                    "🔍 SHERPA-OFFLINE VAD segment[%d] - samples=%d duration_ms=%d rms=%.6f min_required=%d",
+                    seg_idx, len(speech_samples), seg_dur_ms, seg_rms, self._min_audio_length,
+                )
+                seg_idx += 1
 
                 if len(speech_samples) < self._min_audio_length:
+                    logging.info(
+                        "🔍 SHERPA-OFFLINE VAD segment skipped (too short): %d < %d samples",
+                        len(speech_samples), self._min_audio_length,
+                    )
                     continue
 
                 text = self._transcribe_segment(speech_samples)

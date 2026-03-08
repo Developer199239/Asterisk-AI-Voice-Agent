@@ -4645,6 +4645,24 @@ class LocalAIServer:
             logging.debug("Audio payload empty after decoding")
             return
 
+        # Chunk-correlated RMS at Local AI ingress (int16 scale, width=2)
+        try:
+            import audioop as _audioop
+            ingress_rms = _audioop.rms(audio_bytes, 2)
+        except Exception:
+            ingress_rms = -1
+        if not hasattr(self, '_ingress_rms_count'):
+            self._ingress_rms_count = 0
+        self._ingress_rms_count += 1
+        if self._ingress_rms_count % 50 == 1:
+            logging.debug(
+                "🎤 LOCAL-AI INGRESS RMS call_id=%s chunk=%d bytes=%d rms_int16=%d",
+                call_id or "unknown",
+                self._ingress_rms_count,
+                len(audio_bytes),
+                ingress_rms,
+            )
+
         input_rate = int(data.get("rate", PCM16_TARGET_RATE))
         if DEBUG_AUDIO_FLOW:
             logging.debug(
