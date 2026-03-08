@@ -4654,13 +4654,14 @@ class LocalAIServer:
         if not hasattr(self, '_ingress_rms_count'):
             self._ingress_rms_count = 0
         self._ingress_rms_count += 1
-        if self._ingress_rms_count % 50 == 1:
+        if ingress_rms > 50 or self._ingress_rms_count % 100 == 1:
             logging.debug(
-                "🎤 LOCAL-AI INGRESS RMS call_id=%s chunk=%d bytes=%d rms_int16=%d",
+                "🎤 LOCAL-AI INGRESS RMS call_id=%s chunk=%d bytes=%d rms_int16=%d speech=%s",
                 call_id or "unknown",
                 self._ingress_rms_count,
                 len(audio_bytes),
                 ingress_rms,
+                ingress_rms > 50,
             )
 
         input_rate = int(data.get("rate", PCM16_TARGET_RATE))

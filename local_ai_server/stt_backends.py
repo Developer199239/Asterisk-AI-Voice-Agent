@@ -536,10 +536,10 @@ class SherpaOfflineSTTBackend:
             if not hasattr(self, '_vad_chunk_count'):
                 self._vad_chunk_count = 0
             self._vad_chunk_count += 1
-            if self._vad_chunk_count % 50 == 1:
+            if rms > 0.002 or self._vad_chunk_count % 100 == 1:
                 logging.debug(
-                    "🔍 SHERPA-OFFLINE VAD - chunk=%d samples=%d rms=%.6f",
-                    self._vad_chunk_count, len(float_samples), rms,
+                    "🔍 SHERPA-OFFLINE VAD - chunk=%d samples=%d rms=%.6f speech=%s",
+                    self._vad_chunk_count, len(float_samples), rms, rms > 0.002,
                 )
 
             vad.accept_waveform(float_samples)
