@@ -18,6 +18,7 @@ import urllib.error
 from dataclasses import replace
 from time import monotonic, time
 from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
 
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
 try:
