@@ -229,6 +229,21 @@ const CallHistoryPage = () => {
         setAudioDuration(0);
     }, []);
 
+    // Cleanup audio on component unmount (e.g. navigating away while playing)
+    useEffect(() => {
+        return () => {
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current.src = '';
+                audioRef.current = null;
+            }
+            if (audioBlobUrl.current) {
+                URL.revokeObjectURL(audioBlobUrl.current);
+                audioBlobUrl.current = null;
+            }
+        };
+    }, []);
+
     const fetchRecordingInfo = useCallback(async (recordId: string) => {
         cleanupAudio();
         setRecordingInfo(null);
@@ -355,8 +370,13 @@ const CallHistoryPage = () => {
                 audioRef.current.pause();
                 setAudioPlaying(false);
             } else {
-                await audioRef.current.play();
-                setAudioPlaying(true);
+                try {
+                    await audioRef.current.play();
+                    setAudioPlaying(true);
+                } catch {
+                    setAudioPlaying(false);
+                    toast.error('Failed to resume playback');
+                }
             }
             return;
         }

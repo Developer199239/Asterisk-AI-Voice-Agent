@@ -416,7 +416,20 @@ async def get_call_transcript(record_id: str):
 # ---------------------------------------------------------------------------
 
 _RECORDING_BASE = Path("/mnt/asterisk_recordings")
-_MIN_VALID_WAV_SIZE = 45  # WAV header is 44 bytes; anything <= 44 is empty
+_MIN_VALID_WAV_SIZE = 44  # WAV header is 44 bytes; files <= header size have no audio
+
+
+def _has_exact_call_id(filename: str, call_id: str) -> bool:
+    """Verify the filename contains the exact call_id as a delimited token.
+
+    Asterisk recording filenames use the pattern ``...-{epoch}.{seq}.wav``
+    where ``{epoch}.{seq}`` is the channel unique ID (our ``call_id``).
+    A naive ``*call_id*`` glob can false-match when one ID is a prefix of
+    another (e.g. ``.26`` vs ``.265``).  We check that the call_id appears
+    bounded by non-alphanumeric characters (typically ``-`` and ``.wav``).
+    """
+    import re
+    return bool(re.search(rf"(?<![0-9]){re.escape(call_id)}(?![0-9])", filename))
 
 
 def _find_recording(call_id: str, start_time=None) -> Optional[Path]:
@@ -425,7 +438,16 @@ def _find_recording(call_id: str, start_time=None) -> Optional[Path]:
     if not base.is_dir():
         return None
 
-    pattern = f"*{call_id}*.wav"
+    import glob as _glob_mod
+    safe_id = _glob_mod.escape(call_id)
+    pattern = f"*{safe_id}*.wav"
+
+    def _check(match: Path) -> bool:
+        return (
+            match.is_file()
+            and match.resolve().is_relative_to(base.resolve())
+            and _has_exact_call_id(match.name, call_id)
+        )
 
     # Fast path: date-scoped directory (YYYY/MM/DD)
     if start_time:
@@ -433,17 +455,17 @@ def _find_recording(call_id: str, start_time=None) -> Optional[Path]:
         date_dir = base / dt.strftime("%Y") / dt.strftime("%m") / dt.strftime("%d")
         if date_dir.is_dir():
             for match in date_dir.glob(pattern):
-                if match.resolve().is_relative_to(base.resolve()):
+                if _check(match):
                     return match
 
     # Fallback: root directory (legacy flat layout)
     for match in base.glob(pattern):
-        if match.is_file() and match.resolve().is_relative_to(base.resolve()):
+        if _check(match):
             return match
 
     # Last resort: recursive search across all date folders
-    for match in base.glob(f"*/*/*/*{call_id}*.wav"):
-        if match.is_file() and match.resolve().is_relative_to(base.resolve()):
+    for match in base.glob(f"*/*/*/*{safe_id}*.wav"):
+        if _check(match):
             return match
 
     return None
