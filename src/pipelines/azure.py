@@ -693,8 +693,8 @@ class AzureSTTRealtimeAdapter(STTComponent):
         recognizer.canceled.connect(handle_canceled)
         recognizer.session_stopped.connect(handle_session_stopped)
         
-        # Start async recognition
-        recognizer.start_continuous_recognition_async()
+        # Start async recognition — .get() blocks until started and surfaces errors
+        recognizer.start_continuous_recognition_async().get()
 
         self._active_sessions[call_id] = {
             "recognizer": recognizer,
@@ -1059,6 +1059,9 @@ class AzureTTSAdapter(TTSComponent):
 
         if native_encoding == "mulaw" and target_encoding == "mulaw":
             # Already in mulaw at 8 kHz — yield directly
+            converted = audio_bytes
+        elif native_encoding == "alaw" and target_encoding == "alaw":
+            # Already in A-law at 8 kHz — yield directly
             converted = audio_bytes
         elif native_encoding in ("pcm16", "pcm"):
             # Resample if needed, then convert to target encoding
