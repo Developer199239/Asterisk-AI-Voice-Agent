@@ -7,14 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Call Recording Playback**: Play back Asterisk/FreePBX call recordings directly from the Call Details modal in the Admin UI. Recordings are auto-matched by channel unique ID from the monitor directory (`YYYY/MM/DD/` layout). Includes play/pause controls, seek bar, time display, filename, and file size. Empty WAV files (header-only) are shown as "no audio captured". Configurable via `ASTERISK_RECORDING_PATH` env var.
-
 ### Planned
 
 - Additional provider integrations
 - Enhanced monitoring features
+
+## [6.3.2] - 2026-03-12
+
+### Added
+
+- **Microsoft Azure Speech Service STT & TTS**: Full modular pipeline support with three adapters — `AzureSTTFastAdapter` (REST batch transcription), `AzureSTTRealtimeAdapter` (WebSocket streaming with VAD), and `AzureTTSAdapter` (SSML synthesis with streaming and non-streaming modes). Includes Admin UI forms, quick-add templates, security key injection, A-law/μ-law passthrough, and validated config in `ai-agent.yaml`. Contributed by [@egorky](https://github.com/egorky).
+- **MiniMax LLM Pipeline Adapter**: New LLM provider supporting MiniMax M2.5 models with 204K context window via OpenAI-compatible API. Includes tool-calling support, Admin UI integration, and full test suite. Contributed by [@octo-patch](https://github.com/octo-patch).
+- **Call Recording Playback**: Play back Asterisk/FreePBX call recordings directly from the Call Details modal in the Admin UI. Recordings are auto-matched by channel unique ID from the monitor directory (`YYYY/MM/DD/` layout). Includes play/pause controls, seek bar, time display, filename, and file size. Empty WAV files (header-only) are shown as "no audio captured". Configurable via `ASTERISK_RECORDING_PATH` env var.
+- **Google Calendar delete()**: Full delete event implementation with timezone handling fixes and code quality improvements. Contributed by [@gcsuri](https://github.com/gcsuri).
+
+### Fixed
+
+- **OpenAI Realtime farewell timeout**: Cancel farewell timeout before emitting HangupReady to prevent race condition on call termination.
+- **Greeting protection duration**: Increased to 5000ms for more reliable greeting playback on slower connections.
+- **Local AI setup wizard**: Show "Setting Up Local AI Server" until server is actually ready; improved build log filtering for progress tracking.
+- **NVIDIA GPU setup**: Auto-install nvidia-container-toolkit and improved wizard progress tracking.
+
+### Security
+
+- **Azure SSRF prevention**: Shared `validate_azure_region()` regex validator applied across Pydantic config models, runtime URL builders, and admin API endpoint.
+- **PII logging discipline**: Removed transcript/text preview strings from all log statements across engine, Azure, and OpenAI adapters — logs now contain metadata only (length, role, flags).
+- **Azure key injection**: Type-based detection (`cfg_type == "azure"`) for custom-named Azure providers, not just name-prefix matching.
+- **Input validation hardening**: LLM aggregation thresholds clamped with try/except and min=1 guards in both Python backend and React frontend.
+
+### Improved
+
+- **Azure STT bounded pre-speech buffer**: Audio buffer only accumulates when speech is detected or speaking is active, preventing unbounded memory growth during long silences.
+- **Azure VAD timeout propagation**: `vad_silence_timeout_ms` and `vad_initial_silence_timeout_ms` now properly passed through `_compose_options`.
+- **Azure variant validation**: Constrained to `Literal["realtime", "fast"]` across config model, orchestrator, and Admin UI (select dropdown instead of free text).
+- **PEP 563 deferred annotations**: `from __future__ import annotations` in azure.py enables safe optional-dependency type hints when aiohttp is not installed.
 
 ## [6.3.1] - 2026-02-23
 
@@ -1488,6 +1514,7 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 
 ## Version History
 
+- **v6.3.2** (2026-03-12) - Azure Speech Service STT/TTS adapters, MiniMax LLM adapter, call recording playback, Google Calendar delete, security hardening
 - **v6.3.1** (2026-02-23) - Local AI Server onboarding + model lifecycle hardening, tool gateway/guardrails, model catalog + UI rebuild flows, CLI verification tooling, expanded docs and audits
 - **v6.2.2** (2026-02-20) - Vertex AI credentials auto-management, ADC graceful fallback, secrets dir permissions, install.sh YAML dupe fix, dashboard pipeline variant display
 - **v6.2.1** (2026-02-19) - Google Vertex AI Live API Support, credential upload/verify/delete, preflight secrets dir check
@@ -1508,7 +1535,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.3.1...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.3.2...HEAD
+[6.3.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.3.1...v6.3.2
 [6.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.2...v6.3.1
 [6.2.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.1...v6.2.2
 [6.2.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.0...v6.2.1

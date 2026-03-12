@@ -6,7 +6,7 @@
   <img alt="Asterisk AI Voice Agent" src="assets/banner_light_mode.png?v=9" width="100%">
 </picture>
 
-![Version](https://img.shields.io/badge/version-6.3.1-blue.svg)
+![Version](https://img.shields.io/badge/version-6.3.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -25,7 +25,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v631)
+- [🎉 What's New](#-whats-new-in-v632)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -116,7 +116,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.3.1.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.3.2.
 
 ### Option B: Manual Setup
 ```bash
@@ -159,33 +159,35 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v6.3.1
+## 🎉 What's New in v6.3.2
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🛠️ Local AI Server Improvements (v6.3.1)
-- **Backend enable/rebuild flow**: One-click backend enable with progress tracking for optional backends (Faster-Whisper, Whisper.cpp, MeloTTS)
-- **Model lifecycle UX**: Expanded model catalog, safer archive extraction, GGUF magic-byte validation, checksum sidecars
-- **GPU ergonomics**: `LOCAL_LLM_GPU_LAYERS=-1` auto-detection, preflight warnings, GPU compose overlay improvements
-- **CPU-first onboarding**: Defaults to `runtime_mode=minimal` on CPU-only hosts
-- **Security hardening**: Path traversal protection on all model paths, concurrent rebuild race condition fix, active-call guard on model switch
+### ☁️ New Providers (v6.3.2)
+- **Microsoft Azure Speech Service**: Full modular STT & TTS pipeline adapters — Fast REST batch, Realtime WebSocket with VAD, and SSML synthesis with streaming. Admin UI forms, quick-add templates, and security key injection.
+- **MiniMax LLM**: M2.5 models with 204K context window via OpenAI-compatible API. Tool-calling support and Admin UI integration.
 
-### 🛡️ Guardrails (v6.3.1)
-- **Structured local tool gateway**: Allowlist-driven tool execution with repair/structured-decision fallbacks
-- **Hangup guardrails**: Blocks hallucinated `hangup_call` without end-of-call intent (configurable policy modes)
-- **Tool-call parsing robustness**: Hardened extraction against malformed wrappers/markdown/control-token leaks
+### 🎧 Admin UI (v6.3.2)
+- **Call Recording Playback**: Play back Asterisk call recordings directly from the Call Details modal, auto-matched by channel unique ID.
+- **Google Calendar delete()**: Full delete event support with timezone fixes.
 
-### 🩺 CLI Verification (v6.3.1)
-- `agent check --local` / `--remote` for Local AI Server STT/LLM/TTS validation
-- WS protocol contract + smoke test utilities
+### 🛡️ Security & Reliability (v6.3.2)
+- Azure SSRF prevention with shared region validator across all layers
+- PII logging discipline — no transcript/text content in any log statement
+- Input validation hardening across backend and frontend
 
-For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
+For full release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 </details>
 
 <details>
 <summary><b>Previous Versions</b></summary>
+
+#### v6.3.1 - Local AI Server & Guardrails
+- Backend enable/rebuild flow, model lifecycle UX, GPU ergonomics, CPU-first onboarding
+- Structured local tool gateway, hangup guardrails, tool-call parsing robustness
+- `agent check --local` / `--remote` CLI verification
 
 #### v6.1.1 - Operator Config & Live Agent Transfer
 - Operator config overrides (`ai-agent.local.yaml`), live agent transfer tool
@@ -634,11 +636,12 @@ Then open in [Windsurf](https://codeium.com/windsurf) and type: **"I want to con
 <td align="center"><a href="https://github.com/a692570"><img src="https://github.com/a692570.png" width="60" alt="a692570"><br><sub><b>Abhishek</b></sub></a><br>Telnyx LLM Provider</td>
 <td align="center"><a href="https://github.com/turgutguvercin"><img src="https://github.com/turgutguvercin.png" width="60" alt="turgutguvercin"><br><sub><b>turgutguvercin</b></sub></a><br>NumPy Resampler</td>
 <td align="center"><a href="https://github.com/Scarjit"><img src="https://github.com/Scarjit.png" width="60" alt="Scarjit"><br><sub><b>Scarjit</b></sub></a><br>Code</td>
-<td align="center"><a href="https://github.com/egorky"><img src="https://github.com/egorky.png" width="60" alt="egorky"><br><sub><b>egorky</b></sub></a><br>Bug Fix</td>
+<td align="center"><a href="https://github.com/egorky"><img src="https://github.com/egorky.png" width="60" alt="egorky"><br><sub><b>egorky</b></sub></a><br>Azure STT/TTS Provider</td>
 </tr>
 <tr>
 <td align="center"><a href="https://github.com/alemstrom"><img src="https://github.com/alemstrom.png" width="60" alt="alemstrom"><br><sub><b>alemstrom</b></sub></a><br>Docs — PBX Setup</td>
 <td align="center"><a href="https://github.com/gcsuri"><img src="https://github.com/gcsuri.png" width="60" alt="gcsuri"><br><sub><b>gcsuri</b></sub></a><br>Code — Google Calendar</td>
+<td align="center"><a href="https://github.com/octo-patch"><img src="https://github.com/octo-patch.png" width="60" alt="octo-patch"><br><sub><b>octo-patch</b></sub></a><br>MiniMax LLM Provider</td>
 </tr>
 </table>
 

@@ -22,7 +22,7 @@ Outbound dialer shipped as Alpha in v5.0.0 — core scheduling, AMD, voicemail d
 
 | Milestone | Status | Skills | Difficulty | Details |
 |-----------|--------|--------|------------|---------|
-| Azure Speech STT/TTS Adapters | Planned | Python, Azure SDK | Intermediate | Pipeline adapters following `src/pipelines/google.py` pattern |
+| Azure Speech STT/TTS Adapters | ✅ Completed (v6.3.2) | Python, Azure SDK | Intermediate | `src/pipelines/azure.py` — Fast REST, Realtime WebSocket, SSML TTS |
 | Anthropic Claude LLM Adapter | Planned | Python, Anthropic API | Intermediate | Pipeline adapter following OpenAI Chat pattern |
 | SMS/MMS Notification Tool | Planned | Python, Twilio | Intermediate | Business tool following `src/tools/business/` pattern |
 | Conference Bridge Tools | Planned | Python, ARI | Advanced | Create/manage multi-party calls via ARI |
@@ -98,4 +98,4 @@ Longer-term goals that will shape the project's direction:
 
 ---
 
-**Last Updated**: February 2026 | **Current Version**: v6.3.1
+**Last Updated**: March 2026 | **Current Version**: v6.3.2

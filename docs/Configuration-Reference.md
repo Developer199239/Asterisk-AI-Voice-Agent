@@ -38,12 +38,17 @@ Some pipeline LLMs can be overly eager to emit `hangup_call`. A per-pipeline gua
 - `pipelines.<name>.options.llm.hangup_call_guardrail_markers.end_call`: list of caller phrases that count as end-of-call intent (unset/empty = use global hangup policy defaults)
 
 ### Golden Baselines
-See the 5 validated configurations in `config/`:
+See the validated configurations in `config/`:
 - `ai-agent.golden-openai.yaml` - OpenAI Realtime (monolithic, fastest)
 - `ai-agent.golden-deepgram.yaml` - Deepgram Voice Agent (monolithic, enterprise)
 - `ai-agent.golden-google-live.yaml` - Google Live (monolithic, lowest latency)
 - `ai-agent.golden-elevenlabs.yaml` - ElevenLabs Agent (monolithic, premium voice)
 - `ai-agent.golden-local-hybrid.yaml` - Local Hybrid (pipeline, privacy-focused)
+
+### Additional Pipeline Providers (v6.3.2+)
+- **Azure Speech Service** — Modular STT (`azure_stt`) and TTS (`azure_tts`) pipeline adapters. See [Provider-Azure-Setup.md](Provider-Azure-Setup.md).
+- **MiniMax LLM** — Pipeline LLM adapter (`minimax_llm`). See [Provider-MiniMax-Setup.md](Provider-MiniMax-Setup.md).
+- **Telnyx AI Inference** — Pipeline LLM adapter. See [Provider-Telnyx-Setup.md](Provider-Telnyx-Setup.md).
 
 For comprehensive inline documentation, refer to the golden baseline YAML files directly.
 
