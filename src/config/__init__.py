@@ -40,6 +40,9 @@ GroqSTTProviderConfig = _parent_config.GroqSTTProviderConfig
 GroqTTSProviderConfig = _parent_config.GroqTTSProviderConfig
 ElevenLabsProviderConfig = _parent_config.ElevenLabsProviderConfig
 OpenAIRealtimeProviderConfig = _parent_config.OpenAIRealtimeProviderConfig
+AzureSTTProviderConfig = _parent_config.AzureSTTProviderConfig
+AzureTTSProviderConfig = _parent_config.AzureTTSProviderConfig
+validate_azure_region = _parent_config.validate_azure_region
 MCPConfig = _parent_config.MCPConfig
 MCPServerConfig = _parent_config.MCPServerConfig
 MCPToolConfig = _parent_config.MCPToolConfig
@@ -69,6 +72,9 @@ __all__ = [
     'GroqTTSProviderConfig',
     'ElevenLabsProviderConfig',
     'OpenAIRealtimeProviderConfig',
+    'AzureSTTProviderConfig',
+    'AzureTTSProviderConfig',
+    'validate_azure_region',
     'MCPConfig',
     'MCPServerConfig',
     'MCPToolConfig',

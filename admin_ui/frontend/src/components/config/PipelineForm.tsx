@@ -34,7 +34,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
     const [statusLoading, setStatusLoading] = useState(false);
     const [showAdvancedSTT, setShowAdvancedSTT] = useState(false);
     const [showLlmExpert, setShowLlmExpert] = useState<boolean>(
-        () => config?.options?.llm?.tools_enabled !== undefined || Boolean(config?.options?.llm?.realtime_model)
+        () => config?.options?.llm?.tools_enabled !== undefined || Boolean(config?.options?.llm?.realtime_model) || config?.options?.llm?.aggregation_min_words !== undefined || config?.options?.llm?.aggregation_min_chars !== undefined
     );
     const [showSttExpert, setShowSttExpert] = useState<boolean>(
         () => Array.isArray(config?.options?.stt?.timestamp_granularities) && config.options.stt.timestamp_granularities.length > 0
@@ -67,16 +67,19 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
     }, [config]);
 
     useEffect(() => {
-        if (config?.options?.llm?.tools_enabled !== undefined || config?.options?.llm?.realtime_model) {
+        if (config?.options?.llm?.tools_enabled !== undefined || config?.options?.llm?.realtime_model || config?.options?.llm?.aggregation_min_words !== undefined || config?.options?.llm?.aggregation_min_chars !== undefined) {
             setShowLlmExpert(true);
         }
-    }, [config?.options?.llm?.tools_enabled, config?.options?.llm?.realtime_model]);
+    }, [config?.options?.llm?.tools_enabled, config?.options?.llm?.realtime_model, config?.options?.llm?.aggregation_min_words, config?.options?.llm?.aggregation_min_chars]);
 
     useEffect(() => {
-        if (Array.isArray(config?.options?.stt?.timestamp_granularities) && config.options.stt.timestamp_granularities.length > 0) {
+        if ((Array.isArray(config?.options?.stt?.timestamp_granularities) && config.options.stt.timestamp_granularities.length > 0)
+            || config?.options?.stt?.vad_silence_ms !== undefined
+            || config?.options?.stt?.variant !== undefined
+            || config?.options?.stt?.vad_silence_timeout_ms !== undefined) {
             setShowSttExpert(true);
         }
-    }, [config?.options?.stt?.timestamp_granularities]);
+    }, [config?.options?.stt?.timestamp_granularities, config?.options?.stt?.vad_silence_ms, config?.options?.stt?.variant, config?.options?.stt?.vad_silence_timeout_ms]);
 
     useEffect(() => {
         if (config?.options?.tts?.response_format !== undefined || config?.options?.tts?.max_input_chars !== undefined) {
@@ -221,6 +224,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
     const isGroqStt = sttKey.includes('groq');
     const isGroqTts = ttsKey.includes('groq');
     const isOllamaLlm = llmKey.includes('ollama');
+    const isAzureStt = sttKey.includes('azure');
+    const isAzureTts = ttsKey.includes('azure');
 
     const timestampGranularities = Array.isArray(localConfig.options?.stt?.timestamp_granularities)
         ? localConfig.options?.stt?.timestamp_granularities
@@ -425,6 +430,38 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                                     disabled={!showLlmExpert}
                                 />
                             )}
+                            <FormInput
+                                label="LLM Min Words Threshold"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={localConfig.options?.llm?.aggregation_min_words ?? ''}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (!raw) { updateRoleOptions('llm', { aggregation_min_words: undefined }); return; }
+                                    const parsed = parseInt(raw, 10);
+                                    if (Number.isFinite(parsed)) { updateRoleOptions('llm', { aggregation_min_words: Math.max(1, parsed) }); }
+                                }}
+                                placeholder="Auto"
+                                tooltip="Minimum words to wait before sending transcript to LLM."
+                                disabled={!showLlmExpert}
+                            />
+                            <FormInput
+                                label="LLM Min Chars Threshold"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={localConfig.options?.llm?.aggregation_min_chars ?? ''}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (!raw) { updateRoleOptions('llm', { aggregation_min_chars: undefined }); return; }
+                                    const parsed = parseInt(raw, 10);
+                                    if (Number.isFinite(parsed)) { updateRoleOptions('llm', { aggregation_min_chars: Math.max(1, parsed) }); }
+                                }}
+                                placeholder="Auto"
+                                tooltip="Minimum characters to wait before sending transcript to LLM."
+                                disabled={!showLlmExpert}
+                            />
                         </div>
                         <div className="mt-2 border-t border-amber-300/30 pt-3 space-y-3">
                             <p className="text-xs text-muted-foreground">
@@ -518,11 +555,11 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                     </div>
                 )}
 
-                {(isOpenAIStt || isGroqStt) && (
+                {(isOpenAIStt || isGroqStt || isAzureStt) && (
                     <div className="space-y-3 border border-amber-300/40 rounded-lg p-4 bg-amber-500/5">
                         <FormSwitch
                             label="STT Expert Settings"
-                            description="Expose advanced STT adapter timestamp options."
+                            description="Expose advanced STT adapter options."
                             checked={showSttExpert}
                             onChange={(e) => setShowSttExpert(e.target.checked)}
                             className="mb-0 border-0 p-0 bg-transparent"
@@ -533,26 +570,54 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                                 : 'Expert values are visible and read-only until STT expert mode is enabled.'}
                         </p>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <FormInput
-                                label="STT Timestamp Granularities"
-                                value={timestampGranularitiesText}
-                                onChange={(e) =>
-                                    updateRoleOptions('stt', {
-                                        timestamp_granularities: (e.target.value || '')
-                                            .split(',')
-                                            .map((v) => v.trim())
-                                            .filter(Boolean),
-                                    })
-                                }
-                                placeholder="segment, word"
-                                tooltip="Comma-separated; only supported on specific models/endpoints."
-                                disabled={!showSttExpert}
-                            />
+                            {(isOpenAIStt || isGroqStt) && (
+                                <FormInput
+                                    label="STT Timestamp Granularities"
+                                    value={timestampGranularitiesText}
+                                    onChange={(e) =>
+                                        updateRoleOptions('stt', {
+                                            timestamp_granularities: (e.target.value || '')
+                                                .split(',')
+                                                .map((v) => v.trim())
+                                                .filter(Boolean),
+                                        })
+                                    }
+                                    placeholder="segment, word"
+                                    tooltip="Comma-separated; only supported on specific models/endpoints."
+                                    disabled={!showSttExpert}
+                                />
+                            )}
+                            {isAzureStt && (
+                                <>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Azure STT Variant Override</label>
+                                        <select
+                                            className="w-full p-2 rounded border border-input bg-background text-sm"
+                                            value={localConfig.options?.stt?.variant || ''}
+                                            onChange={(e) => updateRoleOptions('stt', { variant: e.target.value || undefined })}
+                                            disabled={!showSttExpert}
+                                        >
+                                            <option value="">Use provider default</option>
+                                            <option value="realtime">realtime</option>
+                                            <option value="fast">fast</option>
+                                        </select>
+                                        <p className="text-xs text-muted-foreground">Override the variant set on the provider.</p>
+                                    </div>
+                                    <FormInput
+                                        label="Azure STT Language Override"
+                                        value={localConfig.options?.stt?.language || ''}
+                                        onChange={(e) => updateRoleOptions('stt', { language: e.target.value || undefined })}
+                                        placeholder="en-US"
+                                        tooltip="Override the BCP-47 locale for this pipeline slot."
+                                        disabled={!showSttExpert}
+                                    />
+                                </>
+                            )}
                         </div>
                     </div>
                 )}
 
-                {(isOpenAITts || isGroqTts) && (
+                {(isOpenAITts || isGroqTts || isAzureTts) && (
                     <div className="space-y-3 border border-amber-300/40 rounded-lg p-4 bg-amber-500/5">
                         <FormSwitch
                             label="TTS Expert Settings"
@@ -586,6 +651,26 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                                     tooltip="Max characters per TTS chunk before adapter splits text."
                                     disabled={!showTtsExpert}
                                 />
+                            )}
+                            {isAzureTts && (
+                                <>
+                                    <FormInput
+                                        label="Azure TTS Voice Name Override"
+                                        value={localConfig.options?.tts?.voice_name || ''}
+                                        onChange={(e) => updateRoleOptions('tts', { voice_name: e.target.value || undefined })}
+                                        placeholder="en-US-JennyNeural"
+                                        tooltip="Override the neural voice name for this pipeline slot."
+                                        disabled={!showTtsExpert}
+                                    />
+                                    <FormInput
+                                        label="Azure TTS Output Format Override"
+                                        value={localConfig.options?.tts?.output_format || ''}
+                                        onChange={(e) => updateRoleOptions('tts', { output_format: e.target.value || undefined })}
+                                        placeholder="riff-8khz-16bit-mono-pcm"
+                                        tooltip="Override the Azure output format for this pipeline slot."
+                                        disabled={!showTtsExpert}
+                                    />
+                                </>
                             )}
                         </div>
                     </div>

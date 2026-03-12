@@ -21,6 +21,7 @@ import GoogleLiveProviderForm from '../components/config/providers/GoogleLivePro
 import OpenAIProviderForm from '../components/config/providers/OpenAIProviderForm';
 import ElevenLabsProviderForm from '../components/config/providers/ElevenLabsProviderForm';
 import TelnyxProviderForm from '../components/config/providers/TelnyxProviderForm';
+import AzureProviderForm from '../components/config/providers/AzureProviderForm';
 import { Capability, capabilityFromKey, ensureModularKey, isFullAgentProvider } from '../utils/providerNaming';
 import { GOOGLE_LIVE_DEFAULT_MODEL } from '../utils/googleLiveModels';
 
@@ -138,6 +139,7 @@ const ProvidersPage: React.FC = () => {
                 else if (lowerName.includes('elevenlabs')) providerData.type = 'elevenlabs_agent';
                 else if (lowerName.includes('ollama')) providerData.type = 'ollama';
                 else if (lowerName.includes('local')) providerData.type = 'local';
+                else if (lowerName.includes('azure')) providerData.type = 'azure';
                 else providerData.type = 'other';
             }
         }
@@ -249,6 +251,27 @@ const ProvidersPage: React.FC = () => {
                 chat_model: 'Qwen/Qwen3-235B-A22B',
                 temperature: 0.7,
                 response_timeout_sec: 30.0,
+            },
+            azure_stt: {
+                enabled: false,
+                type: 'azure',
+                capabilities: ['stt'],
+                region: 'eastus',
+                language: 'en-US',
+                variant: 'realtime',
+                request_timeout_sec: 15.0,
+            },
+            azure_tts: {
+                enabled: false,
+                type: 'azure',
+                capabilities: ['tts'],
+                region: 'eastus',
+                voice_name: 'en-US-JennyNeural',
+                output_format: 'riff-8khz-16bit-mono-pcm',
+                target_encoding: 'mulaw',
+                target_sample_rate_hz: 8000,
+                chunk_size_ms: 20,
+                request_timeout_sec: 15.0,
             }
         };
 
@@ -566,6 +589,9 @@ const ProvidersPage: React.FC = () => {
         if (providerName === 'google_live' || providerName.includes('google') || providerName.includes('gemini')) {
             return <GoogleLiveProviderForm config={providerForm} onChange={updateForm} />;
         }
+        if (providerName.includes('azure')) {
+            return <AzureProviderForm config={providerForm} onChange={updateForm} />;
+        }
         if (providerName === 'openai_realtime' || providerName.includes('realtime')) {
             return <OpenAIRealtimeProviderForm config={providerForm} onChange={updateForm} />;
         }
@@ -594,6 +620,8 @@ const ProvidersPage: React.FC = () => {
             case 'telnyx':
             case 'telenyx':
                 return <TelnyxProviderForm config={providerForm} onChange={updateForm} />;
+            case 'azure':
+                return <AzureProviderForm config={providerForm} onChange={updateForm} />;
             default:
                 return <GenericProviderForm config={providerForm} onChange={updateForm} isNew={isNewProvider} />;
         }
@@ -1132,6 +1160,8 @@ const ProvidersPage: React.FC = () => {
                         <h4 className="text-sm font-medium">Modular Providers (Cloud)</h4>
                         {[
                             { id: 'telnyx_llm', name: 'Telnyx LLM', desc: 'Telnyx AI Inference (OpenAI-compatible /chat/completions)' },
+                            { id: 'azure_stt', name: 'Azure STT', desc: 'Microsoft Azure Speech-to-Text (realtime or fast transcription)' },
+                            { id: 'azure_tts', name: 'Azure TTS', desc: 'Microsoft Azure Text-to-Speech (neural voices, SSML)' },
                         ].map(template => (
                             <label key={template.id} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-accent/50 cursor-pointer">
                                 <input

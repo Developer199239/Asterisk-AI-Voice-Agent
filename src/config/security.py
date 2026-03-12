@@ -159,6 +159,7 @@ def inject_provider_api_keys(config_data: Dict[str, Any]) -> None:
     - DEEPGRAM_API_KEY: Deepgram provider API key
     - GOOGLE_API_KEY: Google provider API key
     - TELNYX_API_KEY: Telnyx AI Inference API key (OpenAI-compatible LLM)
+    - AZURE_SPEECH_KEY: Microsoft Azure Speech Service key (azure_stt, azure_tts)
     
     Args:
         config_data: Configuration dictionary to modify in-place
@@ -228,6 +229,18 @@ def inject_provider_api_keys(config_data: Dict[str, Any]) -> None:
                     provider_cfg["api_key"] = telnyx_key
                     providers_block[provider_name] = provider_cfg
         
+        # Inject AZURE_SPEECH_KEY for Azure provider blocks (name-based or type-based)
+        azure_speech_key = os.getenv("AZURE_SPEECH_KEY")
+        if azure_speech_key:
+            for provider_name, provider_cfg in list(providers_block.items()):
+                if not isinstance(provider_cfg, dict):
+                    continue
+                name_lower = str(provider_name).lower()
+                cfg_type = str(provider_cfg.get("type", "")).lower()
+                if name_lower.startswith("azure_stt") or name_lower == "azure_tts" or cfg_type == "azure":
+                    provider_cfg["api_key"] = azure_speech_key
+                    providers_block[provider_name] = provider_cfg
+
         # Inject DEEPGRAM_API_KEY
         deepgram_block = providers_block.get('deepgram', {}) or {}
         if isinstance(deepgram_block, dict):
