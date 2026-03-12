@@ -34,6 +34,7 @@ LocalProviderConfig = _parent_config.LocalProviderConfig
 DeepgramProviderConfig = _parent_config.DeepgramProviderConfig
 OpenAIProviderConfig = _parent_config.OpenAIProviderConfig
 TelnyxLLMProviderConfig = _parent_config.TelnyxLLMProviderConfig
+MiniMaxLLMProviderConfig = _parent_config.MiniMaxLLMProviderConfig
 GoogleProviderConfig = _parent_config.GoogleProviderConfig
 GroqSTTProviderConfig = _parent_config.GroqSTTProviderConfig
 GroqTTSProviderConfig = _parent_config.GroqTTSProviderConfig
@@ -65,6 +66,7 @@ __all__ = [
     'DeepgramProviderConfig',
     'OpenAIProviderConfig',
     'TelnyxLLMProviderConfig',
+    'MiniMaxLLMProviderConfig',
     'GoogleProviderConfig',
     'GroqSTTProviderConfig',
     'GroqTTSProviderConfig',

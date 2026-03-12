@@ -230,6 +230,30 @@ class TelnyxLLMProviderConfig(BaseModel):
     response_timeout_sec: float = Field(default=30.0)
 
 
+class MiniMaxLLMProviderConfig(BaseModel):
+    """
+    Canonical defaults for the MiniMax LLM pipeline adapter.
+
+    MiniMax exposes an OpenAI-compatible Chat Completions endpoint.
+    Supported models: MiniMax-M2.5, MiniMax-M2.5-highspeed (204K context).
+
+    Key constraints:
+      - temperature must be in (0.0, 1.0]; 0 is rejected.
+      - response_format is NOT supported; omit it.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    api_key: Optional[str] = None
+
+    chat_base_url: str = Field(default="https://api.minimax.io/v1")
+    chat_model: str = Field(default="MiniMax-M2.5")
+
+    temperature: float = Field(default=1.0)
+    max_tokens: Optional[int] = None
+    response_timeout_sec: float = Field(default=30.0)
+
+
 class GoogleProviderConfig(BaseModel):
     api_key: Optional[str] = None
     project_id: Optional[str] = None

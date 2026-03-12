@@ -204,6 +204,19 @@ def inject_provider_api_keys(config_data: Dict[str, Any]) -> None:
                     provider_cfg["api_key"] = groq_key
                     providers_block[provider_name] = provider_cfg
 
+        # Inject MINIMAX_API_KEY for minimax* provider blocks (minimax_llm, etc.)
+        minimax_key = os.getenv("MINIMAX_API_KEY")
+        if minimax_key:
+            for provider_name, provider_cfg in list(providers_block.items()):
+                if not isinstance(provider_cfg, dict):
+                    continue
+                name_lower = str(provider_name).lower()
+                cfg_type = str(provider_cfg.get("type", "")).lower()
+                chat_host = _url_host(provider_cfg.get("chat_base_url", "") or provider_cfg.get("base_url", ""))
+                if name_lower.startswith("minimax") or cfg_type == "minimax" or chat_host in ("api.minimax.io", "api.minimaxi.com"):
+                    provider_cfg["api_key"] = minimax_key
+                    providers_block[provider_name] = provider_cfg
+
         # Inject TELNYX_API_KEY for any telnyx* provider blocks (telnyx_llm, etc.)
         telnyx_key = os.getenv("TELNYX_API_KEY")
         if telnyx_key:

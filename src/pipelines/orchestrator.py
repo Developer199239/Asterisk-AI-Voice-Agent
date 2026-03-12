@@ -25,6 +25,7 @@ from ..config import (
     GroqSTTProviderConfig,
     GroqTTSProviderConfig,
     LocalProviderConfig,
+    MiniMaxLLMProviderConfig,
     OpenAIProviderConfig,
     TelnyxLLMProviderConfig,
 )
@@ -38,6 +39,7 @@ from .local import LocalLLMAdapter, LocalSTTAdapter, LocalTTSAdapter
 from .ollama import OllamaLLMAdapter
 from .openai import OpenAISTTAdapter, OpenAILLMAdapter, OpenAITTSAdapter
 from .groq import GroqSTTAdapter, GroqTTSAdapter
+from .minimax import MiniMaxLLMAdapter
 from .telnyx import TelnyxLLMAdapter
 from .azure import AzureSTTFastAdapter, AzureSTTRealtimeAdapter, AzureTTSAdapter
 
@@ -228,6 +230,7 @@ class PipelineOrchestrator:
         self._deepgram_provider_config: Optional[DeepgramProviderConfig] = self._hydrate_deepgram_config()
         self._openai_provider_config: Optional[OpenAIProviderConfig] = self._hydrate_openai_config()
         self._telnyx_llm_provider_config: Optional[TelnyxLLMProviderConfig] = self._hydrate_telnyx_llm_config()
+        self._minimax_llm_provider_config: Optional[MiniMaxLLMProviderConfig] = self._hydrate_minimax_llm_config()
         self._google_provider_config: Optional[GoogleProviderConfig] = self._hydrate_google_config()
         self._elevenlabs_provider_config: Optional[ElevenLabsProviderConfig] = self._hydrate_elevenlabs_config()
         self._groq_stt_provider_config: Optional[GroqSTTProviderConfig] = self._hydrate_groq_stt_config()
@@ -543,6 +546,21 @@ class PipelineOrchestrator:
         else:
             logger.debug("Telnyx LLM pipeline adapter not registered - API key unavailable or config missing")
 
+        if self._minimax_llm_provider_config:
+            llm_factory = self._make_minimax_llm_factory(self._minimax_llm_provider_config)
+            self.register_factory("minimax_llm", llm_factory)
+            try:
+                host = (urlparse(str(self._minimax_llm_provider_config.chat_base_url)).hostname or "").lower()
+            except Exception:
+                host = None
+            logger.info(
+                "MiniMax LLM pipeline adapter registered",
+                llm_factory="minimax_llm",
+                host=host,
+            )
+        else:
+            logger.debug("MiniMax LLM pipeline adapter not registered - API key unavailable or config missing")
+
         if self._google_provider_config:
             stt_factory = self._make_google_stt_factory(self._google_provider_config)
             llm_factory = self._make_google_llm_factory(self._google_provider_config)
@@ -836,6 +854,22 @@ class PipelineOrchestrator:
                 component_key,
                 self.config,
                 TelnyxLLMProviderConfig(**config_payload),
+                options,
+            )
+
+        return factory
+
+    def _make_minimax_llm_factory(
+        self,
+        provider_config: MiniMaxLLMProviderConfig,
+    ) -> ComponentFactory:
+        config_payload = provider_config.model_dump()
+
+        def factory(component_key: str, options: Dict[str, Any]) -> Component:
+            return MiniMaxLLMAdapter(
+                component_key,
+                self.config,
+                MiniMaxLLMProviderConfig(**config_payload),
                 options,
             )
 
@@ -1142,6 +1176,49 @@ class PipelineOrchestrator:
 
         if not config.api_key:
             logger.warning("Telnyx pipeline adapter requires TELNYX_API_KEY; falling back to placeholder adapters")
+            return None
+
+        return config
+
+    def _hydrate_minimax_llm_config(self) -> Optional[MiniMaxLLMProviderConfig]:
+        providers = getattr(self.config, "providers", {}) or {}
+        raw = providers.get("minimax_llm") or providers.get("minimax")
+        merged: Dict[str, Any] = {}
+
+        if isinstance(raw, MiniMaxLLMProviderConfig):
+            merged.update(raw.model_dump())
+        elif isinstance(raw, dict):
+            merged.update(raw)
+
+        if not merged:
+            for _, cfg in providers.items():
+                if not isinstance(cfg, dict):
+                    continue
+                base = str(cfg.get("chat_base_url") or cfg.get("base_url") or "").strip()
+                try:
+                    host = (urlparse(base).hostname or "").lower()
+                except Exception:
+                    host = ""
+                if host in ("api.minimax.io", "api.minimaxi.com"):
+                    merged.update(cfg)
+                    break
+
+        if not merged:
+            return None
+
+        merged.setdefault("chat_base_url", "https://api.minimax.io/v1")
+
+        try:
+            config = MiniMaxLLMProviderConfig(**merged)
+        except Exception as exc:
+            logger.warning(
+                "Failed to hydrate MiniMax LLM provider config for pipelines",
+                error=str(exc),
+            )
+            return None
+
+        if not config.api_key:
+            logger.warning("MiniMax pipeline adapter requires MINIMAX_API_KEY; falling back to placeholder adapters")
             return None
 
         return config
@@ -1463,6 +1540,8 @@ class PipelineOrchestrator:
             hints.append("Set GROQ_API_KEY and configure providers.groq_stt/providers.groq_tts.")
         elif provider in ("telnyx", "telenyx"):
             hints.append("Set TELNYX_API_KEY and configure providers.telnyx_llm.")
+        elif provider == "minimax":
+            hints.append("Set MINIMAX_API_KEY and configure providers.minimax_llm.")
 
         hint = f" Hint: {' '.join(hints)}" if hints else ""
         return f"Pipeline '{pipeline_name}' cannot resolve {role} component '{component_key}' (placeholder adapter).{hint}"

@@ -18,7 +18,7 @@ barge_in:
   pipeline_talk_detect_silence_ms: 1200
   pipeline_talk_detect_talking_threshold: 256
   post_tts_end_protection_ms: 250
-  greeting_protection_ms: 0
+  greeting_protection_ms: 5000
   provider_fallback_enabled: true
   provider_fallback_providers:
     - google_live
@@ -1521,6 +1521,18 @@ providers:
     target_sample_rate_hz: 8000
     chunk_size_ms: 20
     request_timeout_sec: 15.0
+  minimax_llm:
+    capabilities:
+      - llm
+    chat_base_url: https://api.minimax.io/v1
+    # Domestic (China) URL: https://api.minimaxi.com/v1
+    chat_model: MiniMax-M2.5
+    # Alternative: MiniMax-M2.5-highspeed (same performance, faster)
+    enabled: false
+    # API key comes from MINIMAX_API_KEY env var
+    temperature: 1.0
+    response_timeout_sec: 30
+    type: minimax
   ollama_llm:
     capabilities:
       - llm
