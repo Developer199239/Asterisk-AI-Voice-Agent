@@ -1491,6 +1491,18 @@ providers:
     target_sample_rate_hz: 8000
     chunk_size_ms: 20
     request_timeout_sec: 15
+  minimax_llm:
+    capabilities:
+      - llm
+    chat_base_url: https://api.minimax.io/v1
+    # Domestic (China) URL: https://api.minimaxi.com/v1
+    chat_model: MiniMax-M2.5
+    # Alternative: MiniMax-M2.5-highspeed (same performance, faster)
+    enabled: false
+    # API key comes from MINIMAX_API_KEY env var
+    temperature: 1.0
+    response_timeout_sec: 30
+    type: minimax
   ollama_llm:
     capabilities:
       - llm

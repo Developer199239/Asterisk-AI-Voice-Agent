@@ -278,6 +278,12 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
    - Config: `config/ai-agent.golden-telnyx.yaml`
    - *Best for: Model flexibility, cost optimization, multi-provider access.*
 
+7. **MiniMax LLM** (High-Performance Cost-Effective)
+   - Local STT/TTS + MiniMax M2.5 LLM with 204K context window.
+   - OpenAI-compatible API with tool calling support.
+   - Models: `MiniMax-M2.5` (peak performance) and `MiniMax-M2.5-highspeed` (faster).
+   - *Best for: Long-context conversations, cost-effective high-performance LLM.*
+
 ### Fully Local (Optional)
 
 AVA also supports a **Fully Local** mode (100% on-premises, no cloud APIs). Three topologies are supported:
