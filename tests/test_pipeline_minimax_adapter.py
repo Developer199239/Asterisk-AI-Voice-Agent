@@ -1,11 +1,13 @@
 """Tests for the MiniMax LLM pipeline adapter."""
 
 import json
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 from src.config import AppConfig, MiniMaxLLMProviderConfig
 from src.pipelines.minimax import MiniMaxLLMAdapter, _clamp_temperature
+from src.tools.base import ToolPhase
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +64,10 @@ class _FakeResponse:
     async def text(self):
         return self._body.decode("utf-8", errors="ignore")
 
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise Exception(f"HTTP {self.status}")
+
 
 class _FakeSession:
     def __init__(self, body: bytes, status: int = 200):
@@ -76,6 +82,28 @@ class _FakeSession:
 
     def get(self, url, headers=None, timeout=None):
         return _FakeResponse(self._body, status=self._status)
+
+    async def close(self):
+        self.closed = True
+
+
+class _SequencedFakeSession:
+    """Fake session that returns different responses for successive POST calls."""
+
+    def __init__(self, responses: list):
+        self._responses = list(responses)
+        self._call_index = 0
+        self.requests = []
+        self.closed = False
+
+    def post(self, url, json=None, data=None, headers=None, timeout=None):
+        self.requests.append({"url": url, "json": json, "data": data, "headers": headers, "timeout": timeout})
+        body, status = self._responses[min(self._call_index, len(self._responses) - 1)]
+        self._call_index += 1
+        return _FakeResponse(body, status=status)
+
+    def get(self, url, headers=None, timeout=None):
+        return _FakeResponse(b"{}", status=200)
 
     async def close(self):
         self.closed = True
@@ -262,3 +290,85 @@ async def test_minimax_llm_no_api_key_raises():
     await adapter.start()
     with pytest.raises(RuntimeError, match="MINIMAX_API_KEY"):
         await adapter.generate("call-1", "hi", {}, {})
+
+
+@pytest.mark.asyncio
+async def test_minimax_llm_retry_without_tools_on_400():
+    """Adapter retries without tools when first attempt returns 400."""
+    app_config = _build_app_config()
+    provider_config = MiniMaxLLMProviderConfig(**app_config.providers["minimax_llm"])
+
+    error_body = json.dumps({"error": {"message": "tool format unsupported"}}).encode("utf-8")
+    success_body = json.dumps({
+        "choices": [{"message": {"content": "fallback answer"}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+    }).encode("utf-8")
+
+    fake_session = _SequencedFakeSession([
+        (error_body, 400),   # First call with tools -> 400
+        (success_body, 200), # Retry without tools -> success
+    ])
+
+    # Create a fake tool so the adapter can build tool schemas.
+    fake_tool_def = MagicMock()
+    fake_tool_def.phase = ToolPhase.IN_CALL
+    fake_tool_def.to_openai_schema.return_value = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
+    fake_tool = MagicMock()
+    fake_tool.definition = fake_tool_def
+
+    adapter = MiniMaxLLMAdapter(
+        "minimax_llm",
+        app_config,
+        provider_config,
+        {"tools": ["get_weather"]},
+        session_factory=lambda: fake_session,
+    )
+    await adapter.start()
+
+    with patch("src.pipelines.minimax.tool_registry") as mock_registry:
+        mock_registry.get.return_value = fake_tool
+        response = await adapter.generate("call-1", "weather?", {"system_prompt": "Be helpful."}, {})
+
+    assert response.text == "fallback answer"
+    # First request should have had tools, second should not.
+    assert len(fake_session.requests) == 2
+    assert "tools" in fake_session.requests[0]["json"]
+    assert "tools" not in fake_session.requests[1]["json"]
+    assert "tool_choice" not in fake_session.requests[1]["json"]
+
+
+@pytest.mark.asyncio
+async def test_minimax_llm_metadata_contains_assistant_message():
+    """Metadata includes the full assistant message for multi-turn compliance."""
+    app_config = _build_app_config()
+    provider_config = MiniMaxLLMProviderConfig(**app_config.providers["minimax_llm"])
+    original_content = "<think>reasoning</think>The result."
+    body = json.dumps({
+        "choices": [{"message": {"content": original_content}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }).encode("utf-8")
+    fake_session = _FakeSession(body)
+
+    adapter = MiniMaxLLMAdapter(
+        "minimax_llm",
+        app_config,
+        provider_config,
+        {},
+        session_factory=lambda: fake_session,
+    )
+    await adapter.start()
+    response = await adapter.generate("call-1", "test", {}, {})
+
+    # Spoken text should have thinking stripped.
+    assert response.text == "The result."
+    # Metadata should preserve the original content for history replay.
+    assert "assistant_message" in response.metadata
+    assert response.metadata["assistant_message"]["content"] == original_content
+    assert "usage" in response.metadata

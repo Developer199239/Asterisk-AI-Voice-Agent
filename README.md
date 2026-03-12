@@ -14,7 +14,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hkjarral/Asterisk-AI-Voice-Agent)
 [![Discord](https://dcbadge.limes.pink/api/server/ysg8fphxUe?style=plastic)](https://discord.gg/ysg8fphxUe)
 
-The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
+The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **7 production-ready golden baselines** validated for enterprise deployment.
 
 [Quick Start](#-quick-start) • [Features](#-features) • [Roadmap](docs/ROADMAP.md) • [Demo](#-demo) • [Docs](docs/README.md) • [Community](#-community)
 
@@ -245,7 +245,7 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 ## ✨ Features
 
-### 6 Golden Baseline Configurations
+### 7 Golden Baseline Configurations
 
 1. **OpenAI Realtime** (Recommended for Quick Start)
    - Modern cloud AI with natural conversations (<2s response).
@@ -280,8 +280,9 @@ For full release notes and migration guide, see [CHANGELOG.md](CHANGELOG.md).
 
 7. **MiniMax LLM** (High-Performance Cost-Effective)
    - Local STT/TTS + MiniMax M2.5 LLM with 204K context window.
-   - OpenAI-compatible API with tool calling support.
+   - OpenAI-compatible API with tool-calling support.
    - Models: `MiniMax-M2.5` (peak performance) and `MiniMax-M2.5-highspeed` (faster).
+   - Activate: set `MINIMAX_API_KEY` in `.env`, then configure `providers.minimax_llm` in `config/ai-agent.yaml` (see the `minimax_llm` section with `enabled: true`).
    - *Best for: Long-context conversations, cost-effective high-performance LLM.*
 
 ### Fully Local (Optional)

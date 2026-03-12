@@ -367,8 +367,17 @@ class MiniMaxLLMAdapter(LLMComponent):
                     return ""
 
                 message = choices[0].get("message") or {}
-                content = _strip_thinking(str(message.get("content", "") or ""))
+                raw_content = str(message.get("content", "") or "")
+                content = _strip_thinking(raw_content)
                 tool_calls = message.get("tool_calls") or []
+                # Preserve the full assistant message (including tool_calls
+                # and original content) so that callers can reconstruct
+                # provider-compliant history for multi-turn tool-call
+                # conversations, as required by MiniMax's API.
+                metadata = {
+                    "usage": data.get("usage", {}),
+                    "assistant_message": {**message, "content": raw_content},
+                }
 
                 if tool_calls:
                     parsed_tool_calls = []
@@ -397,7 +406,7 @@ class MiniMaxLLMAdapter(LLMComponent):
                     return LLMResponse(
                         text=content or "",
                         tool_calls=parsed_tool_calls,
-                        metadata=data.get("usage", {}),
+                        metadata=metadata,
                     )
 
                 logger.info(
@@ -406,6 +415,6 @@ class MiniMaxLLMAdapter(LLMComponent):
                     model=payload.get("model"),
                     preview=(content or "")[:80],
                 )
-                return LLMResponse(text=content or "", tool_calls=[], metadata=data.get("usage", {}))
+                return LLMResponse(text=content or "", tool_calls=[], metadata=metadata)
 
         return ""
