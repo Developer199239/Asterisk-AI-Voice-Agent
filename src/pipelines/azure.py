@@ -359,8 +359,14 @@ class AzureSTTFastAdapter(STTComponent):
                     pass
 
             with self._buffer_lock:
-                self._audio_buffer.extend(audio_pcm16)
                 self._buffer_sample_rate = sample_rate_hz
+
+                if has_speech or self._is_speaking:
+                    self._audio_buffer.extend(audio_pcm16)
+                else:
+                    # Not speaking and no speech detected — discard to prevent
+                    # unbounded buffer growth during long silences.
+                    pass
 
                 if has_speech:
                     self._is_speaking = True
@@ -472,7 +478,7 @@ class AzureSTTFastAdapter(STTComponent):
             call_id=call_id,
             request_id=request_id,
             latency_ms=round(latency_ms, 2),
-            transcript_preview=(transcript or "")[:80],
+            transcript_chars=len(transcript or ""),
         )
         return transcript or ""
 
@@ -933,7 +939,7 @@ class AzureTTSAdapter(TTSComponent):
             call_id=call_id,
             voice=voice_name,
             output_format=output_format,
-            text_preview=text[:64],
+            text_chars=len(text),
         )
 
         started_at = time.perf_counter()

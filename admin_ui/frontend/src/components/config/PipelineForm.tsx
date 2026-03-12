@@ -433,8 +433,15 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                             <FormInput
                                 label="LLM Min Words Threshold"
                                 type="number"
+                                min={1}
+                                step={1}
                                 value={localConfig.options?.llm?.aggregation_min_words ?? ''}
-                                onChange={(e) => updateRoleOptions('llm', { aggregation_min_words: e.target.value ? parseInt(e.target.value, 10) : undefined })}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (!raw) { updateRoleOptions('llm', { aggregation_min_words: undefined }); return; }
+                                    const parsed = parseInt(raw, 10);
+                                    if (Number.isFinite(parsed)) { updateRoleOptions('llm', { aggregation_min_words: Math.max(1, parsed) }); }
+                                }}
                                 placeholder="Auto"
                                 tooltip="Minimum words to wait before sending transcript to LLM."
                                 disabled={!showLlmExpert}
@@ -442,8 +449,15 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                             <FormInput
                                 label="LLM Min Chars Threshold"
                                 type="number"
+                                min={1}
+                                step={1}
                                 value={localConfig.options?.llm?.aggregation_min_chars ?? ''}
-                                onChange={(e) => updateRoleOptions('llm', { aggregation_min_chars: e.target.value ? parseInt(e.target.value, 10) : undefined })}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (!raw) { updateRoleOptions('llm', { aggregation_min_chars: undefined }); return; }
+                                    const parsed = parseInt(raw, 10);
+                                    if (Number.isFinite(parsed)) { updateRoleOptions('llm', { aggregation_min_chars: Math.max(1, parsed) }); }
+                                }}
                                 placeholder="Auto"
                                 tooltip="Minimum characters to wait before sending transcript to LLM."
                                 disabled={!showLlmExpert}

@@ -4417,7 +4417,7 @@ class Engine:
                                     timeout=5,
                                 )
                                 if transcript:
-                                    logger.debug("Early STT flush returned transcript", call_id=call_id, transcript_preview=transcript[:50])
+                                    logger.debug("Early STT flush returned transcript", call_id=call_id, transcript_len=len(transcript))
                                     tq = getattr(self, "_pipeline_transcript_queues", {}).get(call_id)
                                     if tq:
                                         try:
