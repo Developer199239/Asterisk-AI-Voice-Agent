@@ -623,12 +623,14 @@ async def list_available_models():
 
     # Silero models are virtual (auto-downloaded via torch.hub at runtime),
     # so populate from catalog instead of filesystem scanning.
+    # Path format: "<speaker>:<model_id>" — no "silero:" prefix since
+    # the dropdown value is already "silero:<path>" via parseSelection().
     from api.models_catalog import SILERO_TTS_MODELS
     for entry in SILERO_TTS_MODELS:
         tts_models["silero"].append(ModelInfo(
             id=entry["id"],
             name=entry["name"],
-            path=f"silero:{entry['speaker']}:{entry.get('silero_model_id', 'v3_1_ru')}",
+            path=f"{entry['speaker']}:{entry.get('silero_model_id', 'v3_1_ru')}",
             type="tts",
             backend="silero",
             size_mb=entry.get("size_mb", 100),
