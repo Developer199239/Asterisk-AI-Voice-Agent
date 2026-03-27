@@ -46,6 +46,7 @@ services:
         - INCLUDE_PIPER=${INCLUDE_PIPER:-true}
         - INCLUDE_KOKORO=${INCLUDE_KOKORO:-true}
         - INCLUDE_MELOTTS=${INCLUDE_MELOTTS:-false}
+        - INCLUDE_SILERO=${INCLUDE_SILERO:-false}
         - INCLUDE_LLAMA=${INCLUDE_LLAMA:-true}
         - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-false}
         # When INCLUDE_KROKO_EMBEDDED=true, you must also set KROKO_SERVER_SHA256 in .env

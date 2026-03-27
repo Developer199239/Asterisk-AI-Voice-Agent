@@ -89,6 +89,11 @@ def _tts_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
         path = server.melotts_voice
         display = f"MeloTTS ({server.melotts_voice})"
         return loaded, path, display
+    if server.tts_backend == "silero":
+        loaded = server.mock_models or server.silero_backend is not None
+        path = server.silero_model_path
+        display = f"Silero ({server.silero_language}/{server.silero_speaker})"
+        return loaded, path, display
     return False, None, None
 
 
@@ -192,6 +197,13 @@ def build_status_response(server) -> Dict[str, Any]:
             "model_path": server.kokoro_model_path,
             "api_base_url": server.kokoro_api_base_url,
             "api_key_set": bool(server.kokoro_api_key),
+        },
+        "silero": {
+            "language": getattr(server, "silero_language", "ru"),
+            "speaker": getattr(server, "silero_speaker", "xenia"),
+            "model_id": getattr(server, "silero_model_id", "v3_1_ru"),
+            "model_path": getattr(server, "silero_model_path", "/app/models/tts/silero"),
+            "sample_rate": getattr(server, "silero_sample_rate", 8000),
         },
         "gpu": gpu_status,
         "config": {

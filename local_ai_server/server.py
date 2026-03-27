@@ -778,6 +778,7 @@ class LocalAIServer:
         self.whisper_cpp_backend: Optional["WhisperCppSTTBackend"] = None
         self.kokoro_backend: Optional[KokoroTTSBackend] = None
         self.melotts_backend: Optional["MeloTTSBackend"] = None
+        self.silero_backend: Optional["SileroTTSBackend"] = None
         self._apply_config(self.config)
         self.model_manager = ModelManager(self)
         self.ws_protocol = WebSocketProtocol(self)
@@ -1063,6 +1064,11 @@ class LocalAIServer:
         self.kokoro_api_base_url = config.kokoro_api_base_url
         self.kokoro_api_key = config.kokoro_api_key
         self.kokoro_api_model = config.kokoro_api_model
+        self.silero_speaker = config.silero_speaker
+        self.silero_language = config.silero_language
+        self.silero_model_id = config.silero_model_id
+        self.silero_sample_rate = config.silero_sample_rate
+        self.silero_model_path = config.silero_model_path
 
     def _resolve_vosk_model_path(self, path: str) -> str:
         """Resolve the correct Vosk model directory.
@@ -1981,11 +1987,13 @@ class LocalAIServer:
             )
 
     async def _load_tts_model(self):
-        """Load TTS model based on configured backend (piper, kokoro, or melotts)."""
+        """Load TTS model based on configured backend (piper, kokoro, melotts, or silero)."""
         if self.tts_backend == "kokoro":
             await self._load_kokoro_backend()
         elif self.tts_backend == "melotts":
             await self._load_melotts_backend()
+        elif self.tts_backend == "silero":
+            await self._load_silero_backend()
         else:
             await self._load_piper_backend()
 
@@ -2149,6 +2157,44 @@ class LocalAIServer:
             logging.error("❌ Failed to initialize MeloTTS backend: %s", primary_error)
             self.melotts_backend = None
             self.startup_errors["tts"] = primary_error
+            if self.fail_fast:
+                raise
+
+    async def _load_silero_backend(self):
+        """Initialize Silero TTS backend for multi-language, CPU-friendly synthesis."""
+        try:
+            from tts_backends import SileroTTSBackend
+
+            logging.info(
+                "🎙️ TTS backend: Silero (language=%s, speaker=%s, model_id=%s, rate=%d)",
+                self.silero_language,
+                self.silero_speaker,
+                self.silero_model_id,
+                self.silero_sample_rate,
+            )
+
+            self.silero_backend = SileroTTSBackend(
+                speaker=self.silero_speaker,
+                language=self.silero_language,
+                model_id=self.silero_model_id,
+                sample_rate=self.silero_sample_rate,
+                model_path=self.silero_model_path,
+            )
+
+            if not self.silero_backend.initialize():
+                raise RuntimeError("Failed to initialize Silero TTS")
+
+            logging.info(
+                "✅ TTS backend: Silero initialized (%dHz native, lang=%s, speaker=%s)",
+                self.silero_sample_rate,
+                self.silero_language,
+                self.silero_speaker,
+            )
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Silero TTS backend: %s", exc)
+            self.silero_backend = None
+            self.startup_errors["tts"] = str(exc)
             if self.fail_fast:
                 raise
 
@@ -2761,6 +2807,8 @@ class LocalAIServer:
             return await self._process_tts_kokoro(text)
         elif self.tts_backend == "melotts":
             return await self._process_tts_melotts(text)
+        elif self.tts_backend == "silero":
+            return await self._process_tts_silero(text)
         else:
             return await self._process_tts_piper(text)
 
@@ -2970,6 +3018,48 @@ class LocalAIServer:
             return ulaw_data
         except Exception as exc:
             logging.error("Kokoro API TTS processing failed: %s", exc, exc_info=True)
+            return b""
+
+    async def _process_tts_silero(self, text: str) -> bytes:
+        """Process TTS using Silero backend (8kHz native output)."""
+        try:
+            if not self.silero_backend:
+                logging.error("Silero TTS backend not initialized")
+                return b""
+
+            logging.debug("🔊 TTS INPUT - Silero generating %dHz audio for: '%s'", self.silero_sample_rate, text)
+
+            # Get PCM16 audio at native sample rate from Silero
+            pcm16_data = await asyncio.to_thread(self.silero_backend.synthesize, text)
+
+            if not pcm16_data:
+                logging.warning("⚠️ Silero returned empty audio")
+                return b""
+
+            # Write to temp WAV file for conversion
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+                wav_path = wav_file.name
+
+            with wave.open(wav_path, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.silero_sample_rate)
+                wav_file.writeframes(pcm16_data)
+
+            with open(wav_path, "rb") as wav_file:
+                wav_data = wav_file.read()
+
+            # Convert to 8kHz uLaw (at 8kHz native, sox only does PCM->ulaw encoding)
+            ulaw_data = await asyncio.to_thread(
+                self.audio_processor.convert_to_ulaw_8k, wav_data, self.silero_sample_rate
+            )
+            os.unlink(wav_path)
+
+            logging.info("🔊 TTS RESULT - Silero generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
+            return ulaw_data
+
+        except Exception as exc:
+            logging.error("Silero TTS processing failed: %s", exc, exc_info=True)
             return b""
 
     def _cancel_idle_timer(self, session: SessionContext) -> None:

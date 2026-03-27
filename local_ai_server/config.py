@@ -98,6 +98,12 @@ class LocalAIConfig:
     kokoro_api_key: str = ""
     kokoro_api_model: str = "model"
 
+    silero_speaker: str = "xenia"
+    silero_language: str = "ru"
+    silero_model_id: str = "v3_1_ru"
+    silero_sample_rate: int = 8000
+    silero_model_path: str = "/app/models/tts/silero"
+
     stt_idle_ms: int = 5000
     # Telephony-friendly utterance segmentation for batch STT backends (Whisper family).
     # These are intentionally separate from stt_idle_ms (which is used by some streaming backends)
@@ -236,6 +242,11 @@ class LocalAIConfig:
             kokoro_api_base_url=(os.getenv("KOKORO_API_BASE_URL", "") or "").strip(),
             kokoro_api_key=(os.getenv("KOKORO_API_KEY", "") or "").strip(),
             kokoro_api_model=(os.getenv("KOKORO_API_MODEL", "model") or "model").strip(),
+            silero_speaker=os.getenv("SILERO_SPEAKER", "xenia"),
+            silero_language=os.getenv("SILERO_LANGUAGE", "ru"),
+            silero_model_id=os.getenv("SILERO_MODEL_ID", "v3_1_ru"),
+            silero_sample_rate=int(os.getenv("SILERO_SAMPLE_RATE", "8000")),
+            silero_model_path=os.getenv("SILERO_MODEL_PATH", "/app/models/tts/silero"),
             stt_idle_ms=int(stt_idle_ms_raw),
             stt_segment_energy_threshold=int(os.getenv("LOCAL_STT_SEGMENT_ENERGY_THRESHOLD", "1200")),
             stt_segment_preroll_ms=int(os.getenv("LOCAL_STT_SEGMENT_PREROLL_MS", "200")),

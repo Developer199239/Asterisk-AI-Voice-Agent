@@ -17,6 +17,7 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
         "piper": False,
         "kokoro": False,
         "melotts": False,
+        "silero": False,
         "llama": False,
     }
 
@@ -74,6 +75,15 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
         capabilities["melotts"] = True
     except ImportError:
         pass
+
+    # Silero requires explicit opt-in via INCLUDE_SILERO to avoid false positives
+    # when torch is present for Kokoro or MeloTTS.
+    if os.getenv("INCLUDE_SILERO", "").lower() in ("true", "1"):
+        try:
+            import torch  # noqa: F401
+            capabilities["silero"] = True
+        except ImportError:
+            pass
 
     try:
         from llama_cpp import Llama  # noqa: F401

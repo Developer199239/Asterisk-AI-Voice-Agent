@@ -15,6 +15,7 @@ ARG INCLUDE_TONE=false
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false
+ARG INCLUDE_SILERO=false
 ARG INCLUDE_LLAMA=true
 ARG MELOTTS_GIT_REF=209145371cff8fc3bd60d7be902ea69cbdb7965a
 
@@ -97,6 +98,17 @@ RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         echo "📦 Pre-downloading MeloTTS BERT model (best effort)..." && \
         python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" || true && \
         python -c "from melo.api import TTS; print('MeloTTS package ready')"; \
+    fi
+
+RUN if [ "$INCLUDE_SILERO" = "true" ]; then \
+        echo "📦 Installing Silero TTS dependencies..." && \
+        if ! python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)"; then \
+            pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu; \
+        fi && \
+        pip install --no-cache-dir omegaconf && \
+        echo "📦 Pre-caching Silero Russian model (best effort)..." && \
+        python -c "import torch; torch.hub.set_dir('/app/models/tts/silero'); torch.hub.load('snakers4/silero-models', 'silero_tts', language='ru', speaker='v3_1_ru')" || true && \
+        echo "✅ Silero TTS ready"; \
     fi
 
 RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \

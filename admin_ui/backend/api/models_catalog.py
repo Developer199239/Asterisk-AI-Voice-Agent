@@ -593,6 +593,89 @@ MELOTTS_MODELS = [
      "note": "Requires INCLUDE_MELOTTS=true in Docker build"},
 ]
 
+# ============== Silero TTS Models ==============
+
+SILERO_TTS_MODELS = [
+    # === Russian (5 speakers in v3_1_ru) ===
+    {"id": "silero_ru_xenia", "name": "Silero Xenia (ru, Female)", "language": "ru-RU", "region": "europe", "backend": "silero",
+     "speaker": "xenia", "silero_model_id": "v3_1_ru",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True, "recommended": True,
+     "description": "Russian female voice, 8kHz native telephony",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    {"id": "silero_ru_aidar", "name": "Silero Aidar (ru, Male)", "language": "ru-RU", "region": "europe", "backend": "silero",
+     "speaker": "aidar", "silero_model_id": "v3_1_ru",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "Russian male voice",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    {"id": "silero_ru_baya", "name": "Silero Baya (ru, Female)", "language": "ru-RU", "region": "europe", "backend": "silero",
+     "speaker": "baya", "silero_model_id": "v3_1_ru",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "Russian female voice",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    {"id": "silero_ru_kseniya", "name": "Silero Kseniya (ru, Female)", "language": "ru-RU", "region": "europe", "backend": "silero",
+     "speaker": "kseniya", "silero_model_id": "v3_1_ru",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "Russian female voice",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    {"id": "silero_ru_eugene", "name": "Silero Eugene (ru, Male)", "language": "ru-RU", "region": "europe", "backend": "silero",
+     "speaker": "eugene", "silero_model_id": "v3_1_ru",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "Russian male voice",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    # === English (v3_en — numbered speakers, showing a representative subset) ===
+    {"id": "silero_en_0", "name": "Silero en_0 (en)", "language": "en-US", "region": "global", "backend": "silero",
+     "speaker": "en_0", "silero_model_id": "v3_en",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "English voice, 8kHz native telephony",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    # === German (v3_de — 5 named speakers) ===
+    {"id": "silero_de_eva_k", "name": "Silero Eva K (de, Female)", "language": "de-DE", "region": "europe", "backend": "silero",
+     "speaker": "eva_k", "silero_model_id": "v3_de",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "German female voice, 8kHz native telephony",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    {"id": "silero_de_karlsson", "name": "Silero Karlsson (de, Male)", "language": "de-DE", "region": "europe", "backend": "silero",
+     "speaker": "karlsson", "silero_model_id": "v3_de",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "German male voice, 8kHz native telephony",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    {"id": "silero_de_friedrich", "name": "Silero Friedrich (de, Male)", "language": "de-DE", "region": "europe", "backend": "silero",
+     "speaker": "friedrich", "silero_model_id": "v3_de",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "German male voice",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    # === Spanish (v3_es — numbered speakers) ===
+    {"id": "silero_es_0", "name": "Silero es_0 (es)", "language": "es-ES", "region": "europe", "backend": "silero",
+     "speaker": "es_0", "silero_model_id": "v3_es",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "Spanish voice, 8kHz native telephony",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    # === French (v3_fr — numbered speakers) ===
+    {"id": "silero_fr_0", "name": "Silero fr_0 (fr)", "language": "fr-FR", "region": "europe", "backend": "silero",
+     "speaker": "fr_0", "silero_model_id": "v3_fr",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "French voice, 8kHz native telephony",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+    # === Ukrainian (v3_ua) ===
+    {"id": "silero_ua_mykyta", "name": "Silero Mykyta (uk, Male)", "language": "uk-UA", "region": "europe", "backend": "silero",
+     "speaker": "mykyta", "silero_model_id": "v3_ua",
+     "size_mb": 100, "size_display": "100 MB", "model_path": None,
+     "download_url": None, "auto_download": True,
+     "description": "Ukrainian male voice, 8kHz native telephony",
+     "note": "Requires INCLUDE_SILERO=true in Docker build"},
+]
+
 # ============== LLM Models ==============
 
 LLM_MODELS = [
@@ -703,7 +786,7 @@ def get_full_catalog():
     """Get the complete model catalog organized by type."""
     return {
         "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + TONE_STT_MODELS + FASTER_WHISPER_STT_MODELS + WHISPER_CPP_STT_MODELS,
-        "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS + MELOTTS_MODELS,
+        "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS + MELOTTS_MODELS + SILERO_TTS_MODELS,
         "llm": LLM_MODELS,
     }
 

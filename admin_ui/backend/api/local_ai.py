@@ -166,6 +166,10 @@ class SwitchModelRequest(BaseModel):
     kokoro_api_base_url: Optional[str] = None
     kokoro_api_key: Optional[str] = None
     kokoro_api_model: Optional[str] = None
+    # Silero TTS controls (optional)
+    silero_speaker: Optional[str] = None
+    silero_language: Optional[str] = None
+    silero_model_id: Optional[str] = None
     # LLM tuning (optional)
     llm_context: Optional[int] = None
     llm_max_tokens: Optional[int] = None
@@ -320,6 +324,17 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 if request.model_path:
                     env_updates["MELOTTS_VOICE"] = request.model_path
                     yaml_updates["tts_voice"] = request.model_path
+            elif request.backend == "silero":
+                if request.silero_speaker:
+                    env_updates["SILERO_SPEAKER"] = request.silero_speaker
+                    yaml_updates["silero_speaker"] = request.silero_speaker
+                if request.silero_language:
+                    env_updates["SILERO_LANGUAGE"] = request.silero_language
+                    yaml_updates["silero_language"] = request.silero_language
+                if request.silero_model_id:
+                    env_updates["SILERO_MODEL_ID"] = request.silero_model_id
+                if request.model_path:
+                    env_updates["SILERO_MODEL_PATH"] = request.model_path
             elif request.backend == "kokoro":
                 if request.kokoro_mode:
                     env_updates["KOKORO_MODE"] = request.kokoro_mode
@@ -417,6 +432,15 @@ def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[D
         payload["tts_model_path"] = request.model_path
     if request.backend == "melotts" and request.model_path:
         payload["tts_config"] = {"voice": request.model_path}
+    if request.backend == "silero":
+        if request.silero_speaker:
+            payload["silero_speaker"] = request.silero_speaker
+        if request.silero_language:
+            payload["silero_language"] = request.silero_language
+        if request.silero_model_id:
+            payload["silero_model_id"] = request.silero_model_id
+        if request.model_path:
+            payload["silero_model_path"] = request.model_path
     if request.backend == "kokoro":
         if request.voice:
             payload["kokoro_voice"] = request.voice
@@ -481,7 +505,8 @@ async def list_available_models():
     tts_models: Dict[str, List[ModelInfo]] = {
         "piper": [],
         "kokoro": [],
-        "melotts": []
+        "melotts": [],
+        "silero": []
     }
     llm_models: List[ModelInfo] = []
     
@@ -651,7 +676,8 @@ async def get_backend_capabilities():
         "tts": {
             "piper": {"available": False, "reason": ""},
             "kokoro": {"available": False, "reason": ""},
-            "melotts": {"available": False, "reason": ""}
+            "melotts": {"available": False, "reason": ""},
+            "silero": {"available": False, "reason": ""}
         },
         "llm": {"available": False, "reason": ""}
     }
@@ -709,7 +735,11 @@ async def get_backend_capabilities():
                     capabilities["tts"]["melotts"] = {"available": True, "reason": "MeloTTS installed"}
                 else:
                     capabilities["tts"]["melotts"]["reason"] = "Rebuild with INCLUDE_MELOTTS=true"
-                
+                if server_caps.get("silero"):
+                    capabilities["tts"]["silero"] = {"available": True, "reason": "Silero TTS installed"}
+                else:
+                    capabilities["tts"]["silero"]["reason"] = "Rebuild with INCLUDE_SILERO=true"
+
                 # LLM
                 if server_caps.get("llama"):
                     capabilities["llm"] = {"available": True, "reason": "llama-cpp-python installed"}
@@ -929,6 +959,15 @@ async def switch_model(request: SwitchModelRequest):
                 return tts.get("path") == request.model_path
             if request.backend == "melotts" and request.model_path:
                 return tts.get("path") == request.model_path
+            if request.backend == "silero":
+                silero = data.get("silero") or {}
+                if request.silero_speaker and silero.get("speaker") != request.silero_speaker:
+                    return False
+                if request.silero_language and silero.get("language") != request.silero_language:
+                    return False
+                if request.silero_model_id and silero.get("model_id") != request.silero_model_id:
+                    return False
+                return True
             if request.backend == "kokoro":
                 if request.kokoro_mode and (kokoro.get("mode") or "").lower() != request.kokoro_mode.lower():
                     return False

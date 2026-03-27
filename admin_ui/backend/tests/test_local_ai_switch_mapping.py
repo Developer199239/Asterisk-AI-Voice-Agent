@@ -138,3 +138,64 @@ def test_env_and_yaml_updates_melotts_persists_voice_id() -> None:
     assert env_updates["MELOTTS_VOICE"] == "EN-US"
     assert yaml_updates["tts_backend"] == "melotts"
     assert yaml_updates["tts_voice"] == "EN-US"
+
+
+def test_ws_payload_silero_uses_silero_fields() -> None:
+    req = SwitchModelRequest(
+        model_type="tts",
+        backend="silero",
+        silero_speaker="xenia",
+        silero_language="ru",
+        silero_model_id="v3_1_ru",
+    )
+    payload = _build_local_ai_ws_switch_payload(req)
+    assert payload["tts_backend"] == "silero"
+    assert payload["silero_speaker"] == "xenia"
+    assert payload["silero_language"] == "ru"
+    assert payload["silero_model_id"] == "v3_1_ru"
+
+
+def test_ws_payload_silero_with_model_path() -> None:
+    req = SwitchModelRequest(
+        model_type="tts",
+        backend="silero",
+        silero_speaker="eva_k",
+        silero_language="de",
+        model_path="/app/models/tts/silero",
+    )
+    payload = _build_local_ai_ws_switch_payload(req)
+    assert payload["tts_backend"] == "silero"
+    assert payload["silero_speaker"] == "eva_k"
+    assert payload["silero_language"] == "de"
+    assert payload["silero_model_path"] == "/app/models/tts/silero"
+
+
+def test_env_and_yaml_updates_silero_persists_config() -> None:
+    req = SwitchModelRequest(
+        model_type="tts",
+        backend="silero",
+        silero_speaker="aidar",
+        silero_language="ru",
+        silero_model_id="v3_1_ru",
+    )
+    env_updates, yaml_updates = _build_local_ai_env_and_yaml_updates(req)
+    assert env_updates["LOCAL_TTS_BACKEND"] == "silero"
+    assert env_updates["SILERO_SPEAKER"] == "aidar"
+    assert env_updates["SILERO_LANGUAGE"] == "ru"
+    assert env_updates["SILERO_MODEL_ID"] == "v3_1_ru"
+    assert yaml_updates["tts_backend"] == "silero"
+    assert yaml_updates["silero_speaker"] == "aidar"
+    assert yaml_updates["silero_language"] == "ru"
+
+
+def test_env_and_yaml_updates_silero_with_model_path() -> None:
+    req = SwitchModelRequest(
+        model_type="tts",
+        backend="silero",
+        silero_speaker="xenia",
+        model_path="/custom/silero/path",
+    )
+    env_updates, yaml_updates = _build_local_ai_env_and_yaml_updates(req)
+    assert env_updates["LOCAL_TTS_BACKEND"] == "silero"
+    assert env_updates["SILERO_SPEAKER"] == "xenia"
+    assert env_updates["SILERO_MODEL_PATH"] == "/custom/silero/path"

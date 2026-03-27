@@ -42,6 +42,10 @@ _TTS_CONFIG_MAP = {
     "api_model": "kokoro_api_model",
     "speed": "melotts_speed",
     "device": "melotts_device",
+    "silero_language": "silero_language",
+    "silero_model_id": "silero_model_id",
+    "silero_model_path": "silero_model_path",
+    "sample_rate": "silero_sample_rate",
 }
 
 _LLM_CONFIG_MAP = {
@@ -76,6 +80,9 @@ def _apply_config_dict(
             elif key == "voice" and backend_name == "melotts":
                 config = replace(config, melotts_voice=str(value))
                 changed.append(f"melotts_voice={value}")
+            elif key == "voice" and backend_name == "silero":
+                config = replace(config, silero_speaker=str(value))
+                changed.append(f"silero_speaker={value}")
             continue
         current = getattr(config, target, None)
         if isinstance(current, bool):
