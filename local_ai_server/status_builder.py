@@ -91,8 +91,12 @@ def _tts_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
         return loaded, path, display
     if server.tts_backend == "silero":
         loaded = server.mock_models or server.silero_backend is not None
-        path = server.silero_model_path
-        display = f"Silero ({server.silero_language}/{server.silero_speaker})"
+        # Path must match the dropdown option format: "speaker:model_id"
+        # (e.g. "es_0:v3_es") so the UI can select the correct entry.
+        speaker = getattr(server, "silero_speaker", "xenia")
+        model_id = getattr(server, "silero_model_id", "v3_1_ru")
+        path = f"{speaker}:{model_id}"
+        display = f"Silero ({server.silero_language}/{speaker})"
         return loaded, path, display
     return False, None, None
 
