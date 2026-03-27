@@ -29,6 +29,7 @@ BUILD_TIME_ESTIMATES = {
     "melotts": 300,         # ~5 min
     "kroko_embedded": 120,  # ~2 min
     "vosk": 60,             # ~1 min
+    "silero": 180,          # ~3 min (torch + model cache)
     "default": 180,         # ~3 min fallback
 }
 
@@ -44,6 +45,7 @@ BACKEND_BUILD_ARGS = {
     "piper": "INCLUDE_PIPER",
     "kokoro": "INCLUDE_KOKORO",
     "sherpa": "INCLUDE_SHERPA",
+    "silero": "INCLUDE_SILERO",
 }
 
 # Defaults used when keys are not present in `.env`.
@@ -59,6 +61,7 @@ _DEFAULT_INCLUDE_BASE: Dict[str, bool] = {
     "piper": True,
     "kokoro": True,
     "sherpa": True,
+    "silero": False,
 }
 
 _DEFAULT_INCLUDE_GPU: Dict[str, bool] = {
