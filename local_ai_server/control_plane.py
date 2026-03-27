@@ -226,7 +226,7 @@ def apply_switch_model_request(
 
     if "tts_backend" in data:
         backend = (data["tts_backend"] or "").strip().lower()
-        if backend in ("piper", "kokoro", "melotts"):
+        if backend in ("piper", "kokoro", "melotts", "silero"):
             new_config = replace(new_config, tts_backend=backend)
             changed.append(f"tts_backend={backend}")
 
@@ -266,5 +266,25 @@ def apply_switch_model_request(
         value = (data["kokoro_api_model"] or "model").strip()
         new_config = replace(new_config, kokoro_api_model=value)
         changed.append(f"kokoro_api_model={value}")
+
+    if "silero_speaker" in data:
+        value = data["silero_speaker"]
+        new_config = replace(new_config, silero_speaker=value)
+        changed.append(f"silero_speaker={value}")
+
+    if "silero_language" in data:
+        value = data["silero_language"]
+        new_config = replace(new_config, silero_language=value)
+        changed.append(f"silero_language={value}")
+
+    if "silero_model_id" in data:
+        value = data["silero_model_id"]
+        new_config = replace(new_config, silero_model_id=value)
+        changed.append(f"silero_model_id={value}")
+
+    if "silero_model_path" in data:
+        value = data["silero_model_path"]
+        new_config = replace(new_config, silero_model_path=value)
+        changed.append(f"silero_model_path={value}")
 
     return new_config, changed
