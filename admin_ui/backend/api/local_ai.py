@@ -610,7 +610,7 @@ async def list_available_models():
                         if voice.endswith(".pt"):
                             voice_name = voice.replace(".pt", "")
                             voice_files[voice_name] = voice
-                            
+
                 tts_models["kokoro"].append(ModelInfo(
                     id="kokoro_82m",
                     name="Kokoro v0.19 (82M)",
@@ -620,6 +620,19 @@ async def list_available_models():
                     size_mb=get_dir_size_mb(item_path),
                     voice_files=voice_files
                 ))
+
+    # Silero models are virtual (auto-downloaded via torch.hub at runtime),
+    # so populate from catalog instead of filesystem scanning.
+    from api.models_catalog import SILERO_TTS_MODELS
+    for entry in SILERO_TTS_MODELS:
+        tts_models["silero"].append(ModelInfo(
+            id=entry["id"],
+            name=entry["name"],
+            path=f"silero:{entry['speaker']}:{entry.get('silero_model_id', 'v3_1_ru')}",
+            type="tts",
+            backend="silero",
+            size_mb=entry.get("size_mb", 100),
+        ))
     
     # Scan LLM models — enrich with chat_format from catalog
     from api.models_catalog import LLM_MODELS as _LLM_CATALOG

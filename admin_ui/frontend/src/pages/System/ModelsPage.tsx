@@ -638,6 +638,13 @@ const ModelsPage = () => {
                 requiresRebuild: true
             });
         }
+        if (ttsSel.backend === 'silero' && capabilities && !capabilities.tts?.silero?.available) {
+            issues.push({
+                key: 'silero_rebuild',
+                message: 'Silero TTS is not installed in this Local AI image. Full container rebuild with INCLUDE_SILERO=true is required.',
+                requiresRebuild: true
+            });
+        }
         if (!gpuDetected && sttSel.backend === 'faster_whisper' && fasterWhisperDevice === 'cuda') {
             issues.push({
                 key: 'fw_cuda_without_gpu',
@@ -675,10 +682,11 @@ const ModelsPage = () => {
         fasterWhisper: compatibilityIssues.some(issue => issue.key === 'fw_rebuild'),
         meloTts: compatibilityIssues.some(issue => issue.key === 'melotts_rebuild'),
         krokoEmbedded: compatibilityIssues.some(issue => issue.key === 'kroko_rebuild'),
-        whisperCpp: compatibilityIssues.some(issue => issue.key === 'whispercpp_rebuild')
-        ,tone: compatibilityIssues.some(issue => issue.key === 'tone_rebuild')
+        whisperCpp: compatibilityIssues.some(issue => issue.key === 'whispercpp_rebuild'),
+        tone: compatibilityIssues.some(issue => issue.key === 'tone_rebuild'),
+        silero: compatibilityIssues.some(issue => issue.key === 'silero_rebuild')
     };
-    const requiresAnyRebuild = requiresRebuild.fasterWhisper || requiresRebuild.whisperCpp || requiresRebuild.tone || requiresRebuild.meloTts || requiresRebuild.krokoEmbedded;
+    const requiresAnyRebuild = requiresRebuild.fasterWhisper || requiresRebuild.whisperCpp || requiresRebuild.tone || requiresRebuild.meloTts || requiresRebuild.krokoEmbedded || requiresRebuild.silero;
 
     const applyPendingChanges = async () => {
         const hasModelChanges = Object.keys(pendingChanges).length > 0;
@@ -728,24 +736,42 @@ const ModelsPage = () => {
                 const sttSel = parseSelection(remainingChanges.stt);
                 const ttsSel = parseSelection(remainingChanges.tts);
 
+                // For Silero, parse speaker and model_id from the synthetic path "silero:<speaker>:<model_id>"
+                let sileroSpeaker: string | undefined;
+                let sileroLanguage: string | undefined;
+                let sileroModelId: string | undefined;
+                if (ttsSel.backend === 'silero' && ttsSel.modelPath) {
+                    const parts = ttsSel.modelPath.split(':');
+                    sileroSpeaker = parts[0];
+                    sileroModelId = parts[1];
+                    // Derive language from model_id: v3_1_ru -> ru, v3_en -> en, etc.
+                    const modelIdParts = (sileroModelId || '').split('_');
+                    sileroLanguage = modelIdParts[modelIdParts.length - 1];
+                }
+
                 const rebuildRes = await axios.post('/api/local-ai/rebuild', {
                     include_faster_whisper: requiresRebuild.fasterWhisper,
                     include_whisper_cpp: requiresRebuild.whisperCpp,
                     include_tone: requiresRebuild.tone,
                     include_melotts: requiresRebuild.meloTts,
                     include_kroko_embedded: requiresRebuild.krokoEmbedded,
+                    include_silero: requiresRebuild.silero,
                     stt_backend: sttSel.backend || undefined,
                     stt_model: sttSel.modelPath || undefined,
                     tts_backend: ttsSel.backend || undefined,
                     tts_voice: (() => {
                         if (!ttsSel.backend) return undefined;
                         if (ttsSel.backend === 'kokoro') {
-                            // Kokoro selection in this dropdown refers to the model directory; voice is configured separately.
-                            // Preserve existing voice (or default).
                             return (envConfig.KOKORO_VOICE || 'af_heart').trim();
                         }
+                        if (ttsSel.backend === 'silero') {
+                            return sileroSpeaker || undefined;
+                        }
                         return ttsSel.modelPath || undefined;
-                    })()
+                    })(),
+                    silero_speaker: sileroSpeaker,
+                    silero_language: sileroLanguage,
+                    silero_model_id: sileroModelId,
                 });
 
                 if (!rebuildRes.data?.success) {
@@ -755,7 +781,7 @@ const ModelsPage = () => {
                 showToast(rebuildRes.data?.message || 'Local AI rebuild completed.', 'success');
 
                 if (requiresRebuild.fasterWhisper) delete remainingChanges.stt;
-                if (requiresRebuild.meloTts) delete remainingChanges.tts;
+                if (requiresRebuild.meloTts || requiresRebuild.silero) delete remainingChanges.tts;
             }
 
             // Apply LLM changes (model and/or tuning) in one request to avoid multiple reloads.
@@ -805,6 +831,15 @@ const ModelsPage = () => {
                         if (pendingSttExtra.tone_decoder_type) extra.tone_decoder_type = pendingSttExtra.tone_decoder_type;
                         if (pendingSttExtra.tone_kenlm_path) extra.tone_kenlm_path = pendingSttExtra.tone_kenlm_path;
                     }
+                }
+                if (type === 'tts' && backend === 'silero') {
+                    // Parse Silero fields from synthetic path "speaker:model_id"
+                    const silParts = pathParts.join(':').split(':');
+                    extra.silero_speaker = silParts[0];
+                    extra.silero_model_id = silParts[1];
+                    // Derive language from model_id: v3_1_ru -> ru, v3_en -> en
+                    const midParts = (silParts[1] || '').split('_');
+                    extra.silero_language = midParts[midParts.length - 1];
                 }
                 await handleModelSwitch(type as 'stt' | 'tts', backend, pathParts.join(':'), forceIncompatibleApply, Object.keys(extra).length > 0 ? extra : undefined);
             }
