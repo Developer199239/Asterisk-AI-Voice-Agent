@@ -443,7 +443,10 @@ def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[D
             payload["silero_language"] = request.silero_language
         if request.silero_model_id:
             payload["silero_model_id"] = request.silero_model_id
-        if request.model_path:
+        # Only send silero_model_path if it's a real filesystem path.
+        # The dropdown value (e.g. "xenia:v3_1_ru") is NOT a path —
+        # sending it would corrupt torch.hub.set_dir().
+        if request.model_path and request.model_path.startswith("/"):
             payload["silero_model_path"] = request.model_path
     if request.backend == "kokoro":
         if request.voice:
