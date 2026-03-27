@@ -1947,9 +1947,11 @@ async def download_selected_models(selection: ModelSelection):
             _BACKEND_TO_INCLUDE = {
                 "faster_whisper": "INCLUDE_FASTER_WHISPER",
                 "whisper_cpp":    "INCLUDE_WHISPER_CPP",
+                "tone":           "INCLUDE_TONE",
                 "melotts":        "INCLUDE_MELOTTS",
                 "sherpa":         "INCLUDE_SHERPA",
                 "vosk":           "INCLUDE_VOSK",
+                "llama":          "INCLUDE_LLAMA",
                 "piper":          "INCLUDE_PIPER",
                 "kokoro":         "INCLUDE_KOKORO",
                 "silero":         "INCLUDE_SILERO",
@@ -2988,9 +2990,11 @@ async def save_setup_config(config: SetupConfig):
             _BACKEND_INCLUDE_MAP = {
                 "faster_whisper": "INCLUDE_FASTER_WHISPER",
                 "whisper_cpp": "INCLUDE_WHISPER_CPP",
+                "tone": "INCLUDE_TONE",
                 "melotts": "INCLUDE_MELOTTS",
                 "sherpa": "INCLUDE_SHERPA",
                 "vosk": "INCLUDE_VOSK",
+                "llama": "INCLUDE_LLAMA",
                 "piper": "INCLUDE_PIPER",
                 "kokoro": "INCLUDE_KOKORO",
                 "silero": "INCLUDE_SILERO",
