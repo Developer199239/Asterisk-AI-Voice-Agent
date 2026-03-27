@@ -102,7 +102,7 @@ RUN if [ "$INCLUDE_SILERO" = "true" ]; then \
         fi && \
         pip install --no-cache-dir omegaconf && \
         echo "📦 Pre-caching Silero Russian model (best effort)..." && \
-        python3 -c "import torch; torch.hub.set_dir('/app/models/tts/silero'); torch.hub.load('snakers4/silero-models', 'silero_tts', language='ru', speaker='v3_1_ru')" || true && \
+        python3 -c "import torch; torch.hub.set_dir('/app/models/tts/silero'); torch.hub.load('snakers4/silero-models', 'silero_tts', language='ru', speaker='v3_1_ru', trust_repo=True)" || true && \
         echo "✅ Silero TTS ready"; \
     fi
 

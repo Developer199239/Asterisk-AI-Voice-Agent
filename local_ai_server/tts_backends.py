@@ -357,6 +357,7 @@ class SileroTTSBackend:
                 model="silero_tts",
                 language=self.language,
                 speaker=self.model_id,
+                trust_repo=True,
             )
 
             self.model = model
