@@ -628,7 +628,7 @@ SILERO_TTS_MODELS = [
      "description": "Russian male voice",
      "note": "Requires INCLUDE_SILERO=true in Docker build"},
     # === English (v3_en — numbered speakers, showing a representative subset) ===
-    {"id": "silero_en_0", "name": "Silero en_0 (en)", "language": "en-US", "region": "global", "backend": "silero",
+    {"id": "silero_en_0", "name": "Silero en_0 (en, Default)", "language": "en-US", "region": "global", "backend": "silero",
      "speaker": "en_0", "silero_model_id": "v3_en",
      "size_mb": 100, "size_display": "100 MB", "model_path": None,
      "download_url": None, "auto_download": True,
@@ -654,14 +654,14 @@ SILERO_TTS_MODELS = [
      "description": "German male voice",
      "note": "Requires INCLUDE_SILERO=true in Docker build"},
     # === Spanish (v3_es — numbered speakers) ===
-    {"id": "silero_es_0", "name": "Silero es_0 (es)", "language": "es-ES", "region": "europe", "backend": "silero",
+    {"id": "silero_es_0", "name": "Silero es_0 (es, Default)", "language": "es-ES", "region": "europe", "backend": "silero",
      "speaker": "es_0", "silero_model_id": "v3_es",
      "size_mb": 100, "size_display": "100 MB", "model_path": None,
      "download_url": None, "auto_download": True,
      "description": "Spanish voice, 8kHz native telephony",
      "note": "Requires INCLUDE_SILERO=true in Docker build"},
     # === French (v3_fr — numbered speakers) ===
-    {"id": "silero_fr_0", "name": "Silero fr_0 (fr)", "language": "fr-FR", "region": "europe", "backend": "silero",
+    {"id": "silero_fr_0", "name": "Silero fr_0 (fr, Default)", "language": "fr-FR", "region": "europe", "backend": "silero",
      "speaker": "fr_0", "silero_model_id": "v3_fr",
      "size_mb": 100, "size_display": "100 MB", "model_path": None,
      "download_url": None, "auto_download": True,
