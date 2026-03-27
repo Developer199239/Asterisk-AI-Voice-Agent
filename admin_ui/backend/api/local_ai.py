@@ -333,7 +333,11 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                     yaml_updates["silero_language"] = request.silero_language
                 if request.silero_model_id:
                     env_updates["SILERO_MODEL_ID"] = request.silero_model_id
-                if request.model_path:
+                    yaml_updates["silero_model_id"] = request.silero_model_id
+                # SILERO_MODEL_PATH is the torch.hub cache directory, not the
+                # speaker:model_id path from the dropdown. Only set if explicitly
+                # provided as a real filesystem path.
+                if request.model_path and request.model_path.startswith("/"):
                     env_updates["SILERO_MODEL_PATH"] = request.model_path
             elif request.backend == "kokoro":
                 if request.kokoro_mode:
@@ -1038,6 +1042,7 @@ async def switch_model(request: SwitchModelRequest):
         "LOCAL_STT_BACKEND", "LOCAL_STT_MODEL_PATH", "SHERPA_MODEL_PATH", "WHISPER_CPP_MODEL_PATH",
         "KROKO_LANGUAGE", "KROKO_EMBEDDED", "KROKO_PORT", "KROKO_URL", "KROKO_MODEL_PATH",
         "LOCAL_TTS_BACKEND", "LOCAL_TTS_MODEL_PATH",
+        "SILERO_SPEAKER", "SILERO_LANGUAGE", "SILERO_MODEL_ID", "SILERO_MODEL_PATH",
         "KOKORO_MODE", "KOKORO_VOICE", "KOKORO_MODEL_PATH",
         "KOKORO_API_BASE_URL", "KOKORO_API_KEY", "KOKORO_API_MODEL",
         "MELOTTS_VOICE", "MELOTTS_DEVICE", "FASTER_WHISPER_MODEL", "FASTER_WHISPER_DEVICE",
