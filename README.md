@@ -6,7 +6,7 @@
   <img alt="Asterisk AI Voice Agent" src="assets/banner_light_mode.png?v=9" width="100%">
 </picture>
 
-![Version](https://img.shields.io/badge/version-6.3.2-blue.svg)
+![Version](https://img.shields.io/badge/version-6.4.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -25,7 +25,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v632)
+- [🎉 What's New](#-whats-new-in-v640)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -116,7 +116,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.3.2.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v6.4.0.
 
 ### Option B: Manual Setup
 ```bash
@@ -159,23 +159,32 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v6.3.2
+## 🎉 What's New in v6.4.0
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### ☁️ New Providers (v6.3.2)
-- **Microsoft Azure Speech Service**: Full modular STT & TTS pipeline adapters — Fast REST batch, Realtime WebSocket with VAD, and SSML synthesis with streaming. Admin UI forms, quick-add templates, and security key injection.
-- **MiniMax LLM**: M2.7 models (latest flagship with enhanced reasoning and coding) via OpenAI-compatible API. Tool-calling support and Admin UI integration.
+### 📞 Attended Transfer Streaming & Screening (v6.4.0)
+- **Three screening modes**: `basic_tts` (caller ID announcement), `ai_briefing` (experimental AI conversation summary), `caller_recording` (records caller stating name/reason)
+- **Streaming delivery**: ExternalMedia RTP helper eliminates shared storage dependency for transfer announcements
+- **Provider-agnostic tool guidance**: Dynamically exposes configured transfer targets to LLM providers, preventing hallucinated extensions
+- **Live Agents UI**: Redesigned compact layout with auto-polling for agent availability
 
-### 🎧 Admin UI (v6.3.2)
-- **Call Recording Playback**: Play back Asterisk call recordings directly from the Call Details modal, auto-matched by channel unique ID.
-- **Google Calendar delete()**: Full delete event support with timezone fixes.
+### 🗣️ Russian Speech Backends (v6.4.0)
+- **Sherpa Offline STT**: VAD-gated offline transducer mode with Silero VAD, configurable thresholds, preroll padding, and debug diagnostics. Set `SHERPA_MODEL_TYPE=offline` to enable.
+- **T-one STT**: Native Russian telephony ASR using streaming CTC pipeline with beam search/greedy decoding. Requires `--build-arg INCLUDE_TONE=true`.
+- **Silero TTS**: Multi-language TTS (ru, en, de, es, fr, ua) with native 8kHz telephony output and multiple speakers. Requires `--build-arg INCLUDE_SILERO=true`.
 
-### 🛡️ Security & Reliability (v6.3.2)
-- Azure SSRF prevention with shared region validator across all layers
-- PII logging discipline — no transcript/text content in any log statement
-- Input validation hardening across backend and frontend
+### 🎧 Admin UI (v6.4.0)
+- **Fullscreen panels**: Maximize/minimize toggle for System Topology, Call Statistics, and Call History with Escape key support
+- **Conversation timestamps**: Per-message timestamps in Call Log UI with LLM payload sanitization
+- **HTTP tool wildcards**: JSONPath `[*]` array extraction now works correctly in output variables
+
+### Previously in v6.3.2
+- Microsoft Azure Speech Service STT & TTS pipeline adapters
+- MiniMax LLM M2.7 via OpenAI-compatible API
+- Call Recording Playback in Admin UI
+- Azure SSRF prevention, PII logging discipline
 
 For full release notes, see [CHANGELOG.md](CHANGELOG.md).
 

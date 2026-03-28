@@ -45,7 +45,7 @@ See the validated configurations in `config/`:
 - `ai-agent.golden-elevenlabs.yaml` - ElevenLabs Agent (monolithic, premium voice)
 - `ai-agent.golden-local-hybrid.yaml` - Local Hybrid (pipeline, privacy-focused)
 
-### Additional Pipeline Providers (v6.3.2+)
+### Additional Pipeline Providers (v6.4.0+)
 - **Azure Speech Service** — Modular STT (`azure_stt`) and TTS (`azure_tts`) pipeline adapters. See [Provider-Azure-Setup.md](Provider-Azure-Setup.md).
 - **MiniMax LLM** — Pipeline LLM adapter (`minimax_llm`). See [Provider-MiniMax-Setup.md](Provider-MiniMax-Setup.md).
 - **Telnyx AI Inference** — Pipeline LLM adapter. See [Provider-Telnyx-Setup.md](Provider-Telnyx-Setup.md).

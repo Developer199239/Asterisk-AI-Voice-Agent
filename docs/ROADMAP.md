@@ -18,11 +18,23 @@ Active and upcoming work. Pick something up and [get involved](#how-to-contribut
 
 Outbound dialer shipped as Alpha in v5.0.0 — core scheduling, AMD, voicemail drop, consent gate, and Admin UI are working. Current focus: DNC, retry automation, outcome classification, and resilience hardening (see Phases 6-8 in spec).
 
+### Completed Milestones (Recent)
+
+| Milestone | Version | Details |
+|-----------|---------|---------|
+| Azure Speech STT/TTS Adapters | ✅ v6.3.2 | `src/pipelines/azure.py` — Fast REST, Realtime WebSocket, SSML TTS |
+| MiniMax LLM Adapter | ✅ v6.3.2 | M2.7 models via OpenAI-compatible API with tool-calling |
+| Call Recording Playback | ✅ v6.3.2 | Play back Asterisk recordings in Call Details modal |
+| Attended Transfer Streaming & Screening | ✅ v6.4.0 | Three screening modes, RTP streaming delivery, provider-agnostic tool guidance |
+| Russian Speech Backends | ✅ v6.4.0 | Sherpa offline STT (VAD-gated), T-one STT (Russian CTC), Silero TTS (multi-language) |
+| HTTP Tool Wildcard Extraction | ✅ v6.4.0 | JSONPath `[*]` array extraction in output variables |
+| Conversation Timestamps | ✅ v6.4.0 | Per-message timestamps in conversation history + Call Log UI |
+| Fullscreen UI Panels | ✅ v6.4.0 | Maximize/minimize toggle for dashboard panels |
+
 ### Planned Milestones
 
 | Milestone | Status | Skills | Difficulty | Details |
 |-----------|--------|--------|------------|---------|
-| Azure Speech STT/TTS Adapters | ✅ Completed (v6.3.2) | Python, Azure SDK | Intermediate | `src/pipelines/azure.py` — Fast REST, Realtime WebSocket, SSML TTS |
 | Anthropic Claude LLM Adapter | Planned | Python, Anthropic API | Intermediate | Pipeline adapter following OpenAI Chat pattern |
 | SMS/MMS Notification Tool | Planned | Python, Twilio | Intermediate | Business tool following `src/tools/business/` pattern |
 | Conference Bridge Tools | Planned | Python, ARI | Advanced | Create/manage multi-party calls via ARI |
@@ -65,8 +77,8 @@ Longer-term goals that will shape the project's direction:
 
 - **WebRTC Browser Client** — SIP client for browser-based calls without a physical phone
 - **High Availability / Clustering** — Multi-instance `ai_engine` with session affinity and failover
-- **Call Recording** — Consent-managed audio recording with storage backends
-- **Multi-Language / i18n** — Dynamic language detection and provider switching per call
+- **Call Recording** — Consent-managed audio recording with storage backends (playback shipped in v6.3.2)
+- **Multi-Language / i18n** — Dynamic language detection and provider switching per call (Russian backends shipped in v6.4.0)
 - **Real-Time Dashboard** — Live visualization of active calls with metrics
 - **Voice Biometrics** — Voice-based authentication for sensitive operations
 - **Streaming Latency <500ms** — Performance optimizations for sub-500ms end-to-end latency
@@ -98,4 +110,4 @@ Longer-term goals that will shape the project's direction:
 
 ---
 
-**Last Updated**: March 2026 | **Current Version**: v6.3.2
+**Last Updated**: March 2026 | **Current Version**: v6.4.0

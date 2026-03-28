@@ -7,19 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Conversation timestamps (#277)**: All conversation history entries now include per-message timestamps. Added `_ts_msg()` helper in engine to ensure every `conversation_history.append()` site (12 total) attaches `time.time()`. Fixed frontend epoch-seconds-to-milliseconds conversion so timestamps display correctly in the Call Log UI.
-- **HTTP tool output variable array extraction (#281)**: JSONPath wildcards like `records[*].fields.name` now correctly return arrays instead of empty strings. Extracted duplicated `_extract_path` logic into shared `path_utils.extract_path()` with support for `[*]` wildcards, bare `[0]`/`[*]` on root arrays, hyphenated field names (e.g. `line-items[*].sku`), and explicit null-vs-missing semantics. Array/dict results are now JSON-serialized via `json.dumps` instead of Python `str()`. Added `"data"` to sanitizer `keep_keys` so extracted variables reach OpenAI/Deepgram providers, with progressive byte-cap enforcement (drop `result` → `data` → binary-search trim `message`). Fixed `_build_result_message` dropping falsy scalars (`0`, `False`).
-
-### Added
-
-- **Fullscreen toggle for UI panels (#278)**: New `FullscreenPanel` reusable component with `Maximize2`/`Minimize2` toggle, portal-based fullscreen overlay at `z-[60]`, and safe body-scroll restore. Applied to Live System Topology (Dashboard), Call Statistics grid, and Call History table with pagination.
-
 ### Planned
 
 - Additional provider integrations
 - Enhanced monitoring features
+
+## [6.4.0] - 2026-03-28
+
+### Added
+
+- **Attended Transfer Streaming & Screening (#283)**: Advanced attended (warm) transfer system with three screening modes — `basic_tts` (caller ID + context announcement), `ai_briefing` (experimental AI-written conversation summary via Local AI Server LLM), and `caller_recording` (records caller stating name/reason, plays clip to agent). New streaming delivery mode uses ExternalMedia RTP helper to avoid shared storage dependency, with automatic fallback to file playback. Provider-agnostic runtime tool guidance dynamically exposes configured transfer targets and extension inventories to LLM providers. Live Agents UI redesigned with compact flex layout, auto-polling for agent availability, and conditional Admin UI fields for each screening mode. Includes telephony tools surface audit with deprecation plan for legacy paths.
+- **Sherpa Offline STT with VAD (#286)**: VAD-gated offline transducer mode for Sherpa-ONNX. Uses Silero VAD model for per-session voice activity detection with configurable thresholds (`SHERPA_VAD_THRESHOLD`, `SHERPA_VAD_MIN_SILENCE_MS`, `SHERPA_VAD_MIN_SPEECH_MS`). Includes preroll padding to avoid clipped utterance prefixes (`SHERPA_OFFLINE_PREROLL_MS`), streaming-vs-offline model auto-detection with validation, and optional debug diagnostics (`SHERPA_OFFLINE_DEBUG_SEGMENTS`). Set `SHERPA_MODEL_TYPE=offline` to enable.
+- **T-one STT Backend (#286)**: Native Russian telephony ASR using the T-one streaming CTC pipeline. Supports beam search and greedy decoding with optional kenlm language model. 300ms chunk framing with internal 16→8kHz handling. Requires conditional Docker build: `docker compose build --build-arg INCLUDE_TONE=true`. Contributed by [@octo-patch](https://github.com/octo-patch).
+- **Silero TTS Backend (#286)**: Multi-language text-to-speech with native 8kHz telephony output (no resampling needed). Supports 6 languages (ru, en, de, es, fr, ua) with multiple speaker voices (xenia, aidar, baya, kseniya, eugene for Russian). Model variants v3_0_ru and v3_1_ru. Requires conditional Docker build: `docker compose build --build-arg INCLUDE_SILERO=true`. Contributed by [@octo-patch](https://github.com/octo-patch).
+- **Fullscreen toggle for UI panels (#278, #280)**: New `FullscreenPanel` reusable component with `Maximize2`/`Minimize2` toggle, portal-based fullscreen overlay at `z-40`, ref-counted body scroll lock, and Escape key support. Applied to Live System Topology (Dashboard), Call Statistics grid, and Call History table with pagination.
+- **Per-message conversation timestamps (#277, #280)**: All 12 `conversation_history.append()` sites in engine now include `time.time()` epoch seconds via `_ts_msg()` helper. Frontend Call Log UI displays human-readable timestamps with epoch-to-millisecond coercion. Added `_sanitize_for_llm()` to strip non-standard keys before sending to LLM adapters, preventing 400/422 rejections on strict OpenAI-compatible providers.
+
+### Fixed
+
+- **HTTP tool output variable array extraction (#281, #282)**: JSONPath wildcards like `records[*].fields.name` now correctly return arrays instead of empty strings. Extracted duplicated `_extract_path` logic into shared `path_utils.extract_path()` with support for `[*]` wildcards, bare `[0]`/`[*]` on root arrays, hyphenated field names (e.g. `line-items[*].sku`), and explicit null-vs-missing semantics. Array/dict results are now JSON-serialized via `json.dumps` instead of Python `str()`. Added `"data"` to sanitizer `keep_keys` so extracted variables reach OpenAI/Deepgram providers, with progressive byte-cap enforcement (drop `result` → `data` → binary-search trim `message`). Fixed `_build_result_message` dropping falsy scalars (`0`, `False`).
+- **Silero TTS initialization (#286)**: Fixed torch.hub trust prompt blocking startup, synthetic dropdown value leaking into model path, status path mismatch with dropdown format, and hot-switch backend allowlist.
+- **Sherpa offline VAD use-after-free (#286)**: Fixed crash where VAD segment samples were referenced after `vad.pop()` freed the buffer — now copies samples before pop.
+- **T-one server numpy import (#286)**: Fixed numpy import compatibility in T-one backend initialization.
+- **Trivy CI action**: Updated `aquasecurity/trivy-action` from non-existent `0.33.1` tag to `0.35.0`.
+
+### Improved
+
+- **Attended transfer tool descriptions**: Refreshed tool catalog transfer descriptions for clarity. Extension status checks restricted to configured targets for safety. Explicit target support added to live agent transfer.
+- **Admin UI Live Agents**: Compact layout with actions moved to first row. Dynamic auto-polling for agent availability. Conditional display of hangup expert settings when disabled. Fixed in-call HTTP tool discovery.
+- **Docker conditional builds**: New `INCLUDE_TONE` and `INCLUDE_SILERO` build args for optional backend inclusion without bloating default image size. Silero models pinned to v5.5 tag for reproducible builds.
+- **Sherpa offline tuning knobs**: Documented optimal VAD parameters for telephony use cases in `docs/LOCAL_ONLY_SETUP.md`.
 
 ## [6.3.2] - 2026-03-12
 
@@ -1523,6 +1540,7 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 
 ## Version History
 
+- **v6.4.0** (2026-03-28) - Attended transfer streaming & screening, Sherpa offline STT, T-one STT, Silero TTS, HTTP wildcards, conversation timestamps, fullscreen UI
 - **v6.3.2** (2026-03-12) - Azure Speech Service STT/TTS adapters, MiniMax LLM adapter, call recording playback, Google Calendar delete, security hardening
 - **v6.3.1** (2026-02-23) - Local AI Server onboarding + model lifecycle hardening, tool gateway/guardrails, model catalog + UI rebuild flows, CLI verification tooling, expanded docs and audits
 - **v6.2.2** (2026-02-20) - Vertex AI credentials auto-management, ADC graceful fallback, secrets dir permissions, install.sh YAML dupe fix, dashboard pipeline variant display
@@ -1544,7 +1562,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.3.2...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.4.0...HEAD
+[6.4.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.3.2...v6.4.0
 [6.3.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.3.1...v6.3.2
 [6.3.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.2...v6.3.1
 [6.2.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v6.2.1...v6.2.2
