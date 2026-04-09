@@ -1118,10 +1118,13 @@ async def get_available_models(language: Optional[str] = None):
             system_recommended = False
             if category == "llm":
                 model_id = model.get("id")
-                if model_id == "tinyllama":
+                if model_id == "qwen25_1_5b":
+                    # Best CPU voice model: fast inference, reliable tool calling
+                    system_recommended = meets_ram and cpu_cores >= 4
+                elif model_id == "tinyllama":
                     system_recommended = meets_ram and cpu_cores >= 2
                 elif model_id == "phi3_mini":
-                    system_recommended = meets_ram and cpu_cores >= 4
+                    system_recommended = meets_ram and cpu_cores >= 4 and gpu_detected
                 elif model_id == "llama32_3b":
                     system_recommended = meets_ram and (gpu_detected or cpu_cores >= 6)
                 elif model_id == "mistral_7b_instruct":
@@ -1327,6 +1330,7 @@ class SingleModelDownload(BaseModel):
     model_path: Optional[str] = None
     config_url: Optional[str] = None  # For TTS models that need JSON config
     voice_files: Optional[Dict[str, str]] = None  # For Kokoro TTS voice files
+    vocoder_url: Optional[str] = None  # For Matcha TTS vocoder
     expected_sha256: Optional[str] = None  # Optional integrity check
 
 
@@ -1467,6 +1471,27 @@ async def download_single_model(request: SingleModelDownload):
                 # Clean up archive file after extraction
                 os.remove(temp_file)
                 _job_output(job.id, "🧹 Cleaned up archive file")
+
+                # Download vocoder for Matcha TTS models
+                if request.vocoder_url and request.type == "tts":
+                    # Security: only allow https:// URLs for vocoder downloads
+                    if not request.vocoder_url.startswith(("https://", "http://")):
+                        _job_output(job.id, f"⚠️ Vocoder URL rejected (invalid scheme): {request.vocoder_url}")
+                    else:
+                        vocoder_dir = os.path.join(target_dir, root_folder) if root_folder else target_dir
+                        vocoder_filename = os.path.basename(request.vocoder_url)
+                        vocoder_dest = os.path.join(vocoder_dir, vocoder_filename)
+                        _job_output(job.id, f"📥 Downloading vocoder: {vocoder_filename}...")
+                        try:
+                            tmp_voc = vocoder_dest + f".{uuid.uuid4().hex}.part"
+                            urllib.request.urlretrieve(request.vocoder_url, tmp_voc)
+                            voc_sha = _sha256_file(tmp_voc)
+                            shutil.move(tmp_voc, vocoder_dest)
+                            _write_sha256_sidecar(vocoder_dest, voc_sha)
+                            _job_output(job.id, f"✅ Vocoder saved to {vocoder_dest}")
+                        except Exception as voc_err:
+                            _job_output(job.id, f"❌ Vocoder download failed: {voc_err}")
+                            _job_output(job.id, "⚠️ Matcha TTS may not work without vocoder")
             else:
                 # Single file - rename to model_path or keep original name
                 # Special handling for Kokoro which uses a directory structure
@@ -1976,6 +2001,7 @@ async def download_selected_models(selection: ModelSelection):
                 if stt_backend == "sherpa":
                     stt_path = _safe_join_under_dir("/app/models/stt", stt_model["model_path"])
                     env_updates.append(f"SHERPA_MODEL_PATH={stt_path}")
+                    env_updates.append(f"SHERPA_MODEL_TYPE={stt_model.get('model_type', 'online')}")
                 elif stt_backend == "kroko":
                     if selection.kroko_embedded:
                         stt_path = _safe_join_under_dir("/app/models/kroko", stt_model["model_path"])
@@ -2430,11 +2456,17 @@ async def get_local_server_logs():
         ready = "Enhanced Local AI Server started" in all_logs or \
                 "All models loaded successfully" in all_logs or \
                 "models loaded" in all_logs.lower()
-        
+
+        # Detect first-run HuggingFace model downloads so the frontend can extend
+        # its polling timeout beyond the normal 2-minute window.
+        _DOWNLOAD_MARKERS = ("Downloading ", "huggingface_hub", "from_pretrained", "fetching model")
+        downloading = (not ready) and any(m.lower() in all_logs.lower() for m in _DOWNLOAD_MARKERS)
+
         return {
             "logs": lines[-20:],
             "ready": ready,
-            "phase": "running" if ready else "starting"
+            "phase": "running" if ready else ("downloading" if downloading else "starting"),
+            "downloading": downloading,
         }
     except subprocess.TimeoutExpired:
         return {"logs": [], "ready": False, "error": "Timeout getting logs"}
@@ -3008,6 +3040,7 @@ async def save_setup_config(config: SetupConfig):
             stt_model_path = (stt_model or {}).get("model_path")
             if stt_backend == "sherpa" and stt_model_path:
                 env_updates["SHERPA_MODEL_PATH"] = _safe_join_under_dir("/app/models/stt", stt_model_path)
+                env_updates["SHERPA_MODEL_TYPE"] = (stt_model or {}).get("model_type", "online")
             elif stt_backend == "kroko":
                 env_updates["KROKO_EMBEDDED"] = "1" if config.kroko_embedded else "0"
                 if config.kroko_api_key:

@@ -195,26 +195,26 @@ SHERPA_STT_MODELS = [
     {"id": "sherpa_en", "name": "English (Streaming)", "language": "en-US", "region": "global", "backend": "sherpa",
      "size_mb": 100, "size_display": "100 MB", "model_path": "sherpa-onnx-streaming-zipformer-en-2023-06-26",
      "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
-     "recommended": True, "is_archive": True, "archive_type": "tar.bz2"},
+     "recommended": True, "is_archive": True, "archive_type": "tar.bz2", "model_type": "online"},
     {"id": "sherpa_en_offline", "name": "English (Offline Transducer)", "language": "en-US", "region": "global", "backend": "sherpa",
      "size_mb": 188, "size_display": "188 MB", "model_path": "sherpa-onnx-zipformer-en-2023-06-26",
      "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-en-2023-06-26.tar.bz2",
-     "is_archive": True, "archive_type": "tar.bz2",
+     "is_archive": True, "archive_type": "tar.bz2", "model_type": "offline",
      "note": "Use with SHERPA_MODEL_TYPE=offline. Validates Sherpa offline telephony without a streaming model mismatch."},
     {"id": "sherpa_en_gigaspeech_offline", "name": "English GigaSpeech (Offline Transducer)", "language": "en-US", "region": "global", "backend": "sherpa",
      "size_mb": 136, "size_display": "136 MB", "model_path": "sherpa-onnx-zipformer-gigaspeech-2023-12-12",
      "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-gigaspeech-2023-12-12.tar.bz2",
-     "is_archive": True, "archive_type": "tar.bz2",
+     "is_archive": True, "archive_type": "tar.bz2", "model_type": "offline",
      "note": "Fallback offline English model if sherpa-onnx-zipformer-en-2023-06-26 is unavailable."},
     {"id": "sherpa_ru_offline", "name": "Russian (Offline Transducer)", "language": "ru-RU", "region": "europe", "backend": "sherpa",
      "size_mb": 189, "size_display": "189 MB", "model_path": "sherpa-onnx-zipformer-ru-2024-09-18",
      "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-ru-2024-09-18.tar.bz2",
-     "is_archive": True, "archive_type": "tar.bz2",
+     "is_archive": True, "archive_type": "tar.bz2", "model_type": "offline",
      "note": "Use with SHERPA_MODEL_TYPE=offline after English offline validation passes."},
     {"id": "sherpa_zh", "name": "Chinese-English Bilingual (Streaming)", "language": "zh-CN", "region": "asia", "backend": "sherpa",
      "size_mb": 120, "size_display": "120 MB", "model_path": "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
      "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2",
-     "is_archive": True, "archive_type": "tar.bz2"},
+     "is_archive": True, "archive_type": "tar.bz2", "model_type": "online"},
 ]
 
 KROKO_STT_MODELS = [
@@ -282,7 +282,7 @@ FASTER_WHISPER_STT_MODELS = [
      "description": "Best accuracy, requires GPU for acceptable speed.",
      "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
     {"id": "faster_whisper_large_v3_turbo", "name": "Whisper Large v3 Turbo (809M)", "language": "multi", "region": "global", "backend": "faster_whisper",
-     "size_mb": 1600, "size_display": "1.6 GB", "model_path": "large-v3-turbo",
+     "size_mb": 1600, "size_display": "1.6 GB", "model_path": "deepdml/faster-whisper-large-v3-turbo-ct2",
      "download_url": None, "auto_download": True,
      "description": "Pruned large-v3, best speed/quality ratio. Recommended for GPU.",
      "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
@@ -680,6 +680,15 @@ SILERO_TTS_MODELS = [
 
 LLM_MODELS = [
     # === Lightweight Models (4-8 GB RAM) ===
+    {"id": "qwen25_1_5b", "name": "Qwen 2.5-1.5B Instruct", "size_mb": 940, "size_display": "940 MB",
+     "description": "Best CPU voice model \u2014 fast inference, reliable tool calling",
+     "chat_format": "chatml",
+     "tool_calling": "experimental",
+     "tool_calling_note": "Supports hangup_call and basic tools via heuristic parsing. Uses <tool_call> format natively.",
+     "cpu_recommended": True,
+     "note": "Recommended for CPU-only voice deployments. ~7-9s per response with streaming overlap on 16-core CPU. Significantly faster than Phi-3 (3.8B) while maintaining good conversation quality.",
+     "download_url": "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+     "model_path": "qwen2.5-1.5b-instruct-q4_k_m.gguf", "recommended_ram_gb": 4},
     {"id": "tinyllama", "name": "TinyLlama 1.1B", "size_mb": 700, "size_display": "700 MB",
      "description": "Lightweight, for low-resource systems",
      "chat_format": "chatml",
@@ -780,13 +789,33 @@ LLM_MODELS = [
      "download_url": None, "model_path": None, "requires_api_key": True, "api_key_name": "GROQ_API_KEY"},
 ]
 
+# ============== Matcha-TTS Models (via sherpa-onnx) ==============
+
+MATCHA_TTS_MODELS = [
+    {"id": "matcha_en_ljspeech", "name": "Matcha LJSpeech (en, Female)", "language": "en-US", "region": "global", "backend": "matcha",
+     "size_mb": 80, "size_display": "~80 MB (model + vocoder)",
+     "model_path": "matcha-icefall-en_US-ljspeech",
+     "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-en_US-ljspeech.tar.bz2",
+     "vocoder_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/hifigan_v2.onnx",
+     "recommended": True,
+     "description": "Fast, high-quality English TTS via flow matching (RTF ~0.015 on CPU). Requires Vocos vocoder.",
+     "note": "Requires sherpa-onnx (INCLUDE_SHERPA=true). Download model + vocoder to use."},
+    {"id": "matcha_zh_baker", "name": "Matcha Baker (zh, Female)", "language": "zh-CN", "region": "asia", "backend": "matcha",
+     "size_mb": 80, "size_display": "~80 MB (model + vocoder)",
+     "model_path": "matcha-icefall-zh-baker",
+     "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-baker.tar.bz2",
+     "vocoder_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/hifigan_v2.onnx",
+     "description": "Fast Chinese TTS via flow matching. Requires Vocos vocoder.",
+     "note": "Requires sherpa-onnx (INCLUDE_SHERPA=true). Download model + vocoder to use."},
+]
+
 # ============== Combined Catalog ==============
 
 def get_full_catalog():
     """Get the complete model catalog organized by type."""
     return {
         "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + TONE_STT_MODELS + FASTER_WHISPER_STT_MODELS + WHISPER_CPP_STT_MODELS,
-        "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS + MELOTTS_MODELS + SILERO_TTS_MODELS,
+        "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS + MELOTTS_MODELS + SILERO_TTS_MODELS + MATCHA_TTS_MODELS,
         "llm": LLM_MODELS,
     }
 
