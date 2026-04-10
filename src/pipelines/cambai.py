@@ -9,14 +9,15 @@ API Reference: https://docs.camb.ai
 """
 from __future__ import annotations
 
-import audioop
-from ..audio.resampler import resample_audio
+import io
 import time
 import uuid
+import wave
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 import aiohttp
 
+from ..audio import resample_audio, pcm16le_to_mulaw
 from ..config import AppConfig, CambAiProviderConfig
 from ..logging_config import get_logger
 from .base import TTSComponent
@@ -179,12 +180,14 @@ class CambAiTTSAdapter(TTSComponent):
         if output_format == "pcm_s16le":
             # Raw PCM 16-bit signed little-endian at 24kHz -> resample to 8kHz -> μ-law
             resampled, _ = resample_audio(raw_audio, CAMB_AI_PCM_SAMPLE_RATE, 8000)
-            return audioop.lin2ulaw(resampled, 2)
+            return pcm16le_to_mulaw(resampled)
         elif output_format == "wav":
-            # WAV has a 44-byte header, skip it to get raw PCM
-            pcm_data = raw_audio[44:] if len(raw_audio) > 44 else raw_audio
-            resampled, _ = resample_audio(pcm_data, CAMB_AI_PCM_SAMPLE_RATE, 8000)
-            return audioop.lin2ulaw(resampled, 2)
+            # Parse WAV container to extract raw PCM frames and sample rate
+            with wave.open(io.BytesIO(raw_audio), "rb") as wf:
+                pcm_data = wf.readframes(wf.getnframes())
+                source_rate = wf.getframerate()
+            resampled, _ = resample_audio(pcm_data, source_rate, 8000)
+            return pcm16le_to_mulaw(resampled)
         else:
             logger.warning(
                 "Unknown CAMB AI output format, passing through raw audio",

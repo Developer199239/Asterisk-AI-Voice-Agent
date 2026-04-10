@@ -60,6 +60,10 @@ class _FakeResponse:
     async def text(self):
         return self._body.decode("utf-8", errors="ignore")
 
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise Exception(f"HTTP {self.status}")
+
 
 class _FakeSession:
     def __init__(self, body: bytes, status: int = 200):
