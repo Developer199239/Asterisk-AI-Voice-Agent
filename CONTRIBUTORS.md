@@ -16,6 +16,7 @@ Thanks to all the people who have contributed to the Asterisk AI Voice Agent!
 | <img src="https://github.com/alemstrom.png" width="50" alt="alemstrom"> | **[alemstrom](https://github.com/alemstrom)** | Docs — PBX Setup |
 | <img src="https://github.com/gcsuri.png" width="50" alt="gcsuri"> | **[gcsuri](https://github.com/gcsuri)** | Code — Google Calendar Tool |
 | <img src="https://github.com/octo-patch.png" width="50" alt="octo-patch"> | **[octo-patch](https://github.com/octo-patch)** | Code — MiniMax LLM Provider |
+| <img src="https://github.com/neilruaro-camb.png" width="50" alt="neilruaro-camb"> | **[neilruaro-camb](https://github.com/neilruaro-camb)** | Code — CAMB AI TTS Provider |
 
 <!-- markdownlint-restore -->
 <!-- prettier-ignore-end -->
