@@ -42,10 +42,11 @@ const Header = () => {
 
             <div className="flex items-center gap-2">
                 <button
+                    type="button"
                     onClick={cycleTheme}
                     className="p-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors"
                     title={`Theme: ${theme} (click to cycle)`}
-                    aria-label={`Current theme: ${theme}. Click to cycle theme`}
+                    aria-label={`Current theme: ${theme}. Activate to cycle theme`}
                 >
                     {theme === 'light' && <Sun className="w-4 h-4" />}
                     {theme === 'dark' && <Moon className="w-4 h-4" />}
