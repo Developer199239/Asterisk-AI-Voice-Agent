@@ -257,7 +257,7 @@ async def list_calls(
     has_tool_calls: Optional[bool] = Query(None, description="Filter calls with tool executions"),
     min_duration: Optional[float] = Query(None, description="Minimum duration in seconds"),
     max_duration: Optional[float] = Query(None, description="Maximum duration in seconds"),
-    transcript_search: Optional[str] = Query(None, description="Search within conversation transcripts (case-insensitive substring match)"),
+    transcript_search: Optional[str] = Query(None, min_length=1, max_length=256, description="Search within conversation transcripts (case-insensitive substring match)"),
     order_by: str = Query("start_time", description="Column to order by"),
     order_dir: str = Query("DESC", description="Order direction (ASC/DESC)"),
 ):
