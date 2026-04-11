@@ -215,7 +215,7 @@ const PipelinesPage = () => {
         }
         setEditingPipeline('new_pipeline');
         const { tools: _legacyTools, ...rest } = (sourceData && typeof sourceData === 'object') ? sourceData : {};
-        setPipelineForm({ name: cloneName, ...rest });
+        setPipelineForm({ ...rest, name: cloneName });
         setIsNewPipeline(true);
     };
 
