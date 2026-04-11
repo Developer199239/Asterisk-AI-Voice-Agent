@@ -449,6 +449,10 @@ class Engine:
             if vad_mode == "provider" or (vad_mode == "auto" and use_provider_vad):
                 # Legacy behaviour preserved for vad_mode="provider"
                 use_provider_vad = True
+            # For backward compatibility: if vad_mode is "auto" and use_provider_vad is true,
+            # treat it as explicit "provider" mode (legacy configs expect this behavior)
+            if vad_mode == "auto" and use_provider_vad:
+                vad_mode = "provider"
             self._vad_mode = vad_mode  # Store for per-call runtime decisions
             # In "auto" mode, always initialize local VAD so it's available per-call
             if use_provider_vad and vad_mode != "auto":

@@ -652,7 +652,7 @@ class LLMConfig(BaseModel):
 
 class VADConfig(BaseModel):
     use_provider_vad: bool = Field(default=False)  # Deprecated: use vad_mode instead
-    vad_mode: str = Field(
+    vad_mode: Literal["auto", "local", "provider"] = Field(
         default="auto",
         description="VAD mode: 'auto' (decide per-provider based on capabilities), "
                     "'local' (always use local VAD), 'provider' (prefer provider VAD, equivalent to use_provider_vad=true)"
