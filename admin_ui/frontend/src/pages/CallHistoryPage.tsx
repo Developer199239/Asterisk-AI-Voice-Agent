@@ -452,6 +452,9 @@ const CallHistoryPage = () => {
     };
 
     const clearFilters = () => {
+        if (transcriptSearchTimer.current) clearTimeout(transcriptSearchTimer.current);
+        setTranscriptSearchInput('');
+        setTranscriptSearch('');
         setFilters({
             caller_number: '',
             caller_name: '',

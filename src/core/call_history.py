@@ -542,6 +542,7 @@ class CallHistoryStore:
                             .replace("_", "\\_")
                         )
                         conditions.append("LOWER(conversation_history) LIKE LOWER(?) ESCAPE '\\'")
+
                         params.append(f"%{escaped}%")
 
                     where_clause = " AND ".join(conditions) if conditions else "1=1"
