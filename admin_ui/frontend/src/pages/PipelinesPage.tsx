@@ -514,6 +514,7 @@ const PipelinesPage = () => {
                                     <button
                                         onClick={() => handleClonePipeline(name)}
                                         className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                        aria-label={`Clone pipeline ${name}`}
                                         title="Clone pipeline"
                                     >
                                         <Copy className="w-4 h-4" />

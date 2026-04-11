@@ -480,6 +480,7 @@ const ContextsPage = () => {
                                     <button
                                         onClick={() => handleCloneContext(name)}
                                         className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                        aria-label={`Clone context ${name}`}
                                         title="Clone context"
                                     >
                                         <Copy className="w-4 h-4" />

@@ -404,6 +404,7 @@ const ProfilesPage = () => {
 	                                                handleCloneProfile(profileName);
 	                                            }}
 	                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+	                                            aria-label={`Clone profile ${profileName}`}
 	                                            title="Clone profile"
 	                                        >
 	                                            <Copy className="w-4 h-4" />
