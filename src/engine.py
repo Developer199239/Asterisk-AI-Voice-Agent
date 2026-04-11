@@ -574,8 +574,8 @@ class Engine:
         """Decide whether local VAD should be active for a given provider.
 
         In 'auto' mode (default), local VAD is skipped only for providers
-        that have native VAD and native barge-in — i.e. they can reliably
-        handle turn detection without local assistance.
+        that have native VAD, native barge-in, and native AEC — i.e. they can
+        reliably handle turn detection on telephony without local assistance.
         """
         vad_mode = getattr(self, "_vad_mode", "auto")
         if vad_mode == "local":
@@ -588,8 +588,12 @@ class Engine:
             caps = None
             if hasattr(provider, "get_capabilities"):
                 caps = provider.get_capabilities()
-            if caps and getattr(caps, "has_native_vad", False) \
-                    and getattr(caps, "has_native_barge_in", False):
+            if (
+                caps
+                and getattr(caps, "has_native_vad", False)
+                and getattr(caps, "has_native_barge_in", False)
+                and getattr(caps, "has_native_aec", False)
+            ):
                 return False
         return True
 
