@@ -286,6 +286,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             is_full_agent=True,  # Full bidirectional agent (not pipeline component)
             has_native_vad=True,  # OpenAI Realtime has server-side VAD (turn detection)
             has_native_barge_in=True,  # Handles interruptions via cancel_response
+            has_native_aec=True,  # WebRTC-based AEC; safe to skip local VAD on telephony
             requires_continuous_audio=True,  # Needs continuous audio for server-side VAD
         )
     

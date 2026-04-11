@@ -443,8 +443,15 @@ class Engine:
         self.webrtc_vad = None
         try:
             vad_cfg = getattr(config, "vad", None)
+            # Resolve effective VAD mode: vad_mode takes precedence, fall back to legacy use_provider_vad
+            vad_mode = getattr(vad_cfg, "vad_mode", "auto") if vad_cfg else "auto"
             use_provider_vad = bool(getattr(vad_cfg, "use_provider_vad", False)) if vad_cfg else False
-            if use_provider_vad:
+            if vad_mode == "provider" or (vad_mode == "auto" and use_provider_vad):
+                # Legacy behaviour preserved for vad_mode="provider"
+                use_provider_vad = True
+            self._vad_mode = vad_mode  # Store for per-call runtime decisions
+            # In "auto" mode, always initialize local VAD so it's available per-call
+            if use_provider_vad and vad_mode != "auto":
                 logger.info("Using provider-managed VAD; local VAD disabled")
             elif vad_cfg and getattr(vad_cfg, "enhanced_enabled", False):
                 self.vad_manager = EnhancedVADManager(
@@ -560,6 +567,30 @@ class Engine:
                 error=str(exc),
                 exc_info=exc,
             )
+
+    def _should_use_local_vad(self, provider_name: Optional[str] = None) -> bool:
+        """Decide whether local VAD should be active for a given provider.
+
+        In 'auto' mode (default), local VAD is skipped only for providers
+        that have native VAD, native barge-in, AND native AEC — i.e. they
+        can reliably handle telephony without local assistance.
+        """
+        vad_mode = getattr(self, "_vad_mode", "auto")
+        if vad_mode == "local":
+            return True
+        if vad_mode == "provider":
+            return False
+        # auto mode: check provider capabilities
+        if provider_name and provider_name in self.providers:
+            provider = self.providers[provider_name]
+            caps = None
+            if hasattr(provider, "get_capabilities"):
+                caps = provider.get_capabilities()
+            if caps and getattr(caps, "has_native_vad", False) \
+                    and getattr(caps, "has_native_barge_in", False) \
+                    and getattr(caps, "has_native_aec", False):
+                return False
+        return True
 
     def _fire_and_forget(self, coro, *, name: Optional[str] = None) -> asyncio.Task:
         """Create a fire-and-forget task with exception logging."""
@@ -3051,7 +3082,16 @@ class Engine:
                 start_time=datetime.now(timezone.utc)  # Track call start time (UTC for consistent storage)
             )
             session.is_outbound = bool(is_outbound)
-            session.enhanced_vad_enabled = bool(self.vad_manager)
+            # Per-provider VAD decision: local VAD active only when appropriate for this provider
+            use_local = self._should_use_local_vad(session.provider_name)
+            session.enhanced_vad_enabled = bool(self.vad_manager) and use_local
+            if self.vad_manager and not use_local:
+                logger.info(
+                    "Provider handles VAD natively; local VAD inactive for this call",
+                    call_id=session.call_id,
+                    provider=session.provider_name,
+                    vad_mode=getattr(self, "_vad_mode", "auto"),
+                )
             await self._save_session(session, new=True)
 
             # Read called_number: cache (from ChannelVarSet events) > GET request > "unknown"
@@ -3222,6 +3262,9 @@ class Engine:
                 # Full agent override for this call
                 previous = session.provider_name
                 session.provider_name = resolved_provider
+                # Re-evaluate per-provider VAD decision after provider change
+                use_local = self._should_use_local_vad(resolved_provider)
+                session.enhanced_vad_enabled = bool(self.vad_manager) and use_local
                 await self._save_session(session)
                 logger.info(
                     "AI provider override applied from channel variable",
@@ -6904,7 +6947,7 @@ class Engine:
                     return
 
             vad_result: Optional[VADResult] = None
-            if self.vad_manager:
+            if self.vad_manager and getattr(session, "enhanced_vad_enabled", True):
                 try:
                     vad_result = await self._run_enhanced_vad(session, audio_bytes)
                 except Exception:

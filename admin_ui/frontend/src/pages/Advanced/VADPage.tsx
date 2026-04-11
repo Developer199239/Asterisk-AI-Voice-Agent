@@ -199,13 +199,25 @@ const VADPage = () => {
                                 checked={vadConfig.enhanced_enabled ?? false}
                                 onChange={(e) => updateVADConfig('enhanced_enabled', e.target.checked)}
                             />
-                            <FormSwitch
-                                label="Use Provider VAD"
-                                description="Prefer provider-managed turn detection when supported; engine VAD is used only for local fallback heuristics."
-                                tooltip="When enabled, the engine avoids making primary turn/endpointing decisions and relies on provider-side detection where available. Engine VAD may still be used for safe local fallbacks."
-                                checked={vadConfig.use_provider_vad ?? false}
-                                onChange={(e) => updateVADConfig('use_provider_vad', e.target.checked)}
-                            />
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium leading-none">VAD Mode</label>
+                                <select
+                                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                    value={vadConfig.vad_mode ?? 'auto'}
+                                    onChange={(e) => updateVADConfig('vad_mode', e.target.value)}
+                                >
+                                    <option value="auto">Auto (per-provider)</option>
+                                    <option value="local">Always Local VAD</option>
+                                    <option value="provider">Always Provider VAD</option>
+                                </select>
+                                <p className="text-xs text-muted-foreground">
+                                    {vadConfig.vad_mode === 'local'
+                                        ? 'Local Enhanced + WebRTC VAD active for all providers.'
+                                        : vadConfig.vad_mode === 'provider'
+                                        ? 'Provider-managed turn detection for all providers (legacy behavior).'
+                                        : 'Automatically decides per-provider: providers with native VAD + barge-in + AEC (e.g. OpenAI Realtime) use provider VAD; others (e.g. Google Live) use local VAD.'}
+                                </p>
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
