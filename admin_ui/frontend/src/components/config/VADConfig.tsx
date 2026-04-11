@@ -9,6 +9,8 @@ const VADConfig: React.FC<VADConfigProps> = ({ config, onChange }) => {
     const handleChange = (field: string, value: any) => {
         onChange({ ...config, [field]: value });
     };
+    const effectiveVadMode =
+        config.vad_mode ?? (config.use_provider_vad ? 'provider' : 'auto');
 
     return (
         <div className="space-y-6">
@@ -31,7 +33,7 @@ const VADConfig: React.FC<VADConfigProps> = ({ config, onChange }) => {
                         <select
                             id="vad_mode"
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.vad_mode ?? 'auto'}
+                            value={effectiveVadMode}
                             onChange={(e) => handleChange('vad_mode', e.target.value)}
                         >
                             <option value="auto">Auto (per-provider)</option>
@@ -39,11 +41,11 @@ const VADConfig: React.FC<VADConfigProps> = ({ config, onChange }) => {
                             <option value="provider">Always Provider VAD</option>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            {config.vad_mode === 'local'
+                            {effectiveVadMode === 'local'
                                 ? 'Local Enhanced + WebRTC VAD active for all providers.'
-                                : config.vad_mode === 'provider'
+                                : effectiveVadMode === 'provider'
                                 ? 'Provider-managed turn detection for all providers (legacy behavior).'
-                                : 'Automatically decides per-provider: providers with native VAD use provider VAD; others use local VAD.'}
+                                : 'Automatically decides per-provider: providers with native VAD + barge-in use provider VAD; others use local VAD.'}
                         </p>
                     </div>
 

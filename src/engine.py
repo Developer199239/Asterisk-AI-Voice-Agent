@@ -445,17 +445,15 @@ class Engine:
             vad_cfg = getattr(config, "vad", None)
             # Resolve effective VAD mode: vad_mode takes precedence, fall back to legacy use_provider_vad
             vad_mode = getattr(vad_cfg, "vad_mode", "auto") if vad_cfg else "auto"
-            use_provider_vad = bool(getattr(vad_cfg, "use_provider_vad", False)) if vad_cfg else False
-            if vad_mode == "provider" or (vad_mode == "auto" and use_provider_vad):
-                # Legacy behaviour preserved for vad_mode="provider"
-                use_provider_vad = True
+            legacy_use_provider_vad = bool(getattr(vad_cfg, "use_provider_vad", False)) if vad_cfg else False
             # For backward compatibility: if vad_mode is "auto" and use_provider_vad is true,
             # treat it as explicit "provider" mode (legacy configs expect this behavior)
-            if vad_mode == "auto" and use_provider_vad:
+            if vad_mode == "auto" and legacy_use_provider_vad:
                 vad_mode = "provider"
             self._vad_mode = vad_mode  # Store for per-call runtime decisions
-            # In "auto" mode, always initialize local VAD so it's available per-call
-            if use_provider_vad and vad_mode != "auto":
+            # In "auto" mode, always initialize local VAD so it's available per-call;
+            # vad_mode takes precedence over legacy use_provider_vad
+            if vad_mode == "provider":
                 logger.info("Using provider-managed VAD; local VAD disabled")
             elif vad_cfg and getattr(vad_cfg, "enhanced_enabled", False):
                 self.vad_manager = EnhancedVADManager(
@@ -484,7 +482,7 @@ class Engine:
                     except Exception as e:
                         logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
                         self.webrtc_vad = None
-                elif not use_provider_vad:
+                elif vad_mode != "provider":
                     logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
         except Exception:
             logger.error("Failed to initialize VAD components", exc_info=True)
@@ -576,8 +574,8 @@ class Engine:
         """Decide whether local VAD should be active for a given provider.
 
         In 'auto' mode (default), local VAD is skipped only for providers
-        that have native VAD, native barge-in, AND native AEC — i.e. they
-        can reliably handle telephony without local assistance.
+        that have native VAD and native barge-in — i.e. they can reliably
+        handle turn detection without local assistance.
         """
         vad_mode = getattr(self, "_vad_mode", "auto")
         if vad_mode == "local":
@@ -591,8 +589,7 @@ class Engine:
             if hasattr(provider, "get_capabilities"):
                 caps = provider.get_capabilities()
             if caps and getattr(caps, "has_native_vad", False) \
-                    and getattr(caps, "has_native_barge_in", False) \
-                    and getattr(caps, "has_native_aec", False):
+                    and getattr(caps, "has_native_barge_in", False):
                 return False
         return True
 
