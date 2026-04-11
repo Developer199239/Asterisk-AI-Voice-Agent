@@ -44,6 +44,7 @@ const ProvidersPage: React.FC = () => {
     const [restartingEngine, setRestartingEngine] = useState(false);
     const [localAIStatus, setLocalAIStatus] = useState<any>(null);
     const [providerHealth, setProviderHealth] = useState<Record<string, { status: string; total: number; succeeded: number; failed: number; summary: string }>>({});
+    const [providerHealthUnavailable, setProviderHealthUnavailable] = useState(false);
 
     useEffect(() => {
         fetchConfig();
@@ -94,7 +95,10 @@ const ProvidersPage: React.FC = () => {
         try {
             const res = await axios.get('/api/providers/health');
             setProviderHealth(res.data || {});
-        } catch { /* ignore */ }
+            setProviderHealthUnavailable(false);
+        } catch {
+            setProviderHealthUnavailable(true);
+        }
     };
 
     const normalizeProviderCapabilities = (nextConfig: any) => {
@@ -757,6 +761,7 @@ const ProvidersPage: React.FC = () => {
                                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
                                         )}
                                         {(() => {
+                                            if (providerHealthUnavailable) return <span className="w-2.5 h-2.5 bg-orange-400 rounded-full flex-shrink-0" title="Health data unavailable (API error)" />;
                                             const health = providerHealth[name];
                                             if (!health) return <span className="w-2.5 h-2.5 bg-gray-400 rounded-full flex-shrink-0" title="No recent call data" />;
                                             const colors: Record<string, string> = { healthy: 'bg-green-500', degraded: 'bg-yellow-500', error: 'bg-red-500', no_data: 'bg-gray-400' };
@@ -922,6 +927,7 @@ const ProvidersPage: React.FC = () => {
                                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
                                         )}
                                         {(() => {
+                                            if (providerHealthUnavailable) return <span className="w-2.5 h-2.5 bg-orange-400 rounded-full flex-shrink-0" title="Health data unavailable (API error)" />;
                                             const health = providerHealth[name];
                                             if (!health) return <span className="w-2.5 h-2.5 bg-gray-400 rounded-full flex-shrink-0" title="No recent call data" />;
                                             const colors: Record<string, string> = { healthy: 'bg-green-500', degraded: 'bg-yellow-500', error: 'bg-red-500', no_data: 'bg-gray-400' };
