@@ -134,8 +134,8 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
     }, [config.prompt]);
 
     const tokenCountColor = useMemo(() => {
-        if (estimatedTokens > 8000) return 'text-red-500';
-        if (estimatedTokens > 4000) return 'text-yellow-500';
+        if (estimatedTokens >= 8000) return 'text-red-500';
+        if (estimatedTokens >= 4000) return 'text-yellow-500';
         return 'text-muted-foreground';
     }, [estimatedTokens]);
 
@@ -198,8 +198,8 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                 <div className="flex justify-end mt-1">
                     <span className={`text-xs ${tokenCountColor}`}>
                         ~{estimatedTokens.toLocaleString()} tokens estimated
-                        {estimatedTokens > 8000 && ' (exceeds 8K limit)'}
-                        {estimatedTokens > 4000 && estimatedTokens <= 8000 && ' (approaching 8K limit)'}
+                        {estimatedTokens >= 8000 && ' (exceeds 8K limit)'}
+                        {estimatedTokens >= 4000 && estimatedTokens < 8000 && ' (approaching 8K limit)'}
                     </span>
                 </div>
             </div>
