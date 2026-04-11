@@ -12,7 +12,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pathlib import Path
 
@@ -163,6 +163,19 @@ class FilterOptionsResponse(BaseModel):
     outcomes: List[str] = []
 
 
+class ProviderHealthStatus(BaseModel):
+    """Health status for a single provider."""
+    status: str
+    total: int
+    failures: int
+    summary: str
+
+
+class ProviderHealthResponse(BaseModel):
+    """Response model for the /providers/health endpoint."""
+    providers: Dict[str, ProviderHealthStatus]
+
+
 def _get_call_history_store():
     """Get the call history store instance."""
     try:
@@ -242,7 +255,7 @@ def _record_to_summary_response(record) -> CallRecordSummaryResponse:
     )
 
 
-@router.get("/providers/health")
+@router.get("/providers/health", response_model=ProviderHealthResponse)
 async def get_providers_health():
     """
     Aggregate call outcomes per provider from the last 24 hours.
@@ -266,11 +279,13 @@ async def get_providers_health():
         if not records:
             break
         for r in records:
-            name = r.provider_name or "unknown"
+            # Normalize to lowercase so backend keys match frontend YAML config keys
+            name = (r.provider_name or "unknown").lower()
             if name not in provider_stats:
                 provider_stats[name] = {"total": 0, "succeeded": 0, "failed": 0}
             provider_stats[name]["total"] += 1
-            if r.outcome in ("error", "failed", "abandoned"):
+            # Valid CallRecord.outcome values: completed, transferred, error, abandoned
+            if r.outcome in ("error", "abandoned"):
                 provider_stats[name]["failed"] += 1
             else:
                 provider_stats[name]["succeeded"] += 1
@@ -278,7 +293,7 @@ async def get_providers_health():
             break
         offset += page_size
 
-    result: dict[str, dict] = {}
+    result: dict[str, ProviderHealthStatus] = {}
     for name, stats in provider_stats.items():
         total = stats["total"]
         succeeded = stats["succeeded"]
@@ -291,15 +306,14 @@ async def get_providers_health():
             status = "degraded"
         else:
             status = "error"
-        result[name] = {
-            "status": status,
-            "total": total,
-            "succeeded": succeeded,
-            "failed": failed,
-            "summary": f"{succeeded}/{total} calls succeeded in last 24h",
-        }
+        result[name] = ProviderHealthStatus(
+            status=status,
+            total=total,
+            failures=failed,
+            summary=f"{succeeded}/{total} calls succeeded in last 24h",
+        )
 
-    return result
+    return ProviderHealthResponse(providers=result)
 
 
 @router.get("/calls", response_model=CallListResponse)

@@ -43,7 +43,7 @@ const ProvidersPage: React.FC = () => {
     const { pendingRestart, setPendingChanges, clearPendingChanges } = usePendingChanges();
     const [restartingEngine, setRestartingEngine] = useState(false);
     const [localAIStatus, setLocalAIStatus] = useState<any>(null);
-    const [providerHealth, setProviderHealth] = useState<Record<string, { status: string; total: number; succeeded: number; failed: number; summary: string }>>({});
+    const [providerHealth, setProviderHealth] = useState<Record<string, { status: string; total: number; failures: number; summary: string }>>({});
     const [providerHealthUnavailable, setProviderHealthUnavailable] = useState(false);
 
     useEffect(() => {
@@ -94,12 +94,26 @@ const ProvidersPage: React.FC = () => {
     const fetchProviderHealth = async () => {
         try {
             const res = await axios.get('/api/providers/health');
-            setProviderHealth(res.data || {});
+            setProviderHealth(res.data?.providers || {});
             setProviderHealthUnavailable(false);
         } catch {
             setProviderHealth({});
             setProviderHealthUnavailable(true);
         }
+    };
+
+    // Shared health dot indicator used by both Full Agent and Modular provider cards
+    const HealthDot: React.FC<{ name: string }> = ({ name }) => {
+        if (providerHealthUnavailable) {
+            return <span className="w-2.5 h-2.5 bg-orange-400 rounded-full flex-shrink-0" title="Health data unavailable (API error)" />;
+        }
+        // Normalize to lowercase to match backend key normalization
+        const health = providerHealth[name.toLowerCase()];
+        if (!health) {
+            return <span className="w-2.5 h-2.5 bg-gray-400 rounded-full flex-shrink-0" title="No recent call data" />;
+        }
+        const colors: Record<string, string> = { healthy: 'bg-green-500', degraded: 'bg-yellow-500', error: 'bg-red-500', no_data: 'bg-gray-400' };
+        return <span className={`w-2.5 h-2.5 ${colors[health.status] || 'bg-gray-400'} rounded-full flex-shrink-0`} title={health.summary} />;
     };
 
     const normalizeProviderCapabilities = (nextConfig: any) => {
@@ -761,13 +775,7 @@ const ProvidersPage: React.FC = () => {
                                         {!providerData.enabled && (
                                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
                                         )}
-                                        {(() => {
-                                            if (providerHealthUnavailable) return <span className="w-2.5 h-2.5 bg-orange-400 rounded-full flex-shrink-0" title="Health data unavailable (API error)" />;
-                                            const health = providerHealth[name];
-                                            if (!health) return <span className="w-2.5 h-2.5 bg-gray-400 rounded-full flex-shrink-0" title="No recent call data" />;
-                                            const colors: Record<string, string> = { healthy: 'bg-green-500', degraded: 'bg-yellow-500', error: 'bg-red-500', no_data: 'bg-gray-400' };
-                                            return <span className={`w-2.5 h-2.5 ${colors[health.status] || 'bg-gray-400'} rounded-full flex-shrink-0`} title={health.summary} />;
-                                        })()}
+                                        <HealthDot name={name} />
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
                                         {(() => {
@@ -927,13 +935,7 @@ const ProvidersPage: React.FC = () => {
                                         {!providerData.enabled && (
                                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
                                         )}
-                                        {(() => {
-                                            if (providerHealthUnavailable) return <span className="w-2.5 h-2.5 bg-orange-400 rounded-full flex-shrink-0" title="Health data unavailable (API error)" />;
-                                            const health = providerHealth[name];
-                                            if (!health) return <span className="w-2.5 h-2.5 bg-gray-400 rounded-full flex-shrink-0" title="No recent call data" />;
-                                            const colors: Record<string, string> = { healthy: 'bg-green-500', degraded: 'bg-yellow-500', error: 'bg-red-500', no_data: 'bg-gray-400' };
-                                            return <span className={`w-2.5 h-2.5 ${colors[health.status] || 'bg-gray-400'} rounded-full flex-shrink-0`} title={health.summary} />;
-                                        })()}
+                                        <HealthDot name={name} />
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
                                         {(providerData.capabilities || []).map((cap: string) => (
