@@ -164,13 +164,36 @@ const CallHistoryPage = () => {
     const [transcriptSearchInput, setTranscriptSearchInput] = useState('');
     const [transcriptSearch, setTranscriptSearch] = useState('');
     const transcriptSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const clearTranscriptSearch = useCallback(() => {
+        if (transcriptSearchTimer.current) {
+            clearTimeout(transcriptSearchTimer.current);
+            transcriptSearchTimer.current = null;
+        }
+        setTranscriptSearchInput('');
+        setTranscriptSearch('');
+        setPage(1);
+    }, []);
+
     const handleTranscriptSearchChange = useCallback((value: string) => {
         setTranscriptSearchInput(value);
         if (transcriptSearchTimer.current) clearTimeout(transcriptSearchTimer.current);
+        if (value === '') {
+            transcriptSearchTimer.current = null;
+            setTranscriptSearch('');
+            setPage(1);
+            return;
+        }
         transcriptSearchTimer.current = setTimeout(() => {
             setTranscriptSearch(value);
             setPage(1);
         }, 300);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (transcriptSearchTimer.current) clearTimeout(transcriptSearchTimer.current);
+        };
     }, []);
 
     const fetchCalls = useCallback(async () => {
@@ -439,7 +462,7 @@ const CallHistoryPage = () => {
             start_date: '',
             end_date: '',
         });
-        setPage(1);
+        clearTranscriptSearch();
     };
 
     const hasActiveFilters = Object.values(filters).some(v => v !== '') || transcriptSearch !== '';
@@ -462,7 +485,7 @@ const CallHistoryPage = () => {
                         />
                         {transcriptSearchInput && (
                             <button
-                                onClick={() => { setTranscriptSearchInput(''); setTranscriptSearch(''); setPage(1); }}
+                                onClick={clearTranscriptSearch}
                                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                             >
                                 <X className="w-4 h-4" />

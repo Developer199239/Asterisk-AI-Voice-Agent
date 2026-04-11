@@ -408,8 +408,14 @@ class CallHistoryStore:
                         conditions.append("duration_seconds <= ?")
                         params.append(max_duration)
                     if transcript_search:
-                        conditions.append("conversation_history LIKE ?")
-                        params.append(f"%{transcript_search}%")
+                        escaped = (
+                            transcript_search
+                            .replace("\\", "\\\\")
+                            .replace("%", "\\%")
+                            .replace("_", "\\_")
+                        )
+                        conditions.append("LOWER(conversation_history) LIKE LOWER(?) ESCAPE '\\'")
+                        params.append(f"%{escaped}%")
 
                     # Validate order_by to prevent SQL injection
                     valid_columns = [
@@ -529,8 +535,14 @@ class CallHistoryStore:
                         conditions.append("duration_seconds <= ?")
                         params.append(max_duration)
                     if transcript_search:
-                        conditions.append("conversation_history LIKE ?")
-                        params.append(f"%{transcript_search}%")
+                        escaped = (
+                            transcript_search
+                            .replace("\\", "\\\\")
+                            .replace("%", "\\%")
+                            .replace("_", "\\_")
+                        )
+                        conditions.append("LOWER(conversation_history) LIKE LOWER(?) ESCAPE '\\'")
+                        params.append(f"%{escaped}%")
 
                     where_clause = " AND ".join(conditions) if conditions else "1=1"
                     query = f"SELECT COUNT(*) FROM call_records WHERE {where_clause}"
