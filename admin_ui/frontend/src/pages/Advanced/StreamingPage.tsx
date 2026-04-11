@@ -101,6 +101,11 @@ const StreamingPage = () => {
         });
     };
 
+    const toFiniteNumber = (v: unknown, fallback: number): number => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+
     const latencyEstimate = useMemo(() => {
         const sc = config.streaming || {};
         // Base latency: STT recognition + LLM inference + TTS synthesis
@@ -115,15 +120,15 @@ const StreamingPage = () => {
         const fillerEnabled = sc.pipeline_filler_enabled ?? false;
 
         // Jitter buffer adds proportional delay (baseline 950ms)
-        const jitterMs = sc.jitter_buffer_ms ?? 950;
+        const jitterMs = toFiniteNumber(sc.jitter_buffer_ms, 950);
         estimated += (jitterMs - 950) / 1000;
 
         // Min start threshold affects when playback begins (baseline 120ms)
-        const minStartMs = sc.min_start_ms ?? 120;
+        const minStartMs = toFiniteNumber(sc.min_start_ms, 120);
         estimated += (minStartMs - 120) / 1000;
 
         // Low watermark affects buffering delay (baseline 80ms)
-        const lowWatermarkMs = sc.low_watermark_ms ?? 80;
+        const lowWatermarkMs = toFiniteNumber(sc.low_watermark_ms, 80);
         estimated += (lowWatermarkMs - 80) / 1000;
 
         const actual = Math.max(0.5, estimated);
@@ -134,19 +139,19 @@ const StreamingPage = () => {
 
     const getLatencyColor = (seconds: number) => {
         if (seconds < 2) return 'text-green-600 dark:text-green-400';
-        if (seconds < 3) return 'text-yellow-600 dark:text-yellow-400';
+        if (seconds <= 3) return 'text-yellow-600 dark:text-yellow-400';
         return 'text-red-600 dark:text-red-400';
     };
 
     const getLatencyBg = (seconds: number) => {
         if (seconds < 2) return 'bg-green-500/10 border-green-500/20';
-        if (seconds < 3) return 'bg-yellow-500/10 border-yellow-500/20';
+        if (seconds <= 3) return 'bg-yellow-500/10 border-yellow-500/20';
         return 'bg-red-500/10 border-red-500/20';
     };
 
     const getLatencyLabel = (seconds: number) => {
         if (seconds < 2) return 'Fast';
-        if (seconds < 3) return 'Moderate';
+        if (seconds <= 3) return 'Moderate';
         return 'Slow';
     };
 
