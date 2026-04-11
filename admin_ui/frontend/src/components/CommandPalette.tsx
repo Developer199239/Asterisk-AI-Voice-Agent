@@ -69,14 +69,23 @@ const CommandPalette: React.FC = () => {
     const listRef = useRef<HTMLDivElement>(null);
     const navigate = useNavigate();
 
+    const isFuzzyMatch = (text: string, query: string): boolean => {
+        let queryIdx = 0;
+        const queryLower = query.toLowerCase();
+        const textLower = text.toLowerCase();
+        for (const char of textLower) {
+            if (char === queryLower[queryIdx]) queryIdx++;
+        }
+        return queryIdx === queryLower.length;
+    };
+
     const filtered = useMemo(() => {
         if (!query) return pages;
-        const q = query.toLowerCase();
         return pages.filter(p =>
-            p.label.toLowerCase().includes(q) ||
-            p.group.toLowerCase().includes(q) ||
-            p.path.toLowerCase().includes(q) ||
-            (p.keywords || []).some(k => k.includes(q))
+            isFuzzyMatch(p.label, query) ||
+            isFuzzyMatch(p.group, query) ||
+            isFuzzyMatch(p.path, query) ||
+            (p.keywords || []).some(k => isFuzzyMatch(k, query))
         );
     }, [query]);
 
@@ -141,9 +150,13 @@ const CommandPalette: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]" onClick={close}>
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" />
             <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="command-palette-title"
                 className="relative w-full max-w-lg bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
                 onClick={e => e.stopPropagation()}
             >
+                <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
                 <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
                     <Search className="w-5 h-5 text-muted-foreground shrink-0" />
                     <input
