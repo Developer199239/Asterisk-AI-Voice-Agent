@@ -97,7 +97,17 @@ class CallRecord:
 
 class CallHistoryStore:
     """SQLite-based call history storage."""
-    
+
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        """Escape special characters for use in a SQL LIKE pattern with ESCAPE '\\'."""
+        return (
+            value
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+
     _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS call_records (
         id TEXT PRIMARY KEY,
@@ -408,12 +418,7 @@ class CallHistoryStore:
                         conditions.append("duration_seconds <= ?")
                         params.append(max_duration)
                     if transcript_search:
-                        escaped = (
-                            transcript_search
-                            .replace("\\", "\\\\")
-                            .replace("%", "\\%")
-                            .replace("_", "\\_")
-                        )
+                        escaped = self._escape_like(transcript_search)
                         conditions.append("LOWER(conversation_history) LIKE LOWER(?) ESCAPE '\\'")
                         params.append(f"%{escaped}%")
 
@@ -535,14 +540,8 @@ class CallHistoryStore:
                         conditions.append("duration_seconds <= ?")
                         params.append(max_duration)
                     if transcript_search:
-                        escaped = (
-                            transcript_search
-                            .replace("\\", "\\\\")
-                            .replace("%", "\\%")
-                            .replace("_", "\\_")
-                        )
+                        escaped = self._escape_like(transcript_search)
                         conditions.append("LOWER(conversation_history) LIKE LOWER(?) ESCAPE '\\'")
-
                         params.append(f"%{escaped}%")
 
                     where_clause = " AND ".join(conditions) if conditions else "1=1"

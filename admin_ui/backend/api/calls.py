@@ -242,66 +242,6 @@ def _record_to_summary_response(record) -> CallRecordSummaryResponse:
     )
 
 
-@router.get("/providers/health")
-async def get_providers_health():
-    """
-    Aggregate call outcomes per provider from the last 24 hours.
-
-    Returns a map of provider name -> health status.
-    Status values: healthy, degraded, error, no_data.
-    """
-    store = _get_call_history_store()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-
-    provider_stats: dict[str, dict] = {}
-    page_size = 1000
-    offset = 0
-    while True:
-        records = await store.list(
-            limit=page_size,
-            offset=offset,
-            start_date=cutoff,
-            include_details=False,
-        )
-        if not records:
-            break
-        for r in records:
-            name = r.provider_name or "unknown"
-            if name not in provider_stats:
-                provider_stats[name] = {"total": 0, "succeeded": 0, "failed": 0}
-            provider_stats[name]["total"] += 1
-            if r.outcome in ("error", "failed"):
-                provider_stats[name]["failed"] += 1
-            else:
-                provider_stats[name]["succeeded"] += 1
-        if len(records) < page_size:
-            break
-        offset += page_size
-
-    result: dict[str, dict] = {}
-    for name, stats in provider_stats.items():
-        total = stats["total"]
-        succeeded = stats["succeeded"]
-        failed = stats["failed"]
-        if total == 0:
-            status = "no_data"
-        elif failed == 0:
-            status = "healthy"
-        elif failed / total < 0.3:
-            status = "degraded"
-        else:
-            status = "error"
-        result[name] = {
-            "status": status,
-            "total": total,
-            "succeeded": succeeded,
-            "failed": failed,
-            "summary": f"{succeeded}/{total} calls succeeded in last 24h",
-        }
-
-    return result
-
-
 @router.get("/calls", response_model=CallListResponse)
 async def list_calls(
     page: int = Query(1, ge=1, description="Page number"),

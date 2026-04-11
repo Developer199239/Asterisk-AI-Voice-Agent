@@ -43,12 +43,9 @@ const ProvidersPage: React.FC = () => {
     const { pendingRestart, setPendingChanges, clearPendingChanges } = usePendingChanges();
     const [restartingEngine, setRestartingEngine] = useState(false);
     const [localAIStatus, setLocalAIStatus] = useState<any>(null);
-    const [providerHealth, setProviderHealth] = useState<Record<string, { status: string; total: number; succeeded: number; failed: number; summary: string }>>({});
 
     useEffect(() => {
         fetchConfig();
-        fetchProviderHealth();
-        const healthInterval = setInterval(fetchProviderHealth, 30000);
         // Fetch local AI status for live model info on cards
         const fetchLocalStatus = async () => {
             try {
@@ -60,7 +57,7 @@ const ProvidersPage: React.FC = () => {
         };
         fetchLocalStatus();
         const interval = setInterval(fetchLocalStatus, 15000);
-        return () => { clearInterval(interval); clearInterval(healthInterval); };
+        return () => clearInterval(interval);
     }, []);
 
     const fetchConfig = async () => {
@@ -88,13 +85,6 @@ const ProvidersPage: React.FC = () => {
         } finally {
             setLoading(false);
         }
-    };
-
-    const fetchProviderHealth = async () => {
-        try {
-            const res = await axios.get('/api/providers/health');
-            setProviderHealth(res.data || {});
-        } catch { /* ignore */ }
     };
 
     const normalizeProviderCapabilities = (nextConfig: any) => {
@@ -756,12 +746,6 @@ const ProvidersPage: React.FC = () => {
                                         {!providerData.enabled && (
                                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
                                         )}
-                                        {(() => {
-                                            const health = providerHealth[name];
-                                            if (!health) return <span className="w-2.5 h-2.5 bg-gray-400 rounded-full flex-shrink-0" title="No recent call data" />;
-                                            const colors: Record<string, string> = { healthy: 'bg-green-500', degraded: 'bg-yellow-500', error: 'bg-red-500', no_data: 'bg-gray-400' };
-                                            return <span className={`w-2.5 h-2.5 ${colors[health.status] || 'bg-gray-400'} rounded-full flex-shrink-0`} title={health.summary} />;
-                                        })()}
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
                                         {(() => {
@@ -921,12 +905,6 @@ const ProvidersPage: React.FC = () => {
                                         {!providerData.enabled && (
                                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded flex-shrink-0">Disabled</span>
                                         )}
-                                        {(() => {
-                                            const health = providerHealth[name];
-                                            if (!health) return <span className="w-2.5 h-2.5 bg-gray-400 rounded-full flex-shrink-0" title="No recent call data" />;
-                                            const colors: Record<string, string> = { healthy: 'bg-green-500', degraded: 'bg-yellow-500', error: 'bg-red-500', no_data: 'bg-gray-400' };
-                                            return <span className={`w-2.5 h-2.5 ${colors[health.status] || 'bg-gray-400'} rounded-full flex-shrink-0`} title={health.summary} />;
-                                        })()}
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
                                         {(providerData.capabilities || []).map((cap: string) => (

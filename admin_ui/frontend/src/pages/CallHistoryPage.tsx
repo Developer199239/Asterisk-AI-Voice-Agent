@@ -452,9 +452,7 @@ const CallHistoryPage = () => {
     };
 
     const clearFilters = () => {
-        if (transcriptSearchTimer.current) clearTimeout(transcriptSearchTimer.current);
-        setTranscriptSearchInput('');
-        setTranscriptSearch('');
+        clearTranscriptSearch();
         setFilters({
             caller_number: '',
             caller_name: '',
@@ -465,7 +463,6 @@ const CallHistoryPage = () => {
             start_date: '',
             end_date: '',
         });
-        clearTranscriptSearch();
     };
 
     const hasActiveFilters = Object.values(filters).some(v => v !== '') || transcriptSearch !== '';
@@ -484,6 +481,7 @@ const CallHistoryPage = () => {
                             value={transcriptSearchInput}
                             onChange={(e) => handleTranscriptSearchChange(e.target.value)}
                             placeholder="Search transcripts..."
+                            aria-label="Search transcripts"
                             className="pl-9 pr-8 py-2 bg-background border rounded-lg text-sm w-56 focus:outline-none focus:ring-1 focus:ring-ring"
                         />
                         {transcriptSearchInput && (
