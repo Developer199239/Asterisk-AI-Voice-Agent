@@ -6952,7 +6952,13 @@ class Engine:
                     return
 
             vad_result: Optional[VADResult] = None
-            if self.vad_manager and getattr(session, "enhanced_vad_enabled", True):
+            # enhanced_vad_enabled=None means "not yet initialized" — fall back to
+            # per-provider decision so restored sessions and test constructions
+            # are not silently opted-out.
+            _vad_flag = session.enhanced_vad_enabled
+            if _vad_flag is None:
+                _vad_flag = bool(self.vad_manager) and self._should_use_local_vad(session.provider_name)
+            if self.vad_manager and _vad_flag:
                 try:
                     vad_result = await self._run_enhanced_vad(session, audio_bytes)
                 except Exception:
