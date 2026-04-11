@@ -45,6 +45,7 @@ const Header = () => {
                     onClick={cycleTheme}
                     className="p-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors"
                     title={`Theme: ${theme} (click to cycle)`}
+                    aria-label={`Current theme: ${theme}. Click to cycle theme`}
                 >
                     {theme === 'light' && <Sun className="w-4 h-4" />}
                     {theme === 'dark' && <Moon className="w-4 h-4" />}
