@@ -284,7 +284,7 @@ const ContextsPage = () => {
             suffix++;
         }
         setEditingContext('new_context');
-        setContextForm({ name: cloneName, ...sourceData });
+        setContextForm({ ...sourceData, name: cloneName });
         setIsNewContext(true);
     };
 
