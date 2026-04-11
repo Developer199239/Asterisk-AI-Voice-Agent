@@ -97,6 +97,7 @@ const ProvidersPage: React.FC = () => {
             setProviderHealth(res.data || {});
             setProviderHealthUnavailable(false);
         } catch {
+            setProviderHealth({});
             setProviderHealthUnavailable(true);
         }
     };
