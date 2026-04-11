@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { RefreshCw, Download, Pause, Play, Search } from 'lucide-react';
 
@@ -38,15 +38,15 @@ const Logs = () => {
         }
     }, [logs, autoRefresh]);
 
-    const getFilteredLines = (): string[] => {
+    const filteredLines = useMemo(() => {
         if (!logs) return [];
         return logs.split('\n').filter(line =>
             !filter || line.toLowerCase().includes(filter.toLowerCase())
         );
-    };
+    }, [logs, filter]);
 
     const handleDownload = () => {
-        const lines = getFilteredLines();
+        const lines = filteredLines;
         if (lines.length === 0) return;
         const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
@@ -61,7 +61,7 @@ const Logs = () => {
     const getColoredLogs = () => {
         if (!logs) return <div className="text-muted-foreground italic">No logs available...</div>;
 
-        return getFilteredLines().map((line, i) => {
+        return filteredLines.map((line, i) => {
             let className = 'text-green-400'; // Default
             if (line.includes('ERROR') || line.includes('Exception') || line.includes('CRITICAL')) {
                 className = 'text-red-500 font-bold';
@@ -122,9 +122,9 @@ const Logs = () => {
 
                     <button
                         onClick={handleDownload}
-                        disabled={!logs}
+                        disabled={filteredLines.length === 0}
                         className="p-2 rounded border border-input hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Download Logs"
+                        title={filteredLines.length === 0 ? "No visible logs to download" : "Download Logs"}
                     >
                         <Download className="w-4 h-4" />
                     </button>
