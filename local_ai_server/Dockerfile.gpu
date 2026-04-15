@@ -54,7 +54,7 @@ RUN if [ "$INCLUDE_VOSK" = "true" ]; then \
     fi
 
 RUN if [ "$INCLUDE_SHERPA" = "true" ]; then \
-        pip install --no-cache-dir sherpa-onnx==1.12.19; \
+        pip install --no-cache-dir sherpa-onnx==1.12.38; \
     fi
 
 RUN if [ "$INCLUDE_FASTER_WHISPER" = "true" ]; then \
