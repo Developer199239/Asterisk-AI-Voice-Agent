@@ -171,7 +171,15 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
     };
 
     // Google Calendar per-context selection (uses toolsRoot.google_calendar.calendars)
-    const googleCalKeys: string[] = Object.keys((toolsRoot as any)?.google_calendar?.calendars || {});
+    // Falls back to ['default'] when legacy single-calendar config exists but no calendars{} map
+    const googleCalCfg = (toolsRoot as any)?.google_calendar || {};
+    const googleCalKeys: string[] = (() => {
+        const explicit = Object.keys(googleCalCfg.calendars || {});
+        if (explicit.length > 0) return explicit;
+        return (googleCalCfg.credentials_path || googleCalCfg.calendar_id || googleCalCfg.timezone)
+            ? ['default']
+            : [];
+    })();
     const googleCalEnabledInContext = Array.isArray(config.tools) && config.tools.includes('google_calendar');
     const selectedCalKeys: string[] = ((config.tool_overrides?.google_calendar?.selected_calendars) || []) as string[];
 

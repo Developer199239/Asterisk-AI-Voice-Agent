@@ -172,16 +172,17 @@ class GCalendarTool(Tool):
         return cals
 
     def _selected_calendar_keys(self, config: Dict[str, Any]) -> list[str]:
-        sel = []
-        # Per-context nested override can set tools.google_calendar.selected_calendars
-        # When missing, default to all configured calendars
-        try:
-            sel = list(config.get("selected_calendars", []) or [])
-        except Exception:
-            sel = []
-        if sel:
-            return [str(s) for s in sel if str(s) in self._resolve_calendars(config).keys()]
-        return list(self._resolve_calendars(config).keys())
+        """Return selected calendar keys for this context. Missing = all; invalid/empty = none (fail closed)."""
+        calendars = self._resolve_calendars(config)
+        raw = config.get("selected_calendars")
+        # Missing key means "use all configured calendars"
+        if raw is None:
+            return list(calendars.keys())
+        # Present but not a list (e.g. typo, scalar) — fail closed
+        if not isinstance(raw, (list, tuple)):
+            return []
+        # Filter to valid keys only; empty list = none selected (fail closed)
+        return [str(s) for s in raw if str(s) in calendars]
 
     def _normalize_datetime_to_calendar_tz(
         self, dt_str: str, calendar_tz_name: str
@@ -298,6 +299,19 @@ class GCalendarTool(Tool):
             cfg = calendars[k]
             return self._get_or_create_cal(cfg.get("credentials_path", ""), cfg.get("calendar_id", ""), cfg.get("timezone", ""))
 
+        # Helper: validate calendar_key is in selected_keys (not just global calendars)
+        def _validate_calendar_key(calendar_key: str, action_name: str) -> dict | None:
+            """Return error dict if calendar_key is invalid/unauthorized, else None."""
+            if calendar_key not in calendars:
+                msg = f"Unknown calendar_key '{calendar_key}'. Available: {', '.join(calendars.keys())}."
+                logger.warning("Unknown calendar_key", call_id=call_id, action=action_name, calendar_key=calendar_key)
+                return {"status": "error", "message": msg}
+            if calendar_key not in selected_keys:
+                msg = f"Calendar '{calendar_key}' is not selected for this context. Selected: {', '.join(selected_keys)}."
+                logger.warning("calendar_key not in selected_calendars", call_id=call_id, action=action_name, calendar_key=calendar_key)
+                return {"status": "error", "message": msg}
+            return None
+
         # Backward-compat single-calendar guard
         if legacy_single:
             cal = self._get_cal(config)
@@ -345,12 +359,8 @@ class GCalendarTool(Tool):
 
                 def _list_events_for_key(k: str) -> list[dict]:
                     tz_name = _tz_for_key(k)
-                    try:
-                        time_min_dt = self._normalize_datetime_to_calendar_tz(time_min, tz_name)
-                        time_max_dt = self._normalize_datetime_to_calendar_tz(time_max, tz_name)
-                    except ValueError as e:
-                        logger.warning("Invalid datetime for get_free_slots (key=%s)" % k, call_id=call_id, error=str(e))
-                        return []
+                    time_min_dt = self._normalize_datetime_to_calendar_tz(time_min, tz_name)
+                    time_max_dt = self._normalize_datetime_to_calendar_tz(time_max, tz_name)
                     cal_i = _cal_for_key(k)
                     if not getattr(cal_i, "service", None):
                         return []
@@ -425,19 +435,42 @@ class GCalendarTool(Tool):
                 keys_to_use: list[str]
                 if legacy_single:
                     keys_to_use = ["default"]
-                elif calendar_key and calendar_key in calendars:
+                elif calendar_key:
+                    err = _validate_calendar_key(calendar_key, "get_free_slots")
+                    if err:
+                        return err
                     keys_to_use = [calendar_key]
                 else:
                     keys_to_use = list(selected_keys)
 
+                # Validate time_min/time_max once before per-calendar loop
+                _validation_tz = _tz_for_key(keys_to_use[0]) if not legacy_single else calendar_tz_name
+                try:
+                    self._normalize_datetime_to_calendar_tz(time_min, _validation_tz)
+                    self._normalize_datetime_to_calendar_tz(time_max, _validation_tz)
+                except ValueError as e:
+                    out = {"status": "error", "message": str(e)}
+                    logger.warning("Invalid datetime for get_free_slots", call_id=call_id, error=str(e))
+                    logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                    return out
+
                 per_cal_intervals: list[list[tuple[datetime, datetime]]] = []
+                failed_keys: list[str] = []
                 for k in keys_to_use:
+                    cal_i = _cal_for_key(k)
+                    if not getattr(cal_i, "service", None):
+                        failed_keys.append(k)
+                        continue
                     evts = await asyncio.to_thread(_list_events_for_key, k)
                     per_cal_intervals.append(_available_intervals_from_events(evts))
 
+                # Log skipped calendars so operators can diagnose
+                if failed_keys:
+                    logger.warning("Skipped unavailable calendars during aggregation", call_id=call_id, failed_keys=failed_keys)
+
                 # Aggregate
                 if not per_cal_intervals:
-                    out = {"status": "success", "message": "Free slot starts: (none)"}
+                    out = {"status": "error", "message": f"All selected calendars are unavailable: {', '.join(failed_keys)}."}
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
 
@@ -477,14 +510,19 @@ class GCalendarTool(Tool):
                 for s, end_t in available_intervals:
                     if end_t <= s:
                         continue
-                    if s + duration_td <= end_t:
-                        slot_starts.append(s)
+                    # Always align to duration multiples from midnight
                     start = round_up_to_next_slot(s, duration_minutes)
                     while start + duration_td <= end_t:
-                        if start > s:
-                            slot_starts.append(start)
+                        slot_starts.append(start)
                         start += timedelta(minutes=duration_minutes)
 
+                # Normalize all slots to a consistent output timezone
+                output_tz_name = config.get("timezone", "") or (_tz_for_key(keys_to_use[0]) if not legacy_single else calendar_tz_name)
+                try:
+                    output_tz = ZoneInfo(output_tz_name)
+                except Exception:
+                    output_tz = ZoneInfo("UTC")
+                slot_starts = [t.astimezone(output_tz) for t in slot_starts]
                 slot_starts.sort()
                 results = [t.strftime("%Y-%m-%d %H:%M") for t in slot_starts]
                 out = {"status": "success", "message": "Free slot starts: " + ", ".join(results)}
@@ -505,14 +543,21 @@ class GCalendarTool(Tool):
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
 
+                # Validate time_min/time_max once before per-calendar loop
+                _val_tz = self._get_calendar_tz_name(config) if legacy_single else _tz_for_key(selected_keys[0] if selected_keys else "default")
+                try:
+                    self._normalize_datetime_to_calendar_tz(time_min, _val_tz)
+                    self._normalize_datetime_to_calendar_tz(time_max, _val_tz)
+                except ValueError as e:
+                    out = {"status": "error", "message": str(e)}
+                    logger.warning("Invalid datetime for list_events", call_id=call_id, error=str(e))
+                    logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                    return out
+
                 def _list_for_key(k: str) -> list[dict]:
                     tz_name = _tz_for_key(k)
-                    try:
-                        tmin = self._normalize_datetime_to_calendar_tz(time_min, tz_name).isoformat()
-                        tmax = self._normalize_datetime_to_calendar_tz(time_max, tz_name).isoformat()
-                    except ValueError as e:
-                        logger.warning("Invalid datetime for list_events (key=%s)" % k, call_id=call_id, error=str(e))
-                        return []
+                    tmin = self._normalize_datetime_to_calendar_tz(time_min, tz_name).isoformat()
+                    tmax = self._normalize_datetime_to_calendar_tz(time_max, tz_name).isoformat()
                     ci = _cal_for_key(k)
                     if not getattr(ci, "service", None):
                         return []
@@ -524,13 +569,15 @@ class GCalendarTool(Tool):
                         self._normalize_datetime_to_calendar_tz(time_max, self._get_calendar_tz_name(config)).isoformat(),
                     ])
                     pools = {"default": events}
+                elif calendar_key:
+                    err = _validate_calendar_key(calendar_key, "list_events")
+                    if err:
+                        return err
+                    pools = {calendar_key: await asyncio.to_thread(_list_for_key, calendar_key)}
                 else:
-                    if calendar_key and calendar_key in calendars:
-                        pools = {calendar_key: await asyncio.to_thread(_list_for_key, calendar_key)}
-                    else:
-                        pools = {}
-                        for k in selected_keys:
-                            pools[k] = await asyncio.to_thread(_list_for_key, k)
+                    pools = {}
+                    for k in selected_keys:
+                        pools[k] = await asyncio.to_thread(_list_for_key, k)
 
                 simplified = []
                 for k, evs in pools.items():
@@ -562,7 +609,10 @@ class GCalendarTool(Tool):
                     target_key = "default"
                     cal_i = cal
                 else:
-                    if calendar_key and calendar_key in calendars:
+                    if calendar_key:
+                        err = _validate_calendar_key(calendar_key, "get_event")
+                        if err:
+                            return err
                         target_key = calendar_key
                     else:
                         target_key = (selected_keys[0] if selected_keys else None)
@@ -611,8 +661,14 @@ class GCalendarTool(Tool):
                     cal_i = cal
                     target_key = "default"
                 else:
-                    target_key = calendar_key or (selected_keys[0] if selected_keys else None)
-                    if not target_key or target_key not in calendars:
+                    if calendar_key:
+                        err = _validate_calendar_key(calendar_key, "create_event")
+                        if err:
+                            return err
+                        target_key = calendar_key
+                    else:
+                        target_key = (selected_keys[0] if selected_keys else None)
+                    if not target_key:
                         out = {"status": "error", "message": "calendar_key is required (or configure selected_calendars)."}
                         logger.warning("Missing target calendar for create_event", call_id=call_id)
                         logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
@@ -660,8 +716,14 @@ class GCalendarTool(Tool):
                     cal_i = cal
                     target_key = "default"
                 else:
-                    target_key = calendar_key or (selected_keys[0] if selected_keys else None)
-                    if not target_key or target_key not in calendars:
+                    if calendar_key:
+                        err = _validate_calendar_key(calendar_key, "delete_event")
+                        if err:
+                            return err
+                        target_key = calendar_key
+                    else:
+                        target_key = (selected_keys[0] if selected_keys else None)
+                    if not target_key:
                         out = {"status": "error", "message": "calendar_key is required (or configure selected_calendars)."}
                         logger.warning("Missing target calendar for delete_event", call_id=call_id)
                         logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))

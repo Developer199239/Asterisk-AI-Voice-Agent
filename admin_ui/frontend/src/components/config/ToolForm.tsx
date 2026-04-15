@@ -16,6 +16,7 @@ interface ToolFormProps {
         pipelineGuardrailOverrides: { name: string; enabled: boolean }[];
     };
     onChange: (newConfig: any) => void;
+    onContextsChange?: (newContexts: Record<string, any>) => void;
     onSaveNow?: (newConfig: any) => Promise<void>;
 }
 
@@ -69,7 +70,33 @@ const hasLiveAgentExpertSettings = (ext: any) => {
     return actionType !== 'transfer' || deviceStateTech !== 'auto' || aliases.length > 0;
 };
 
-const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFormProps) => {
+const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, onSaveNow }: ToolFormProps) => {
+    // Migrate calendar key references in all contexts' selected_calendars
+    const migrateCalendarKeyInContexts = (oldKey: string, newKey: string | null) => {
+        if (!contexts || !onContextsChange) return;
+        const updated = { ...contexts };
+        let changed = false;
+        for (const [ctxName, ctx] of Object.entries(updated)) {
+            const sel: string[] | undefined = (ctx as any)?.tool_overrides?.google_calendar?.selected_calendars;
+            if (!Array.isArray(sel) || !sel.includes(oldKey)) continue;
+            changed = true;
+            const nextSel = newKey
+                ? sel.map((k: string) => (k === oldKey ? newKey : k))
+                : sel.filter((k: string) => k !== oldKey);
+            updated[ctxName] = {
+                ...(ctx as any),
+                tool_overrides: {
+                    ...((ctx as any)?.tool_overrides || {}),
+                    google_calendar: {
+                        ...((ctx as any)?.tool_overrides?.google_calendar || {}),
+                        selected_calendars: nextSel,
+                    },
+                },
+            };
+        }
+        if (changed) onContextsChange(updated);
+    };
+
 			    const [editingDestination, setEditingDestination] = useState<string | null>(null);
 			    const [destinationForm, setDestinationForm] = useState<any>({});
 	        const [emailDefaults, setEmailDefaults] = useState<any>(null);
@@ -2018,6 +2045,7 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFo
                                                         const copy = { ...cals[key] };
                                                         delete cals[key];
                                                         cals[nextKey] = copy;
+                                                        migrateCalendarKeyInContexts(key, nextKey);
                                                         onChange({
                                                             ...config,
                                                             google_calendar: { ...(config.google_calendar || {}), calendars: cals }
@@ -2069,6 +2097,7 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFo
                                                     onClick={() => {
                                                         const cals = { ...(config.google_calendar?.calendars || {}) };
                                                         delete cals[key];
+                                                        migrateCalendarKeyInContexts(key, null);
                                                         onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
                                                     }}
                                                 >
