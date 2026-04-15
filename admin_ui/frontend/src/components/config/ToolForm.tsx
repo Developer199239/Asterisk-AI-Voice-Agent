@@ -1998,6 +1998,100 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFo
                                     tooltip="IANA timezone for events (e.g. America/New_York). Overrides GOOGLE_CALENDAR_TZ and TZ env vars when set."
                                 />
                             </div>
+
+                            {/* Multi-Account Calendars */}
+                            <div className="mt-4">
+                                <div className="text-sm font-medium mb-2">Calendars (Multi-Account)</div>
+                                <div className="text-xs text-muted-foreground mb-2">Define named calendars. Per-context selection is configured on the Contexts page.</div>
+                                <div className="space-y-2">
+                                    {Object.entries(config.google_calendar?.calendars || {}).map(([key, val]: [string, any]) => (
+                                        <div key={key} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border border-border rounded p-2 bg-card/30">
+                                            <div className="md:col-span-2">
+                                                <FormInput
+                                                    label="Key"
+                                                    value={key}
+                                                    onChange={(e) => {
+                                                        const nextKey = (e.target.value || '').trim();
+                                                        if (!nextKey || nextKey === key) return;
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        if (Object.prototype.hasOwnProperty.call(cals, nextKey)) { toast.error(`Calendar '${nextKey}' already exists`); return; }
+                                                        const copy = { ...cals[key] };
+                                                        delete cals[key];
+                                                        cals[nextKey] = copy;
+                                                        onChange({
+                                                            ...config,
+                                                            google_calendar: { ...(config.google_calendar || {}), calendars: cals }
+                                                        });
+                                                    }}
+                                                    placeholder="work"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-4">
+                                                <FormInput
+                                                    label="credentials_path"
+                                                    value={(val as any)?.credentials_path || ''}
+                                                    onChange={(e) => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        cals[key] = { ...(cals[key] || {}), credentials_path: e.target.value };
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                    placeholder="/app/secrets/work.json"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-3">
+                                                <FormInput
+                                                    label="calendar_id"
+                                                    value={(val as any)?.calendar_id || ''}
+                                                    onChange={(e) => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        cals[key] = { ...(cals[key] || {}), calendar_id: e.target.value };
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                    placeholder="primary or abc@group.calendar.google.com"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <FormInput
+                                                    label="timezone"
+                                                    value={(val as any)?.timezone || ''}
+                                                    onChange={(e) => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        cals[key] = { ...(cals[key] || {}), timezone: e.target.value };
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                    placeholder="America/Denver"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-1 flex justify-end">
+                                                <button
+                                                    type="button"
+                                                    className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                    onClick={() => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        delete cals[key];
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    <button
+                                        type="button"
+                                        className="px-3 py-1.5 text-xs rounded border hover:bg-accent"
+                                        onClick={() => {
+                                            const cals = { ...(config.google_calendar?.calendars || {}) };
+                                            let base = 'calendar'; let i = 1; let k = `${base}_${i}`;
+                                            while (Object.prototype.hasOwnProperty.call(cals, k)) { i += 1; k = `${base}_${i}`; }
+                                            cals[k] = { credentials_path: '', calendar_id: '', timezone: '' };
+                                            onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                        }}
+                                    >
+                                        + Add Calendar
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>

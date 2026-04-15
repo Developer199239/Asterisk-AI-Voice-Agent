@@ -14,11 +14,12 @@ interface ContextFormProps {
     availableProfiles?: string[];
     defaultProfileName?: string;
     httpTools?: Record<string, any>;
+    toolsRoot?: Record<string, any>;
     onChange: (newConfig: any) => void;
     isNew?: boolean;
 }
 
-const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabledMap, toolCatalogByName, availableProfiles, defaultProfileName, httpTools, onChange, isNew }: ContextFormProps) => {
+const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabledMap, toolCatalogByName, availableProfiles, defaultProfileName, httpTools, toolsRoot, onChange, isNew }: ContextFormProps) => {
     const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({
         pre_call: false,
         in_call: true,
@@ -167,6 +168,28 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         if (raw.startsWith('provider:')) {
             updateConfigPatch({ provider: raw.slice('provider:'.length), pipeline: '' });
         }
+    };
+
+    // Google Calendar per-context selection (uses toolsRoot.google_calendar.calendars)
+    const googleCalKeys: string[] = Object.keys((toolsRoot as any)?.google_calendar?.calendars || {});
+    const googleCalEnabledInContext = Array.isArray(config.tools) && config.tools.includes('google_calendar');
+    const selectedCalKeys: string[] = ((config.tool_overrides?.google_calendar?.selected_calendars) || []) as string[];
+
+    const toggleSelectedCalendar = (key: string) => {
+        const cur = new Set(selectedCalKeys);
+        if (cur.has(key)) cur.delete(key); else cur.add(key);
+        const nextSel = Array.from(cur);
+        const next = {
+            ...config,
+            tool_overrides: {
+                ...(config.tool_overrides || {}),
+                google_calendar: {
+                    ...(config.tool_overrides?.google_calendar || {}),
+                    selected_calendars: nextSel,
+                },
+            },
+        };
+        onChange(next);
     };
 
     return (
@@ -454,6 +477,32 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                     )}
                 </div>
             </div>
+
+            {/* Google Calendar (Per-Context) */}
+            {googleCalEnabledInContext && (
+                <div className="space-y-2 p-4 rounded-lg border border-border bg-card/30">
+                    <div className="flex items-center justify-between">
+                        <FormLabel>Google Calendar (Per-Context)</FormLabel>
+                    </div>
+                    {googleCalKeys.length === 0 ? (
+                        <div className="text-xs text-muted-foreground">No calendars defined in Tools. Add calendars under Tools → Google Calendar first.</div>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            {googleCalKeys.map((k) => (
+                                <label key={k} className="inline-flex items-center gap-2 px-2 py-1 border rounded text-sm cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        className="accent-primary"
+                                        checked={selectedCalKeys.includes(k)}
+                                        onChange={() => toggleSelectedCalendar(k)}
+                                    />
+                                    <span>{k}</span>
+                                </label>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Background Music Configuration */}
             <div className="space-y-4 p-4 rounded-lg border border-border bg-card/30">

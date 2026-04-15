@@ -219,11 +219,24 @@ class GCalendarTool(Tool):
 
     def _get_config(self, context: ToolExecutionContext) -> Dict[str, Any]:
         """
-        Get google_calendar config: from context when available, else from ai-agent.yaml.
+        Get google_calendar config: base from tools.google_calendar, with per-context overlay if present.
         """
+        base: Dict[str, Any] = {}
+        overlay: Dict[str, Any] = {}
         if context and getattr(context, "get_config_value", None):
-            return context.get_config_value("tools.google_calendar", {}) or {}
-        return self._load_config()
+            base = context.get_config_value("tools.google_calendar", {}) or {}
+            ctx_name = getattr(context, "context_name", None)
+            if ctx_name:
+                # Per-context override under contexts.<name>.tool_overrides.google_calendar (avoids colliding with tools list)
+                try:
+                    overlay = context.get_config_value(f"contexts.{ctx_name}.tool_overrides.google_calendar", {}) or {}
+                except Exception:
+                    overlay = {}
+        # Merge (overlay wins)
+        out = dict(base or {})
+        for k, v in (overlay or {}).items():
+            out[k] = v
+        return out or self._load_config()
 
     async def execute(
         self,
