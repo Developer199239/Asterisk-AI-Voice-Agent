@@ -14,6 +14,7 @@ GOOGLE_CALENDAR_TZ for timezone (fallback: TZ).
 """
 
 import asyncio
+import threading
 import structlog
 from datetime import datetime, timedelta
 from typing import Dict, Any
@@ -102,6 +103,7 @@ class GCalendarTool(Tool):
         self._cal = None
         self._cal_config_key = None
         self._cals: dict[tuple[str, str, str], GCalendar] = {}
+        self._cals_lock = threading.Lock()
 
     def _get_cal(self, config: Dict[str, Any]) -> GCalendar:
         """Return a GCalendar instance, (re)creating if config changed or service is None."""
@@ -140,11 +142,12 @@ class GCalendarTool(Tool):
 
     def _get_or_create_cal(self, creds_path: str, cal_id: str, tz: str) -> GCalendar:
         key = (creds_path or "", cal_id or "", tz or "")
-        inst = self._cals.get(key)
-        if inst is None or inst.service is None:
-            inst = GCalendar(credentials_path=creds_path, calendar_id=cal_id, timezone=tz)
-            self._cals[key] = inst
-        return inst
+        with self._cals_lock:
+            inst = self._cals.get(key)
+            if inst is None or inst.service is None:
+                inst = GCalendar(credentials_path=creds_path, calendar_id=cal_id, timezone=tz)
+                self._cals[key] = inst
+            return inst
 
     def _resolve_calendars(self, config: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
         """
