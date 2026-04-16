@@ -181,7 +181,10 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
             : [];
     })();
     const googleCalEnabledInContext = Array.isArray(config.tools) && config.tools.includes('google_calendar');
-    const selectedCalKeys: string[] = ((config.tool_overrides?.google_calendar?.selected_calendars) || []) as string[];
+    const rawSelectedCalKeys = config.tool_overrides?.google_calendar?.selected_calendars;
+    const selectedCalKeys: string[] = Array.isArray(rawSelectedCalKeys)
+        ? rawSelectedCalKeys.map((k: any) => String(k))
+        : [];
 
     const toggleSelectedCalendar = (key: string) => {
         const cur = new Set(selectedCalKeys);

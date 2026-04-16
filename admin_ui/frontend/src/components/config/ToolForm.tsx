@@ -97,6 +97,33 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
         if (changed) onContextsChange(updated);
     };
 
+    const commitCalendarKeyDraft = (stableKey: string) => {
+        const nextKey = String(calKeyDraftByKey[stableKey] ?? stableKey).trim();
+        if (!nextKey || nextKey === stableKey) {
+            setCalKeyDraftByKey((prev) => ({ ...prev, [stableKey]: stableKey }));
+            return;
+        }
+        const cals = { ...(config.google_calendar?.calendars || {}) };
+        if (Object.prototype.hasOwnProperty.call(cals, nextKey)) {
+            toast.error(`Calendar '${nextKey}' already exists`);
+            setCalKeyDraftByKey((prev) => ({ ...prev, [stableKey]: stableKey }));
+            return;
+        }
+        const copy = { ...cals[stableKey] };
+        delete cals[stableKey];
+        cals[nextKey] = copy;
+        migrateCalendarKeyInContexts(stableKey, nextKey);
+        setCalKeyDraftByKey((prev) => {
+            const next = { ...prev };
+            delete next[stableKey];
+            return next;
+        });
+        onChange({
+            ...config,
+            google_calendar: { ...(config.google_calendar || {}), calendars: cals }
+        });
+    };
+
 			    const [editingDestination, setEditingDestination] = useState<string | null>(null);
 			    const [destinationForm, setDestinationForm] = useState<any>({});
 	        const [emailDefaults, setEmailDefaults] = useState<any>(null);
@@ -109,6 +136,7 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
 	        const internalAliasesCommittedRef = useRef<Record<string, string>>({});
 	        const [internalExtKeyDraftByRowId, setInternalExtKeyDraftByRowId] = useState<Record<string, string>>({});
 	        const internalExtKeyCommittedRef = useRef<Record<string, string>>({});
+	        const [calKeyDraftByKey, setCalKeyDraftByKey] = useState<Record<string, string>>({});
 	        const [showHangupExpert, setShowHangupExpert] = useState<boolean>(() => {
 	            try {
 	                const v = localStorage.getItem(HANGUP_EXPERT_STORAGE_KEY);
@@ -2036,21 +2064,10 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                                             <div className="md:col-span-2">
                                                 <FormInput
                                                     label="Key"
-                                                    value={key}
-                                                    onChange={(e) => {
-                                                        const nextKey = (e.target.value || '').trim();
-                                                        if (!nextKey || nextKey === key) return;
-                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
-                                                        if (Object.prototype.hasOwnProperty.call(cals, nextKey)) { toast.error(`Calendar '${nextKey}' already exists`); return; }
-                                                        const copy = { ...cals[key] };
-                                                        delete cals[key];
-                                                        cals[nextKey] = copy;
-                                                        migrateCalendarKeyInContexts(key, nextKey);
-                                                        onChange({
-                                                            ...config,
-                                                            google_calendar: { ...(config.google_calendar || {}), calendars: cals }
-                                                        });
-                                                    }}
+                                                    value={calKeyDraftByKey[key] ?? key}
+                                                    onChange={(e) => setCalKeyDraftByKey((prev) => ({ ...prev, [key]: e.target.value }))}
+                                                    onBlur={() => commitCalendarKeyDraft(key)}
+                                                    onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); commitCalendarKeyDraft(key); } }}
                                                     placeholder="work"
                                                 />
                                             </div>

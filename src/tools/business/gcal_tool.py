@@ -42,7 +42,7 @@ _GOOGLE_CALENDAR_INPUT_SCHEMA = {
         "aggregate_mode": {
             "type": "string",
             "enum": ["all", "any"],
-            "description": "For multi-calendar get_free_slots/list_events: 'all' = intersection (default), 'any' = union. Ignored when calendar_key is set."
+            "description": "For multi-calendar get_free_slots: 'all' = intersection (default), 'any' = union. Ignored when calendar_key is set."
         },
         "time_min": {
             "type": "string",
@@ -228,10 +228,11 @@ class GCalendarTool(Tool):
             base = context.get_config_value("tools.google_calendar", {}) or {}
             ctx_name = getattr(context, "context_name", None)
             if ctx_name:
-                # Per-context override under contexts.<name>.tool_overrides.google_calendar (avoids colliding with tools list)
+                # Per-context override under contexts.<name>.tool_overrides.google_calendar
+                # Only catch KeyError/TypeError (path not found); other errors must surface
                 try:
                     overlay = context.get_config_value(f"contexts.{ctx_name}.tool_overrides.google_calendar", {}) or {}
-                except Exception:
+                except (KeyError, TypeError, AttributeError):
                     overlay = {}
         # Merge (overlay wins)
         out = dict(base or {})
@@ -533,9 +534,6 @@ class GCalendarTool(Tool):
                 time_min = parameters.get("time_min")
                 time_max = parameters.get("time_max")
                 calendar_key = parameters.get("calendar_key")
-                aggregate_mode = (parameters.get("aggregate_mode") or "all").lower()
-                if aggregate_mode not in ("all", "any"):
-                    aggregate_mode = "all"
                 if not time_min or not time_max:
                     error_msg = "Error: 'time_min' and 'time_max' parameters are required for list_events."
                     logger.warning("Missing time range for list_events", call_id=call_id)
