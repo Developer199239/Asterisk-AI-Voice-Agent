@@ -521,7 +521,7 @@ class GCalendarTool(Tool):
                 output_tz_name = config.get("timezone", "") or (_tz_for_key(keys_to_use[0]) if not legacy_single else calendar_tz_name)
                 try:
                     output_tz = ZoneInfo(output_tz_name)
-                except Exception:
+                except (KeyError, TypeError):
                     output_tz = ZoneInfo("UTC")
                 slot_starts = [t.astimezone(output_tz) for t in slot_starts]
                 slot_starts.sort()
