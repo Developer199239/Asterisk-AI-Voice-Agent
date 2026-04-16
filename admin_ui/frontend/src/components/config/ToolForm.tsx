@@ -2027,37 +2027,11 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                     />
                     {config.google_calendar?.enabled && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 space-y-4">
-                            <p className="text-sm text-muted-foreground">
-                                Values set here override GOOGLE_CALENDAR_* environment variables.
-                            </p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <FormInput
-                                    label="Google Calendar credentials"
-                                    value={config.google_calendar?.credentials_path || ''}
-                                    onChange={(e) => updateNestedConfig('google_calendar', 'credentials_path', e.target.value)}
-                                    placeholder="e.g. /app/secrets/google-calendar-credentials.json"
-                                    tooltip="Path to the Google service account JSON key file. Overrides GOOGLE_CALENDAR_CREDENTIALS env var when set."
-                                />
-                                <FormInput
-                                    label="Google Calendar ID"
-                                    value={config.google_calendar?.calendar_id || ''}
-                                    onChange={(e) => updateNestedConfig('google_calendar', 'calendar_id', e.target.value)}
-                                    placeholder="primary"
-                                    tooltip="Calendar to use (e.g. 'primary' or calendar email). Overrides GOOGLE_CALENDAR_ID env var when set."
-                                />
-                                <FormInput
-                                    label="Google Calendar timezone"
-                                    value={config.google_calendar?.timezone || ''}
-                                    onChange={(e) => updateNestedConfig('google_calendar', 'timezone', e.target.value)}
-                                    placeholder="America/New_York"
-                                    tooltip="IANA timezone for events (e.g. America/New_York). Overrides GOOGLE_CALENDAR_TZ and TZ env vars when set."
-                                />
-                            </div>
-
-                            {/* Multi-Account Calendars */}
-                            <div className="mt-4">
-                                <div className="text-sm font-medium mb-2">Calendars (Multi-Account)</div>
-                                <div className="text-xs text-muted-foreground mb-2">Define named calendars. Per-context selection is configured on the Contexts page.</div>
+                            <div>
+                                <div className="text-sm font-medium mb-1">Calendars</div>
+                                <div className="text-xs text-muted-foreground mb-3">
+                                    Define one or more named calendars. Per-context selection is configured on the Contexts page.
+                                </div>
                                 <div className="space-y-2">
                                     {Object.entries(config.google_calendar?.calendars || {}).map(([key, val]: [string, any]) => (
                                         <div key={key} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border border-border rounded p-2 bg-card/30">
@@ -2069,48 +2043,52 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                                                     onBlur={() => commitCalendarKeyDraft(key)}
                                                     onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); commitCalendarKeyDraft(key); } }}
                                                     placeholder="work"
+                                                    tooltip="A short name for this calendar (e.g. 'work', 'personal'). Used to reference this calendar in contexts."
                                                 />
                                             </div>
                                             <div className="md:col-span-4">
                                                 <FormInput
-                                                    label="credentials_path"
+                                                    label="Credentials Path"
                                                     value={(val as any)?.credentials_path || ''}
                                                     onChange={(e) => {
                                                         const cals = { ...(config.google_calendar?.calendars || {}) };
                                                         cals[key] = { ...(cals[key] || {}), credentials_path: e.target.value };
                                                         onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
                                                     }}
-                                                    placeholder="/app/secrets/work.json"
+                                                    placeholder="/app/secrets/service-account.json"
+                                                    tooltip="Path to the Google service account JSON key file."
                                                 />
                                             </div>
                                             <div className="md:col-span-3">
                                                 <FormInput
-                                                    label="calendar_id"
+                                                    label="Calendar ID"
                                                     value={(val as any)?.calendar_id || ''}
                                                     onChange={(e) => {
                                                         const cals = { ...(config.google_calendar?.calendars || {}) };
                                                         cals[key] = { ...(cals[key] || {}), calendar_id: e.target.value };
                                                         onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
                                                     }}
-                                                    placeholder="primary or abc@group.calendar.google.com"
+                                                    placeholder="primary"
+                                                    tooltip="Google Calendar ID (e.g. 'primary' or a calendar email address)."
                                                 />
                                             </div>
                                             <div className="md:col-span-2">
                                                 <FormInput
-                                                    label="timezone"
+                                                    label="Timezone"
                                                     value={(val as any)?.timezone || ''}
                                                     onChange={(e) => {
                                                         const cals = { ...(config.google_calendar?.calendars || {}) };
                                                         cals[key] = { ...(cals[key] || {}), timezone: e.target.value };
                                                         onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
                                                     }}
-                                                    placeholder="America/Denver"
+                                                    placeholder="America/New_York"
+                                                    tooltip="IANA timezone for this calendar (e.g. America/New_York)."
                                                 />
                                             </div>
                                             <div className="md:col-span-1 flex justify-end">
                                                 <button
                                                     type="button"
-                                                    className="px-2 py-1 text-xs border rounded hover:bg-accent"
+                                                    className="px-2 py-1 text-xs border rounded hover:bg-accent text-destructive hover:text-destructive"
                                                     onClick={() => {
                                                         const cals = { ...(config.google_calendar?.calendars || {}) };
                                                         delete cals[key];
@@ -2123,6 +2101,12 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                                             </div>
                                         </div>
                                     ))}
+                                    {Object.keys(config.google_calendar?.calendars || {}).length === 0 && (
+                                        <div className="text-xs text-muted-foreground italic border border-dashed border-border rounded p-3 text-center">
+                                            No calendars configured. GOOGLE_CALENDAR_* environment variables will be used as fallback.
+                                            <br />Add a calendar below to get started.
+                                        </div>
+                                    )}
                                     <button
                                         type="button"
                                         className="px-3 py-1.5 text-xs rounded border hover:bg-accent"
