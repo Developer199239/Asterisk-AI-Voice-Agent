@@ -13258,6 +13258,7 @@ class Engine:
                     provider._caller_channel_id = session.caller_channel_id
                     provider._bridge_id = session.bridge_id
                     provider._called_number = getattr(session, 'called_number', None)
+                    provider._context_name = getattr(session, 'context_name', None)
                     provider._session_store = self.session_store
                     provider._ari_client = self.ari_client
                     provider._full_config = self.config.dict()  # Convert Pydantic model to dict
