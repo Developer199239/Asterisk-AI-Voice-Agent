@@ -14,11 +14,12 @@ interface ContextFormProps {
     availableProfiles?: string[];
     defaultProfileName?: string;
     httpTools?: Record<string, any>;
+    toolsRoot?: Record<string, any>;
     onChange: (newConfig: any) => void;
     isNew?: boolean;
 }
 
-const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabledMap, toolCatalogByName, availableProfiles, defaultProfileName, httpTools, onChange, isNew }: ContextFormProps) => {
+const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabledMap, toolCatalogByName, availableProfiles, defaultProfileName, httpTools, toolsRoot, onChange, isNew }: ContextFormProps) => {
     const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({
         pre_call: false,
         in_call: true,
@@ -167,6 +168,46 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         if (raw.startsWith('provider:')) {
             updateConfigPatch({ provider: raw.slice('provider:'.length), pipeline: '' });
         }
+    };
+
+    // Google Calendar per-context selection (uses toolsRoot.google_calendar.calendars)
+    // Falls back to ['default'] when legacy single-calendar config exists but no calendars{} map
+    const googleCalCfg = (toolsRoot as any)?.google_calendar || {};
+    const googleCalKeys: string[] = (() => {
+        const explicit = Object.keys(googleCalCfg.calendars || {});
+        if (explicit.length > 0) return explicit;
+        return (googleCalCfg.credentials_path || googleCalCfg.calendar_id || googleCalCfg.timezone)
+            ? ['default']
+            : [];
+    })();
+    const googleCalEnabledInContext = Array.isArray(config.tools) && config.tools.includes('google_calendar');
+    const rawSelectedCalKeys = config.tool_overrides?.google_calendar?.selected_calendars;
+    const selectedCalKeys: string[] = Array.isArray(rawSelectedCalKeys)
+        ? rawSelectedCalKeys.map((k: any) => String(k))
+        : [];
+    // Filter against available keys so a stale/removed selection (e.g. a calendar
+    // deleted in Tools after the context was saved) doesn't lock the UI into a
+    // state where hasSelection is true but no checkbox is actually selected,
+    // disabling every option.
+    const selectedCalKeysInOptions: string[] = selectedCalKeys.filter((k) => googleCalKeys.includes(k));
+
+    // Single-select: a context uses exactly one calendar. Clicking the current
+    // selection clears it; clicking another replaces the selection.
+    const toggleSelectedCalendar = (key: string) => {
+        const isCurrentlySelected =
+            selectedCalKeysInOptions.length === 1 && selectedCalKeysInOptions[0] === key;
+        const nextSel = isCurrentlySelected ? [] : [key];
+        const next = {
+            ...config,
+            tool_overrides: {
+                ...(config.tool_overrides || {}),
+                google_calendar: {
+                    ...(config.tool_overrides?.google_calendar || {}),
+                    selected_calendars: nextSel,
+                },
+            },
+        };
+        onChange(next);
     };
 
     return (
@@ -454,6 +495,50 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                     )}
                 </div>
             </div>
+
+            {/* Google Calendar (Per-Context) */}
+            {googleCalEnabledInContext && (
+                <div className="space-y-2 p-4 rounded-lg border border-border bg-card/30">
+                    <div className="flex items-center justify-between">
+                        <FormLabel tooltip="Each context uses exactly one calendar. Click a calendar to select it; click it again to clear.">
+                            Google Calendar (Per-Context)
+                        </FormLabel>
+                    </div>
+                    {googleCalKeys.length === 0 ? (
+                        <div className="text-xs text-muted-foreground">No calendars defined in Tools. Add calendars under Tools → Google Calendar first.</div>
+                    ) : (
+                        <>
+                            <div className="text-xs text-muted-foreground mb-1">
+                                Pick one calendar for this context. Others are disabled until you clear the selection.
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {googleCalKeys.map((k) => {
+                                    const isSelected = selectedCalKeysInOptions.includes(k);
+                                    const hasSelection = selectedCalKeysInOptions.length > 0;
+                                    const isDisabled = hasSelection && !isSelected;
+                                    return (
+                                        <label
+                                            key={k}
+                                            className={`inline-flex items-center gap-2 px-2 py-1 border rounded text-sm ${
+                                                isDisabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
+                                            }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                className="accent-primary"
+                                                checked={isSelected}
+                                                disabled={isDisabled}
+                                                onChange={() => toggleSelectedCalendar(k)}
+                                            />
+                                            <span>{k}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+                </div>
+            )}
 
             {/* Background Music Configuration */}
             <div className="space-y-4 p-4 rounded-lg border border-border bg-card/30">

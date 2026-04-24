@@ -14,6 +14,7 @@ GOOGLE_CALENDAR_TZ for timezone (fallback: TZ).
 """
 
 import asyncio
+import threading
 import structlog
 from datetime import datetime, timedelta
 from typing import Dict, Any
@@ -34,6 +35,15 @@ _GOOGLE_CALENDAR_INPUT_SCHEMA = {
             "type": "string",
             "enum": ["list_events", "get_event", "create_event", "delete_event", "get_free_slots"],
             "description": "The calendar operation to perform."
+        },
+        "calendar_key": {
+            "type": "string",
+            "description": "Optional. Named calendar key (from tools.google_calendar.calendars) to target a single calendar."
+        },
+        "aggregate_mode": {
+            "type": "string",
+            "enum": ["all", "any"],
+            "description": "For multi-calendar get_free_slots: 'all' = intersection (default), 'any' = union. Ignored when calendar_key is set."
         },
         "time_min": {
             "type": "string",
@@ -92,6 +102,8 @@ class GCalendarTool(Tool):
         logger.debug("Initializing GCalendarTool instance")
         self._cal = None
         self._cal_config_key = None
+        self._cals: dict[tuple[str, str, str], GCalendar] = {}
+        self._cals_lock = threading.Lock()
 
     def _get_cal(self, config: Dict[str, Any]) -> GCalendar:
         """Return a GCalendar instance, (re)creating if config changed or service is None."""
@@ -127,6 +139,53 @@ class GCalendarTool(Tool):
     def _get_calendar_tz_name(self, config: Dict[str, Any]) -> str:
         """Resolve calendar timezone: config timezone, then GOOGLE_CALENDAR_TZ, TZ, UTC."""
         return _get_timezone(config.get("timezone", ""))
+
+    def _get_or_create_cal(self, creds_path: str, cal_id: str, tz: str) -> GCalendar:
+        key = (creds_path or "", cal_id or "", tz or "")
+        with self._cals_lock:
+            inst = self._cals.get(key)
+            if inst is None or inst.service is None:
+                inst = GCalendar(credentials_path=creds_path, calendar_id=cal_id, timezone=tz)
+                self._cals[key] = inst
+            return inst
+
+    def _resolve_calendars(self, config: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+        """
+        Return dict of calendar_key -> {credentials_path, calendar_id, timezone}.
+        Falls back to single-calendar legacy keys if calendars{} missing.
+        """
+        cals = {}
+        cal_map = config.get("calendars") or {}
+        if isinstance(cal_map, dict) and cal_map:
+            for k, v in cal_map.items():
+                if not isinstance(v, dict):
+                    continue
+                cals[str(k)] = {
+                    "credentials_path": v.get("credentials_path", "") or config.get("credentials_path", ""),
+                    "calendar_id": v.get("calendar_id", "") or config.get("calendar_id", ""),
+                    "timezone": v.get("timezone", "") or config.get("timezone", ""),
+                }
+        else:
+            # Legacy: single calendar from tool config/env
+            cals["default"] = {
+                "credentials_path": config.get("credentials_path", ""),
+                "calendar_id": config.get("calendar_id", ""),
+                "timezone": config.get("timezone", ""),
+            }
+        return cals
+
+    def _selected_calendar_keys(self, config: Dict[str, Any]) -> list[str]:
+        """Return selected calendar keys for this context. Missing = all; invalid/empty = none (fail closed)."""
+        calendars = self._resolve_calendars(config)
+        raw = config.get("selected_calendars")
+        # Missing key means "use all configured calendars"
+        if raw is None:
+            return list(calendars.keys())
+        # Present but not a list (e.g. typo, scalar) — fail closed
+        if not isinstance(raw, (list, tuple)):
+            return []
+        # Filter to valid keys only; empty list = none selected (fail closed)
+        return [str(s) for s in raw if str(s) in calendars]
 
     def _normalize_datetime_to_calendar_tz(
         self, dt_str: str, calendar_tz_name: str
@@ -164,11 +223,25 @@ class GCalendarTool(Tool):
 
     def _get_config(self, context: ToolExecutionContext) -> Dict[str, Any]:
         """
-        Get google_calendar config: from context when available, else from ai-agent.yaml.
+        Get google_calendar config: base from tools.google_calendar, with per-context overlay if present.
         """
+        base: Dict[str, Any] = {}
+        overlay: Dict[str, Any] = {}
         if context and getattr(context, "get_config_value", None):
-            return context.get_config_value("tools.google_calendar", {}) or {}
-        return self._load_config()
+            base = context.get_config_value("tools.google_calendar", {}) or {}
+            ctx_name = getattr(context, "context_name", None)
+            if ctx_name:
+                # Per-context override under contexts.<name>.tool_overrides.google_calendar
+                # Only catch KeyError/TypeError (path not found); other errors must surface
+                try:
+                    overlay = context.get_config_value(f"contexts.{ctx_name}.tool_overrides.google_calendar", {}) or {}
+                except (KeyError, TypeError, AttributeError):
+                    overlay = {}
+        # Merge (overlay wins)
+        out = dict(base or {})
+        for k, v in (overlay or {}).items():
+            out[k] = v
+        return out or self._load_config()
 
     async def execute(
         self,
@@ -213,12 +286,75 @@ class GCalendarTool(Tool):
             logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
             return out
 
-        cal = self._get_cal(config)
-        calendar_tz_name = self._get_calendar_tz_name(config)
+        # Resolve configured calendars (multi or legacy single)
+        calendars = self._resolve_calendars(config)
+        selected_keys = self._selected_calendar_keys(config)
 
-        if not getattr(cal, "service", None):
-            logger.error("Google Calendar service unavailable", call_id=call_id)
-            return {"status": "error", "message": "Google Calendar is not configured or unavailable."}
+        # If legacy single-calendar (env-var-only; no explicit `calendars` map in
+        # config), keep the backward-compat code path that reads root-level
+        # credentials_path / calendar_id / timezone via self._get_cal(config).
+        #
+        # CRITICAL: must NOT match when the user has an explicit nested
+        # tools.google_calendar.calendars.default entry — that's a real
+        # single-calendar multi-account config and its credentials live in the
+        # nested entry, not at the root.
+        #
+        # Match the truthiness semantics of `_resolve_calendars`: it treats any
+        # non-dict OR empty-dict `calendars` value as legacy (and falls through
+        # to the root-level env-var path to materialize `calendars.default`), so
+        # `calendars: {}` in YAML must also count as legacy here for consistency.
+        _raw_calendars = config.get("calendars")
+        legacy_single = (
+            (not isinstance(_raw_calendars, dict) or not _raw_calendars)
+            and len(calendars) == 1
+            and "default" in calendars
+        )
+
+        # Helper: get timezone name for a specific calendar
+        def _tz_for_key(k: str) -> str:
+            tz = calendars[k].get("timezone", "")
+            return _get_timezone(tz)
+
+        # Helper: build or reuse GCalendar for a key
+        def _cal_for_key(k: str) -> GCalendar:
+            cfg = calendars[k]
+            return self._get_or_create_cal(cfg.get("credentials_path", ""), cfg.get("calendar_id", ""), cfg.get("timezone", ""))
+
+        # Helper: validate calendar_key is in selected_keys (not just global calendars)
+        def _validate_calendar_key(calendar_key: str, action_name: str) -> dict | None:
+            """Return error dict if calendar_key is invalid/unauthorized, else None."""
+            if calendar_key not in calendars:
+                msg = f"Unknown calendar_key '{calendar_key}'. Available: {', '.join(calendars.keys())}."
+                logger.warning("Unknown calendar_key", call_id=call_id, action=action_name, calendar_key=calendar_key)
+                return {"status": "error", "message": msg}
+            if calendar_key not in selected_keys:
+                msg = f"Calendar '{calendar_key}' is not selected for this context. Selected: {', '.join(selected_keys)}."
+                logger.warning("calendar_key not in selected_calendars", call_id=call_id, action=action_name, calendar_key=calendar_key)
+                return {"status": "error", "message": msg}
+            return None
+
+        # Backward-compat single-calendar guard
+        if legacy_single:
+            cal = self._get_cal(config)
+            calendar_tz_name = self._get_calendar_tz_name(config)
+            if not getattr(cal, "service", None):
+                logger.error("Google Calendar service unavailable", call_id=call_id)
+                return {"status": "error", "message": "Google Calendar is not configured or unavailable."}
+        else:
+            # For multi-cal, ensure at least one selected calendar resolves
+            if not selected_keys:
+                logger.error("No calendars selected or configured", call_id=call_id)
+                return {"status": "error", "message": "No Google Calendars are selected or configured for this context."}
+            # Validate services exist (best-effort; skip broken ones at runtime)
+            at_least_one_ready = False
+            for k in selected_keys:
+                c = _cal_for_key(k)
+                if getattr(c, "service", None):
+                    at_least_one_ready = True
+                    break
+            if not at_least_one_ready:
+                logger.error("No Google Calendar services available (multi-cal)", call_id=call_id)
+                return {"status": "error", "message": "Google Calendar is not configured or unavailable (multi-account)."}
 
         try:
             if action == "get_free_slots":
@@ -227,6 +363,10 @@ class GCalendarTool(Tool):
                 busy_prefix = parameters.get("busy_prefix") or config.get("busy_prefix")
                 time_min = parameters.get("time_min")
                 time_max = parameters.get("time_max")
+                calendar_key = parameters.get("calendar_key")
+                aggregate_mode = (parameters.get("aggregate_mode") or "all").lower()
+                if aggregate_mode not in ("all", "any"):
+                    aggregate_mode = "all"
 
                 if not all([time_min, time_max, free_prefix, busy_prefix]):
                     error_msg = (
@@ -238,67 +378,152 @@ class GCalendarTool(Tool):
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
 
-                # DST-aware: normalize to calendar TZ (strip TZ tail, use GOOGLE_CALENDAR_TZ/TZ)
+                def _list_events_for_key(k: str) -> list[dict]:
+                    tz_name = _tz_for_key(k)
+                    time_min_dt = self._normalize_datetime_to_calendar_tz(time_min, tz_name)
+                    time_max_dt = self._normalize_datetime_to_calendar_tz(time_max, tz_name)
+                    cal_i = _cal_for_key(k)
+                    if not getattr(cal_i, "service", None):
+                        return []
+                    return cal_i.list_events(time_min_dt.isoformat(), time_max_dt.isoformat())
+
+                def _available_intervals_from_events(evts: list[dict]) -> list[tuple[datetime, datetime]]:
+                    free_blocks = []
+                    busy_blocks = []
+                    for e in evts:
+                        summary = e.get("summary", "").strip()
+                        start_str = e.get("start", {}).get("dateTime")
+                        end_str = e.get("end", {}).get("dateTime")
+                        if not start_str or not end_str:
+                            continue
+                        start_dt = self._parse_iso(start_str)
+                        end_dt = self._parse_iso(end_str)
+                        if summary.startswith(free_prefix):
+                            free_blocks.append((start_dt, end_dt))
+                        elif summary.startswith(busy_prefix):
+                            busy_blocks.append((start_dt, end_dt))
+                    free_blocks.sort(key=lambda x: x[0])
+                    busy_blocks.sort(key=lambda x: x[0])
+                    available: list[tuple[datetime, datetime]] = []
+                    for f_start, f_end in free_blocks:
+                        current_start = f_start
+                        for b_start, b_end in busy_blocks:
+                            if b_end <= current_start or b_start >= f_end:
+                                continue
+                            if current_start < b_start:
+                                available.append((current_start, b_start))
+                            current_start = max(current_start, b_end)
+                        if current_start < f_end:
+                            available.append((current_start, f_end))
+                    return available
+
+                def _union(intervals: list[list[tuple[datetime, datetime]]]) -> list[tuple[datetime, datetime]]:
+                    merged: list[tuple[datetime, datetime]] = []
+                    for lst in intervals:
+                        for s, e in lst:
+                            merged.append((s, e))
+                    if not merged:
+                        return []
+                    merged.sort(key=lambda x: x[0])
+                    out_iv: list[tuple[datetime, datetime]] = []
+                    cur_s, cur_e = merged[0]
+                    for s, e in merged[1:]:
+                        if s <= cur_e:
+                            cur_e = max(cur_e, e)
+                        else:
+                            out_iv.append((cur_s, cur_e))
+                            cur_s, cur_e = s, e
+                    out_iv.append((cur_s, cur_e))
+                    return out_iv
+
+                def _intersect(a: list[tuple[datetime, datetime]], b: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+                    i, j = 0, 0
+                    res: list[tuple[datetime, datetime]] = []
+                    a_sorted = sorted(a, key=lambda x: x[0])
+                    b_sorted = sorted(b, key=lambda x: x[0])
+                    while i < len(a_sorted) and j < len(b_sorted):
+                        s = max(a_sorted[i][0], b_sorted[j][0])
+                        e = min(a_sorted[i][1], b_sorted[j][1])
+                        if s < e:
+                            res.append((s, e))
+                        if a_sorted[i][1] < b_sorted[j][1]:
+                            i += 1
+                        else:
+                            j += 1
+                    return res
+
+                # Gather intervals per selected calendar (or single target)
+                keys_to_use: list[str]
+                if legacy_single:
+                    keys_to_use = ["default"]
+                elif calendar_key:
+                    err = _validate_calendar_key(calendar_key, "get_free_slots")
+                    if err:
+                        return err
+                    keys_to_use = [calendar_key]
+                else:
+                    keys_to_use = list(selected_keys)
+
+                # Validate time_min/time_max once before per-calendar loop
+                _validation_tz = _tz_for_key(keys_to_use[0]) if not legacy_single else calendar_tz_name
                 try:
-                    time_min_dt = self._normalize_datetime_to_calendar_tz(time_min, calendar_tz_name)
-                    time_max_dt = self._normalize_datetime_to_calendar_tz(time_max, calendar_tz_name)
-                    time_min_rfc = time_min_dt.isoformat()
-                    time_max_rfc = time_max_dt.isoformat()
+                    self._normalize_datetime_to_calendar_tz(time_min, _validation_tz)
+                    self._normalize_datetime_to_calendar_tz(time_max, _validation_tz)
                 except ValueError as e:
                     out = {"status": "error", "message": str(e)}
                     logger.warning("Invalid datetime for get_free_slots", call_id=call_id, error=str(e))
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
 
-                logger.debug(
-                    "Calculating free slots",
-                    call_id=call_id,
-                    free_prefix=free_prefix,
-                    busy_prefix=busy_prefix,
-                )
-                events = await asyncio.to_thread(cal.list_events, time_min_rfc, time_max_rfc)
-
-                free_blocks = []
-                busy_blocks = []
-
-                # 1. Categorize events based on prefixes
-                for e in events:
-                    summary = e.get("summary", "").strip()
-                    start_str = e.get("start", {}).get("dateTime")
-                    end_str = e.get("end", {}).get("dateTime")
-
-                    if not start_str or not end_str:
+                per_cal_intervals: list[list[tuple[datetime, datetime]]] = []
+                failed_keys: list[str] = []
+                for k in keys_to_use:
+                    cal_i = _cal_for_key(k)
+                    if not getattr(cal_i, "service", None):
+                        failed_keys.append(k)
                         continue
+                    evts = await asyncio.to_thread(_list_events_for_key, k)
+                    per_cal_intervals.append(_available_intervals_from_events(evts))
 
-                    start_dt = self._parse_iso(start_str)
-                    end_dt = self._parse_iso(end_str)
+                # Log skipped calendars so operators can diagnose
+                if failed_keys:
+                    logger.warning("Skipped unavailable calendars during aggregation", call_id=call_id, failed_keys=failed_keys)
 
-                    if summary.startswith(free_prefix):
-                        free_blocks.append((start_dt, end_dt))
-                    elif summary.startswith(busy_prefix):
-                        busy_blocks.append((start_dt, end_dt))
+                # Aggregate
+                if not per_cal_intervals:
+                    out = {"status": "error", "message": f"All selected calendars are unavailable: {', '.join(failed_keys)}."}
+                    logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                    return out
 
-                # 2. Sort both lists chronologically
-                free_blocks.sort(key=lambda x: x[0])
-                busy_blocks.sort(key=lambda x: x[0])
+                # Intersection ("all" mode) requires every selected calendar to be
+                # reachable. If any were skipped, silently intersecting across the
+                # reachable subset would widen the result ("free on every reachable
+                # calendar" ≠ "free on every selected calendar"), potentially
+                # surfacing slots that are actually busy on the unavailable one.
+                # Fail closed in that case. "any" mode (union) can still proceed
+                # since a union over a subset is still a valid subset of the full
+                # union — the LLM just gets fewer candidates.
+                if failed_keys and aggregate_mode != "any" and len(keys_to_use) > 1:
+                    out = {
+                        "status": "error",
+                        "message": (
+                            f"Cannot compute shared availability (aggregate_mode='all') while "
+                            f"these calendars are unavailable: {', '.join(failed_keys)}."
+                        ),
+                    }
+                    logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                    return out
 
-                available_intervals = []
+                if len(per_cal_intervals) == 1 or aggregate_mode == "any":
+                    available_intervals = _union(per_cal_intervals)
+                else:
+                    # intersect across all calendars (default)
+                    cur = per_cal_intervals[0]
+                    for nxt in per_cal_intervals[1:]:
+                        cur = _intersect(cur, nxt)
+                    available_intervals = cur
 
-                # 3. Subtraction logic
-                for f_start, f_end in free_blocks:
-                    current_start = f_start
-
-                    for b_start, b_end in busy_blocks:
-                        if b_end <= current_start or b_start >= f_end:
-                            continue
-                        if current_start < b_start:
-                            available_intervals.append((current_start, b_start))
-                        current_start = max(current_start, b_end)
-
-                    if current_start < f_end:
-                        available_intervals.append((current_start, f_end))
-
-                # 4. Duration: from parameter "duration" (minutes), fallback to config
+                # Duration: from parameter "duration" (minutes), fallback to config
                 duration_minutes = parameters.get("duration") or config.get("min_slot_duration_minutes", 15)
                 try:
                     duration_minutes = max(1, int(duration_minutes))
@@ -325,16 +550,19 @@ class GCalendarTool(Tool):
                 for s, end_t in available_intervals:
                     if end_t <= s:
                         continue
-                    # Include the actual start of the free slot first to fill the calendar better
-                    if s + duration_td <= end_t:
-                        slot_starts.append(s)
-                    # Then all duration-aligned starts after s
+                    # Always align to duration multiples from midnight
                     start = round_up_to_next_slot(s, duration_minutes)
                     while start + duration_td <= end_t:
-                        if start > s:  # avoid duplicate when s is already aligned
-                            slot_starts.append(start)
+                        slot_starts.append(start)
                         start += timedelta(minutes=duration_minutes)
 
+                # Normalize all slots to a consistent output timezone
+                output_tz_name = config.get("timezone", "") or (_tz_for_key(keys_to_use[0]) if not legacy_single else calendar_tz_name)
+                try:
+                    output_tz = ZoneInfo(output_tz_name)
+                except (KeyError, TypeError):
+                    output_tz = ZoneInfo("UTC")
+                slot_starts = [t.astimezone(output_tz) for t in slot_starts]
                 slot_starts.sort()
                 results = [t.strftime("%Y-%m-%d %H:%M") for t in slot_starts]
                 out = {"status": "success", "message": "Free slot starts: " + ", ".join(results)}
@@ -344,46 +572,125 @@ class GCalendarTool(Tool):
             if action == "list_events":
                 time_min = parameters.get("time_min")
                 time_max = parameters.get("time_max")
+                calendar_key = parameters.get("calendar_key")
                 if not time_min or not time_max:
                     error_msg = "Error: 'time_min' and 'time_max' parameters are required for list_events."
                     logger.warning("Missing time range for list_events", call_id=call_id)
                     out = {"status": "error", "message": error_msg}
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
-                # DST-aware: normalize to calendar TZ (strip TZ tail, use GOOGLE_CALENDAR_TZ/TZ)
+
+                # Validate time_min/time_max once before per-calendar loop
+                _val_tz = self._get_calendar_tz_name(config) if legacy_single else _tz_for_key(selected_keys[0] if selected_keys else "default")
                 try:
-                    time_min_dt = self._normalize_datetime_to_calendar_tz(time_min, calendar_tz_name)
-                    time_max_dt = self._normalize_datetime_to_calendar_tz(time_max, calendar_tz_name)
-                    time_min_rfc = time_min_dt.isoformat()
-                    time_max_rfc = time_max_dt.isoformat()
+                    self._normalize_datetime_to_calendar_tz(time_min, _val_tz)
+                    self._normalize_datetime_to_calendar_tz(time_max, _val_tz)
                 except ValueError as e:
                     out = {"status": "error", "message": str(e)}
                     logger.warning("Invalid datetime for list_events", call_id=call_id, error=str(e))
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
-                events = await asyncio.to_thread(cal.list_events, time_min_rfc, time_max_rfc)
-                simplified_events = [
-                    {
-                        "id": e.get("id"),
-                        "summary": e.get("summary", "No Title"),
-                        "start": e.get("start", {}).get("dateTime") or e.get("start", {}).get("date"),
-                        "end": e.get("end", {}).get("dateTime") or e.get("end", {}).get("date"),
-                    }
-                    for e in events
-                ]
-                out = {"status": "success", "message": "Events listed.", "events": simplified_events}
+
+                def _list_for_key(k: str) -> list[dict]:
+                    tz_name = _tz_for_key(k)
+                    tmin = self._normalize_datetime_to_calendar_tz(time_min, tz_name).isoformat()
+                    tmax = self._normalize_datetime_to_calendar_tz(time_max, tz_name).isoformat()
+                    ci = _cal_for_key(k)
+                    if not getattr(ci, "service", None):
+                        return []
+                    return ci.list_events(tmin, tmax)
+
+                if legacy_single:
+                    events = await asyncio.to_thread(cal.list_events, *[
+                        self._normalize_datetime_to_calendar_tz(time_min, self._get_calendar_tz_name(config)).isoformat(),
+                        self._normalize_datetime_to_calendar_tz(time_max, self._get_calendar_tz_name(config)).isoformat(),
+                    ])
+                    pools = {"default": events}
+                elif calendar_key:
+                    err = _validate_calendar_key(calendar_key, "list_events")
+                    if err:
+                        return err
+                    # Refuse to silently return empty when the targeted calendar
+                    # is unavailable — the caller asked for a specific calendar.
+                    ci_one = _cal_for_key(calendar_key)
+                    if not getattr(ci_one, "service", None):
+                        out = {
+                            "status": "error",
+                            "message": f"Calendar '{calendar_key}' is configured but currently unavailable.",
+                        }
+                        logger.warning("list_events: targeted calendar unavailable", call_id=call_id, calendar_key=calendar_key)
+                        logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                        return out
+                    pools = {calendar_key: await asyncio.to_thread(_list_for_key, calendar_key)}
+                else:
+                    # Aggregate across selected calendars. If any are unavailable,
+                    # return an error — silently merging the reachable subset
+                    # would hide missing data and make the merged list look
+                    # complete when it isn't.
+                    pools = {}
+                    list_failed_keys: list[str] = []
+                    for k in selected_keys:
+                        ci_k = _cal_for_key(k)
+                        if not getattr(ci_k, "service", None):
+                            list_failed_keys.append(k)
+                            continue
+                        pools[k] = await asyncio.to_thread(_list_for_key, k)
+                    if list_failed_keys:
+                        out = {
+                            "status": "error",
+                            "message": (
+                                f"Cannot list events because these selected calendars are "
+                                f"currently unavailable: {', '.join(list_failed_keys)}."
+                            ),
+                        }
+                        logger.warning("list_events: selected calendars unavailable", call_id=call_id, failed_keys=list_failed_keys)
+                        logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                        return out
+
+                simplified = []
+                for k, evs in pools.items():
+                    for e in evs:
+                        simplified.append({
+                            "id": e.get("id"),
+                            "summary": e.get("summary", "No Title"),
+                            "start": e.get("start", {}).get("dateTime") or e.get("start", {}).get("date"),
+                            "end": e.get("end", {}).get("dateTime") or e.get("end", {}).get("date"),
+                            "calendar": k,
+                        })
+                # No need to aggregate here; return merged list with calendar labels
+                out = {"status": "success", "message": "Events listed.", "events": simplified}
                 logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                 return out
 
             if action == "get_event":
                 event_id = parameters.get("event_id")
+                calendar_key = parameters.get("calendar_key")
                 if not event_id:
                     error_msg = "Error: 'event_id' parameter is required for get_event."
                     logger.warning("Missing event_id for get_event", call_id=call_id)
                     out = {"status": "error", "message": error_msg}
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
-                event = await asyncio.to_thread(cal.get_event, event_id)
+                # Resolve target cal
+                target_key = None
+                if legacy_single:
+                    target_key = "default"
+                    cal_i = cal
+                else:
+                    if calendar_key:
+                        err = _validate_calendar_key(calendar_key, "get_event")
+                        if err:
+                            return err
+                        target_key = calendar_key
+                    else:
+                        target_key = (selected_keys[0] if selected_keys else None)
+                    if not target_key:
+                        out = {"status": "error", "message": "No calendar_key provided and no selected calendars configured."}
+                        logger.warning("No target calendar for get_event", call_id=call_id)
+                        logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                        return out
+                    cal_i = _cal_for_key(target_key)
+                event = await asyncio.to_thread(cal_i.get_event, event_id)
                 if not event:
                     out = {"status": "error", "message": "Event not found."}
                     logger.warning("Event not found", call_id=call_id, event_id=event_id)
@@ -397,6 +704,7 @@ class GCalendarTool(Tool):
                     "description": event.get("description", ""),
                     "start": event.get("start", {}).get("dateTime") or event.get("start", {}).get("date"),
                     "end": event.get("end", {}).get("dateTime") or event.get("end", {}).get("date"),
+                    "calendar": target_key,
                 }
                 logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                 return out
@@ -406,6 +714,7 @@ class GCalendarTool(Tool):
                 desc = parameters.get("description", "")
                 start_dt = parameters.get("start_datetime")
                 end_dt = parameters.get("end_datetime")
+                calendar_key = parameters.get("calendar_key")
                 if not summary or not start_dt or not end_dt:
                     error_msg = (
                         "Error: 'summary', 'start_datetime', and 'end_datetime' are required for create_event."
@@ -414,10 +723,30 @@ class GCalendarTool(Tool):
                     out = {"status": "error", "message": error_msg}
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
+                # Resolve target cal
+                if legacy_single:
+                    tz_name = self._get_calendar_tz_name(config)
+                    cal_i = cal
+                    target_key = "default"
+                else:
+                    if calendar_key:
+                        err = _validate_calendar_key(calendar_key, "create_event")
+                        if err:
+                            return err
+                        target_key = calendar_key
+                    else:
+                        target_key = (selected_keys[0] if selected_keys else None)
+                    if not target_key:
+                        out = {"status": "error", "message": "calendar_key is required (or configure selected_calendars)."}
+                        logger.warning("Missing target calendar for create_event", call_id=call_id)
+                        logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                        return out
+                    tz_name = _tz_for_key(target_key)
+                    cal_i = _cal_for_key(target_key)
                 # DST-aware: if input has TZ tail, convert to calendar TZ and send local time (no tail)
                 try:
-                    start_dt_local = self._normalize_datetime_to_calendar_tz(start_dt, calendar_tz_name)
-                    end_dt_local = self._normalize_datetime_to_calendar_tz(end_dt, calendar_tz_name)
+                    start_dt_local = self._normalize_datetime_to_calendar_tz(start_dt, tz_name)
+                    end_dt_local = self._normalize_datetime_to_calendar_tz(end_dt, tz_name)
                     start_dt_str = start_dt_local.strftime("%Y-%m-%dT%H:%M:%S")
                     end_dt_str = end_dt_local.strftime("%Y-%m-%dT%H:%M:%S")
                 except ValueError as e:
@@ -425,7 +754,7 @@ class GCalendarTool(Tool):
                     logger.warning("Invalid datetime for create_event", call_id=call_id, error=str(e))
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
-                event = await asyncio.to_thread(cal.create_event, summary, desc, start_dt_str, end_dt_str)
+                event = await asyncio.to_thread(cal_i.create_event, summary, desc, start_dt_str, end_dt_str)
                 if not event:
                     out = {"status": "error", "message": "Failed to create event."}
                     logger.error("Failed to create event", call_id=call_id)
@@ -436,25 +765,45 @@ class GCalendarTool(Tool):
                     "message": "Event created.",
                     "id": event.get("id"),
                     "link": event.get("htmlLink"),
+                    "calendar": target_key,
                 }
                 logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                 return out
 
             if action == "delete_event":
                 event_id = parameters.get("event_id")
+                calendar_key = parameters.get("calendar_key")
                 if not event_id:
                     error_msg = "Error: 'event_id' parameter is required for delete_event."
                     logger.warning("Missing event_id for delete_event", call_id=call_id)
                     out = {"status": "error", "message": error_msg}
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
-                success = await asyncio.to_thread(cal.delete_event, event_id)
+                # Resolve target cal
+                if legacy_single:
+                    cal_i = cal
+                    target_key = "default"
+                else:
+                    if calendar_key:
+                        err = _validate_calendar_key(calendar_key, "delete_event")
+                        if err:
+                            return err
+                        target_key = calendar_key
+                    else:
+                        target_key = (selected_keys[0] if selected_keys else None)
+                    if not target_key:
+                        out = {"status": "error", "message": "calendar_key is required (or configure selected_calendars)."}
+                        logger.warning("Missing target calendar for delete_event", call_id=call_id)
+                        logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                        return out
+                    cal_i = _cal_for_key(target_key)
+                success = await asyncio.to_thread(cal_i.delete_event, event_id)
                 if not success:
                     out = {"status": "error", "message": "Failed to delete event (not found or calendar error)."}
                     logger.warning("Failed to delete event", call_id=call_id, event_id=event_id)
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
-                out = {"status": "success", "message": "Event deleted.", "id": event_id}
+                out = {"status": "success", "message": "Event deleted.", "id": event_id, "calendar": target_key}
                 logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                 return out
 

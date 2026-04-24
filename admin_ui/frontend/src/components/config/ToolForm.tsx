@@ -16,6 +16,7 @@ interface ToolFormProps {
         pipelineGuardrailOverrides: { name: string; enabled: boolean }[];
     };
     onChange: (newConfig: any) => void;
+    onContextsChange?: (newContexts: Record<string, any>) => void;
     onSaveNow?: (newConfig: any) => Promise<void>;
 }
 
@@ -69,7 +70,60 @@ const hasLiveAgentExpertSettings = (ext: any) => {
     return actionType !== 'transfer' || deviceStateTech !== 'auto' || aliases.length > 0;
 };
 
-const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFormProps) => {
+const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, onSaveNow }: ToolFormProps) => {
+    // Migrate calendar key references in all contexts' selected_calendars
+    const migrateCalendarKeyInContexts = (oldKey: string, newKey: string | null) => {
+        if (!contexts || !onContextsChange) return;
+        const updated = { ...contexts };
+        let changed = false;
+        for (const [ctxName, ctx] of Object.entries(updated)) {
+            const sel: string[] | undefined = (ctx as any)?.tool_overrides?.google_calendar?.selected_calendars;
+            if (!Array.isArray(sel) || !sel.includes(oldKey)) continue;
+            changed = true;
+            const nextSel = newKey
+                ? sel.map((k: string) => (k === oldKey ? newKey : k))
+                : sel.filter((k: string) => k !== oldKey);
+            updated[ctxName] = {
+                ...(ctx as any),
+                tool_overrides: {
+                    ...((ctx as any)?.tool_overrides || {}),
+                    google_calendar: {
+                        ...((ctx as any)?.tool_overrides?.google_calendar || {}),
+                        selected_calendars: nextSel,
+                    },
+                },
+            };
+        }
+        if (changed) onContextsChange(updated);
+    };
+
+    const commitCalendarKeyDraft = (stableKey: string) => {
+        const nextKey = String(calKeyDraftByKey[stableKey] ?? stableKey).trim();
+        if (!nextKey || nextKey === stableKey) {
+            setCalKeyDraftByKey((prev) => ({ ...prev, [stableKey]: stableKey }));
+            return;
+        }
+        const cals = { ...(config.google_calendar?.calendars || {}) };
+        if (Object.prototype.hasOwnProperty.call(cals, nextKey)) {
+            toast.error(`Calendar '${nextKey}' already exists`);
+            setCalKeyDraftByKey((prev) => ({ ...prev, [stableKey]: stableKey }));
+            return;
+        }
+        const copy = { ...cals[stableKey] };
+        delete cals[stableKey];
+        cals[nextKey] = copy;
+        migrateCalendarKeyInContexts(stableKey, nextKey);
+        setCalKeyDraftByKey((prev) => {
+            const next = { ...prev };
+            delete next[stableKey];
+            return next;
+        });
+        onChange({
+            ...config,
+            google_calendar: { ...(config.google_calendar || {}), calendars: cals }
+        });
+    };
+
 			    const [editingDestination, setEditingDestination] = useState<string | null>(null);
 			    const [destinationForm, setDestinationForm] = useState<any>({});
 	        const [emailDefaults, setEmailDefaults] = useState<any>(null);
@@ -82,6 +136,7 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFo
 	        const internalAliasesCommittedRef = useRef<Record<string, string>>({});
 	        const [internalExtKeyDraftByRowId, setInternalExtKeyDraftByRowId] = useState<Record<string, string>>({});
 	        const internalExtKeyCommittedRef = useRef<Record<string, string>>({});
+	        const [calKeyDraftByKey, setCalKeyDraftByKey] = useState<Record<string, string>>({});
 	        const [showHangupExpert, setShowHangupExpert] = useState<boolean>(() => {
 	            try {
 	                const v = localStorage.getItem(HANGUP_EXPERT_STORAGE_KEY);
@@ -1972,31 +2027,109 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onSaveNow }: ToolFo
                     />
                     {config.google_calendar?.enabled && (
                         <div className="mt-4 pl-4 border-l-2 border-border ml-2 space-y-4">
-                            <p className="text-sm text-muted-foreground">
-                                Values set here override GOOGLE_CALENDAR_* environment variables.
-                            </p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <FormInput
-                                    label="Google Calendar credentials"
-                                    value={config.google_calendar?.credentials_path || ''}
-                                    onChange={(e) => updateNestedConfig('google_calendar', 'credentials_path', e.target.value)}
-                                    placeholder="e.g. /app/secrets/google-calendar-credentials.json"
-                                    tooltip="Path to the Google service account JSON key file. Overrides GOOGLE_CALENDAR_CREDENTIALS env var when set."
-                                />
-                                <FormInput
-                                    label="Google Calendar ID"
-                                    value={config.google_calendar?.calendar_id || ''}
-                                    onChange={(e) => updateNestedConfig('google_calendar', 'calendar_id', e.target.value)}
-                                    placeholder="primary"
-                                    tooltip="Calendar to use (e.g. 'primary' or calendar email). Overrides GOOGLE_CALENDAR_ID env var when set."
-                                />
-                                <FormInput
-                                    label="Google Calendar timezone"
-                                    value={config.google_calendar?.timezone || ''}
-                                    onChange={(e) => updateNestedConfig('google_calendar', 'timezone', e.target.value)}
-                                    placeholder="America/New_York"
-                                    tooltip="IANA timezone for events (e.g. America/New_York). Overrides GOOGLE_CALENDAR_TZ and TZ env vars when set."
-                                />
+                            <div>
+                                <div className="text-sm font-medium mb-1">Calendars</div>
+                                <div className="text-xs text-muted-foreground mb-3">
+                                    Define one or more named calendars. Per-context selection is configured on the Contexts page.
+                                </div>
+                                <div className="space-y-2">
+                                    {Object.entries(config.google_calendar?.calendars || {}).map(([key, val]: [string, any]) => (
+                                        <div key={key} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border border-border rounded p-2 bg-card/30">
+                                            <div className="md:col-span-2">
+                                                <FormInput
+                                                    label="Key"
+                                                    value={calKeyDraftByKey[key] ?? key}
+                                                    onChange={(e) => setCalKeyDraftByKey((prev) => ({ ...prev, [key]: e.target.value }))}
+                                                    onBlur={() => commitCalendarKeyDraft(key)}
+                                                    onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); commitCalendarKeyDraft(key); } }}
+                                                    placeholder="work"
+                                                    tooltip="A short name for this calendar (e.g. 'work', 'personal'). Used to reference this calendar in contexts."
+                                                />
+                                            </div>
+                                            <div className="md:col-span-4">
+                                                <FormInput
+                                                    label="Credentials Path"
+                                                    value={(val as any)?.credentials_path || ''}
+                                                    onChange={(e) => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        cals[key] = { ...(cals[key] || {}), credentials_path: e.target.value };
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                    placeholder="/app/secrets/service-account.json"
+                                                    tooltip="Path to the Google service account JSON key file."
+                                                />
+                                            </div>
+                                            <div className="md:col-span-3">
+                                                <FormInput
+                                                    label="Calendar ID"
+                                                    value={(val as any)?.calendar_id || ''}
+                                                    onChange={(e) => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        cals[key] = { ...(cals[key] || {}), calendar_id: e.target.value };
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                    placeholder="primary"
+                                                    tooltip="Google Calendar ID (e.g. 'primary' or a calendar email address)."
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <FormInput
+                                                    label="Timezone"
+                                                    value={(val as any)?.timezone || ''}
+                                                    onChange={(e) => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        cals[key] = { ...(cals[key] || {}), timezone: e.target.value };
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                    placeholder="America/New_York"
+                                                    tooltip="IANA timezone for this calendar (e.g. America/New_York)."
+                                                />
+                                            </div>
+                                            <div className="md:col-span-1 flex justify-end">
+                                                <button
+                                                    type="button"
+                                                    className="px-2 py-1 text-xs border rounded hover:bg-accent text-destructive hover:text-destructive"
+                                                    onClick={() => {
+                                                        const cals = { ...(config.google_calendar?.calendars || {}) };
+                                                        delete cals[key];
+                                                        // Clear the removed row's draft entry. The add flow reuses freed
+                                                        // keys (e.g. calendar_1), and a leftover draft here would cause
+                                                        // the next row created with the same key to render stale text
+                                                        // instead of its real key.
+                                                        setCalKeyDraftByKey((prev) => {
+                                                            const next = { ...prev };
+                                                            delete next[key];
+                                                            return next;
+                                                        });
+                                                        migrateCalendarKeyInContexts(key, null);
+                                                        onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                                    }}
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {Object.keys(config.google_calendar?.calendars || {}).length === 0 && (
+                                        <div className="text-xs text-muted-foreground italic border border-dashed border-border rounded p-3 text-center">
+                                            No calendars configured. GOOGLE_CALENDAR_* environment variables will be used as fallback.
+                                            <br />Add a calendar below to get started.
+                                        </div>
+                                    )}
+                                    <button
+                                        type="button"
+                                        className="px-3 py-1.5 text-xs rounded border hover:bg-accent"
+                                        onClick={() => {
+                                            const cals = { ...(config.google_calendar?.calendars || {}) };
+                                            let base = 'calendar'; let i = 1; let k = `${base}_${i}`;
+                                            while (Object.prototype.hasOwnProperty.call(cals, k)) { i += 1; k = `${base}_${i}`; }
+                                            cals[k] = { credentials_path: '', calendar_id: '', timezone: '' };
+                                            onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
+                                        }}
+                                    >
+                                        + Add Calendar
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     )}

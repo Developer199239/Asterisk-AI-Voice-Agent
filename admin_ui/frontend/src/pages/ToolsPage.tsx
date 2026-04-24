@@ -368,6 +368,7 @@ const ToolsPage = () => {
                                 contexts={config.contexts || {}}
                                 hangupUsage={hangupUsage}
                                 onChange={updateToolsConfig}
+                                onContextsChange={(newContexts) => setConfig((prev: any) => ({ ...prev, contexts: newContexts }))}
                                 onSaveNow={updateToolsConfigAndSaveNow}
                             />
                         </ConfigCard>
