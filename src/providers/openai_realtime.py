@@ -1530,8 +1530,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Log top-level error events with full payload to diagnose API contract issues
         if event_type == "error":
-            error_code = event.get("error", {}).get("code")
-            
+            error_info = event.get("error", {}) or {}
+            error_code = error_info.get("code")
+            error_message = error_info.get("message", "")
+
             # Handle expected errors gracefully
             if error_code == "response_cancel_not_active":
                 # Not an error - response already completed before cancellation
@@ -1541,7 +1543,28 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     response_id=self._current_response_id
                 )
                 return
-            
+
+            # Known-benign race in the OpenAI Realtime GA API: after we submit
+            # conversation.item.create(function_call_output), the server occasionally
+            # reports "Tool call ID ... not found in conversation" because the
+            # function_call item from the just-completed response hasn't finished
+            # committing to the conversation state server-side. This does NOT affect
+            # user experience — our follow-up response.create (with explicit
+            # instructions to speak the tool's confirmation message) still generates
+            # audio, the caller hears the confirmation, and the LLM does not retry
+            # (which is what previously caused duplicate side-effectful tool calls,
+            # fixed by waiting for response.done before submitting the output).
+            # Downgrade to warning so it's visible for diagnostics without spamming
+            # ERROR-level logs for a benign condition.
+            if error_code == "invalid_tool_call_id":
+                logger.warning(
+                    "OpenAI rejected tool_call_id linkage (benign — audio response still succeeds)",
+                    call_id=self._call_id,
+                    error_code=error_code,
+                    error_message=error_message,
+                )
+                return
+
             # Log other errors
             logger.error("OpenAI Realtime error event", call_id=self._call_id, error_event=event)
             return
