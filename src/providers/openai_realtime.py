@@ -593,10 +593,45 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             logger.error("Failed to send response.cancel", call_id=self._call_id, exc_info=True)
 
+    async def _await_parent_response_done(
+        self,
+        event_data: Dict[str, Any],
+        function_name: Optional[str] = None,
+        timeout: float = 5.0,
+    ) -> None:
+        """
+        Wait for the parent response.done before submitting function_call_output.
+
+        OpenAI Realtime's API only commits function_call items to the conversation
+        on response finalization; submitting either a success or an error
+        function_call_output prematurely produces an invalid_tool_call_id rejection
+        and, for non-idempotent tools, the LLM may retry with a fresh call_id and
+        duplicate side effects. Both the success and error paths in
+        _handle_function_call must go through this gate.
+        """
+        parent_resp_id = event_data.get("response_id")
+        if not parent_resp_id:
+            return
+        done_evt = self._response_done_events.get(parent_resp_id)
+        if done_evt is None:
+            return
+        try:
+            await asyncio.wait_for(done_evt.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "response.done did not arrive within timeout; submitting function_call_output anyway",
+                call_id=self._call_id,
+                response_id=parent_resp_id,
+                tool=function_name,
+                timeout_s=timeout,
+            )
+        finally:
+            self._response_done_events.pop(parent_resp_id, None)
+
     async def _handle_function_call(self, event_data: Dict[str, Any]):
         """
         Handle function call request from OpenAI Realtime API.
-        
+
         Routes the function call to the appropriate tool via the tool adapter.
         """
         try:
@@ -634,27 +669,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         farewell=result.get("message")
                     )
 
-            # CRITICAL: Wait for response.done on the parent response before submitting
-            # function_call_output. OpenAI only commits function_call items to the
-            # conversation on response finalization, and submitting output prematurely
-            # yields an "invalid_tool_call_id" error — which causes the LLM to retry
-            # with a fresh call_id, duplicating side-effectful tool calls (e.g. multiple
-            # calendar events for one caller request).
-            parent_resp_id = event_data.get("response_id")
-            if parent_resp_id:
-                done_evt = self._response_done_events.get(parent_resp_id)
-                if done_evt is not None:
-                    try:
-                        await asyncio.wait_for(done_evt.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "response.done did not arrive within 5s; submitting function_call_output anyway",
-                            call_id=self._call_id,
-                            response_id=parent_resp_id,
-                            tool=function_name,
-                        )
-                    finally:
-                        self._response_done_events.pop(parent_resp_id, None)
+            # Wait for response.done before submitting function_call_output (see
+            # _await_parent_response_done for the full rationale).
+            await self._await_parent_response_done(event_data, function_name=function_name)
 
             # Send result back to OpenAI
             await self.tool_adapter.send_tool_result(result, context)
@@ -741,7 +758,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             try:
                 item = event_data.get("item", {})
                 call_id_field = item.get("call_id")
+                function_name_for_error = item.get("name")
                 if call_id_field:
+                    # Apply the same response.done gate on the error path. Without
+                    # this, an exception during tool execution would submit the
+                    # error function_call_output before the parent response has
+                    # been committed, re-introducing the invalid_tool_call_id race
+                    # and possibly the LLM-retry / duplicate-tool-call cascade.
+                    await self._await_parent_response_done(
+                        event_data, function_name=function_name_for_error
+                    )
                     error_response = {
                         "type": "conversation.item.create",
                         "item": {

@@ -2092,6 +2092,15 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                                                     onClick={() => {
                                                         const cals = { ...(config.google_calendar?.calendars || {}) };
                                                         delete cals[key];
+                                                        // Clear the removed row's draft entry. The add flow reuses freed
+                                                        // keys (e.g. calendar_1), and a leftover draft here would cause
+                                                        // the next row created with the same key to render stale text
+                                                        // instead of its real key.
+                                                        setCalKeyDraftByKey((prev) => {
+                                                            const next = { ...prev };
+                                                            delete next[key];
+                                                            return next;
+                                                        });
                                                         migrateCalendarKeyInContexts(key, null);
                                                         onChange({ ...config, google_calendar: { ...(config.google_calendar || {}), calendars: cals } });
                                                     }}
