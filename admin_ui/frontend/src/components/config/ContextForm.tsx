@@ -186,10 +186,11 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         ? rawSelectedCalKeys.map((k: any) => String(k))
         : [];
 
+    // Single-select: a context uses exactly one calendar. Clicking the current
+    // selection clears it; clicking another replaces the selection.
     const toggleSelectedCalendar = (key: string) => {
-        const cur = new Set(selectedCalKeys);
-        if (cur.has(key)) cur.delete(key); else cur.add(key);
-        const nextSel = Array.from(cur);
+        const isCurrentlySelected = selectedCalKeys.length === 1 && selectedCalKeys[0] === key;
+        const nextSel = isCurrentlySelected ? [] : [key];
         const next = {
             ...config,
             tool_overrides: {
@@ -493,24 +494,42 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
             {googleCalEnabledInContext && (
                 <div className="space-y-2 p-4 rounded-lg border border-border bg-card/30">
                     <div className="flex items-center justify-between">
-                        <FormLabel>Google Calendar (Per-Context)</FormLabel>
+                        <FormLabel tooltip="Each context uses exactly one calendar. Click a calendar to select it; click it again to clear.">
+                            Google Calendar (Per-Context)
+                        </FormLabel>
                     </div>
                     {googleCalKeys.length === 0 ? (
                         <div className="text-xs text-muted-foreground">No calendars defined in Tools. Add calendars under Tools → Google Calendar first.</div>
                     ) : (
-                        <div className="flex flex-wrap gap-2">
-                            {googleCalKeys.map((k) => (
-                                <label key={k} className="inline-flex items-center gap-2 px-2 py-1 border rounded text-sm cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        className="accent-primary"
-                                        checked={selectedCalKeys.includes(k)}
-                                        onChange={() => toggleSelectedCalendar(k)}
-                                    />
-                                    <span>{k}</span>
-                                </label>
-                            ))}
-                        </div>
+                        <>
+                            <div className="text-xs text-muted-foreground mb-1">
+                                Pick one calendar for this context. Others are disabled until you clear the selection.
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {googleCalKeys.map((k) => {
+                                    const isSelected = selectedCalKeys.includes(k);
+                                    const hasSelection = selectedCalKeys.length > 0;
+                                    const isDisabled = hasSelection && !isSelected;
+                                    return (
+                                        <label
+                                            key={k}
+                                            className={`inline-flex items-center gap-2 px-2 py-1 border rounded text-sm ${
+                                                isDisabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
+                                            }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                className="accent-primary"
+                                                checked={isSelected}
+                                                disabled={isDisabled}
+                                                onChange={() => toggleSelectedCalendar(k)}
+                                            />
+                                            <span>{k}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </>
                     )}
                 </div>
             )}
