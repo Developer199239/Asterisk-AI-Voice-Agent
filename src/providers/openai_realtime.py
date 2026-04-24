@@ -877,7 +877,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     _evt.set()
                 self._response_done_events.clear()
             except Exception:
-                pass
+                logger.debug("Failed to release response.done sentinels on stop_session", exc_info=True)
             self.websocket = None
             self._call_id = None
             self._closing = False
