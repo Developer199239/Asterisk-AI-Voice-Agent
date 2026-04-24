@@ -132,28 +132,86 @@ tools:
         timezone: America/Denver
 ```
 
-Per-context selection (which calendars apply in that context):
+### Per-context calendar selection
+
+Each context binds to **exactly one calendar**. This keeps the routing
+unambiguous: when the caller says "book me for 2pm," the agent always
+knows which calendar the event belongs to.
+
+In the Admin UI (Contexts → Edit Context → Google Calendar), pick one
+calendar. The others become disabled until you clear the selection.
+
+Equivalent YAML:
 
 ```yaml
 contexts:
   sales:
     tools:
       - google_calendar
-    tools.google_calendar:
-      selected_calendars: [work, personal]
+    tool_overrides:
+      google_calendar:
+        selected_calendars: [work]   # single entry — the UI enforces this
 ```
 
-- If `calendars` is omitted but env vars are set, the tool will auto-materialize `calendars.default` from `GOOGLE_CALENDAR_*` and use it.
+**Missing vs. empty `selected_calendars`:**
+
+| `selected_calendars` value | Behavior |
+|----------------------------|----------|
+| Omitted (not present) | Context uses **all** configured calendars (legacy / single-calendar default). |
+| `[calendar_key]` | Context uses that one calendar. **Recommended.** |
+| `[]` (empty list) | No calendars available to this context — all calendar actions return an authorization error (fail-closed). |
+
+- If `calendars` is omitted at the tool root but env vars are set, the tool will auto-materialize `calendars.default` from `GOOGLE_CALENDAR_*` and use it.
+
+### Power-user: cross-calendar availability via YAML
+
+The UI constrains each context to one calendar because that matches how
+99% of deployments use the tool. However, the backend still supports
+multiple `selected_calendars` entries for one specific use case:
+**aggregating availability across multiple calendars in `get_free_slots`**
+(e.g. "find a time when both my work and personal calendars are free").
+
+This has to be set up in YAML — the UI will not produce a multi-calendar
+selection, and editing a context in the UI after setting this will reset
+it to single-select.
+
+```yaml
+contexts:
+  unified_assistant:
+    tools:
+      - google_calendar
+    tool_overrides:
+      google_calendar:
+        selected_calendars: [work, personal]   # YAML-only — not representable in UI
+```
+
+When multiple calendars are selected:
+
+- `get_free_slots` aggregates across all of them. `aggregate_mode: all` (default) returns times free on every calendar; `aggregate_mode: any` returns times free on any calendar.
+- `list_events` merges events from all selected calendars.
+- `create_event`, `delete_event`, `get_event` fall back to the first calendar in the list when the LLM doesn't pass `calendar_key` — this is why the UI forces single-select, to avoid the LLM silently picking a default.
+
+If you use multi-calendar YAML, the LLM needs `calendar_key` to be
+explicit for create/delete actions, so you must prompt it with the
+available calendar keys in your context instructions (e.g. "Available
+calendars: `work`, `personal`. Use `calendar_key` to specify which one
+for any booking.").
 
 ## Actions
 
+In the normal (UI-configured) case, each context has exactly one
+selected calendar, so the LLM does not need to pass `calendar_key` —
+the tool uses the context's single calendar automatically. The
+`calendar_key` and `aggregate_mode` parameters below only matter for
+the multi-calendar YAML setup described above.
+
 | Action | Purpose |
 |--------|--------|
-| `list_events` | List events in a time range (`time_min`, `time_max`). Optional: `calendar_key` to target a single calendar; otherwise aggregates over selected calendars. |
-| `get_event` | Get one event by `event_id`. Requires `calendar_key` (or defaults to first selected). |
-| `create_event` | Create event with `summary`, `start_datetime`, `end_datetime` (optional `description`). Requires `calendar_key` (or defaults to first selected). |
-| `delete_event` | Delete an event by `event_id`. Requires `calendar_key` (or defaults to first selected). |
-| `get_free_slots` | Return start times where a slot of given `duration` (minutes) fits. Uses `free_prefix` / `busy_prefix` to compute available intervals. Optional: `calendar_key`; otherwise aggregates across selected calendars with `aggregate_mode` (`all` intersection default, `any` union). Slot starts are aligned to multiples of `duration`. |
+| `list_events` | List events in a time range (`time_min`, `time_max`). With one calendar selected, returns events from that calendar. With multiple (YAML only), aggregates across all selected calendars; pass `calendar_key` to target a specific one. |
+| `get_event` | Get one event by `event_id`. Uses the context's single calendar, or pass `calendar_key` for multi-calendar YAML setups. |
+| `create_event` | Create event with `summary`, `start_datetime`, `end_datetime` (optional `description`). Uses the context's single calendar; in multi-calendar YAML setups, pass `calendar_key` to target a specific one (otherwise falls back to the first selected calendar). |
+| `delete_event` | Delete an event by `event_id`. Uses the context's single calendar, or pass `calendar_key` for multi-calendar YAML setups. |
+| `get_free_slots` | Return start times where a slot of given `duration` (minutes) fits. Uses `free_prefix` / `busy_prefix` to compute available intervals. With multiple calendars selected (YAML only), aggregates via `aggregate_mode`: `all` (default) = intersection (time is free on every calendar), `any` = union. Pass `calendar_key` to constrain to one calendar. Slot starts are aligned to multiples of `duration`. |
 
 All times use ISO 8601. The tool is registered as `google_calendar` and is in the **business** tool category.
 
