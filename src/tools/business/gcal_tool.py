@@ -293,12 +293,19 @@ class GCalendarTool(Tool):
         # If legacy single-calendar (env-var-only; no explicit `calendars` map in
         # config), keep the backward-compat code path that reads root-level
         # credentials_path / calendar_id / timezone via self._get_cal(config).
+        #
         # CRITICAL: must NOT match when the user has an explicit nested
         # tools.google_calendar.calendars.default entry — that's a real
         # single-calendar multi-account config and its credentials live in the
         # nested entry, not at the root.
+        #
+        # Match the truthiness semantics of `_resolve_calendars`: it treats any
+        # non-dict OR empty-dict `calendars` value as legacy (and falls through
+        # to the root-level env-var path to materialize `calendars.default`), so
+        # `calendars: {}` in YAML must also count as legacy here for consistency.
+        _raw_calendars = config.get("calendars")
         legacy_single = (
-            not isinstance(config.get("calendars"), dict)
+            (not isinstance(_raw_calendars, dict) or not _raw_calendars)
             and len(calendars) == 1
             and "default" in calendars
         )
