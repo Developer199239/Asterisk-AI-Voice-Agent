@@ -290,8 +290,18 @@ class GCalendarTool(Tool):
         calendars = self._resolve_calendars(config)
         selected_keys = self._selected_calendar_keys(config)
 
-        # If legacy single-calendar, keep existing behavior for backward-compat
-        legacy_single = len(calendars) == 1 and "default" in calendars
+        # If legacy single-calendar (env-var-only; no explicit `calendars` map in
+        # config), keep the backward-compat code path that reads root-level
+        # credentials_path / calendar_id / timezone via self._get_cal(config).
+        # CRITICAL: must NOT match when the user has an explicit nested
+        # tools.google_calendar.calendars.default entry — that's a real
+        # single-calendar multi-account config and its credentials live in the
+        # nested entry, not at the root.
+        legacy_single = (
+            not isinstance(config.get("calendars"), dict)
+            and len(calendars) == 1
+            and "default" in calendars
+        )
 
         # Helper: get timezone name for a specific calendar
         def _tz_for_key(k: str) -> str:
@@ -478,6 +488,25 @@ class GCalendarTool(Tool):
                     logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
                     return out
 
+                # Intersection ("all" mode) requires every selected calendar to be
+                # reachable. If any were skipped, silently intersecting across the
+                # reachable subset would widen the result ("free on every reachable
+                # calendar" ≠ "free on every selected calendar"), potentially
+                # surfacing slots that are actually busy on the unavailable one.
+                # Fail closed in that case. "any" mode (union) can still proceed
+                # since a union over a subset is still a valid subset of the full
+                # union — the LLM just gets fewer candidates.
+                if failed_keys and aggregate_mode != "any" and len(keys_to_use) > 1:
+                    out = {
+                        "status": "error",
+                        "message": (
+                            f"Cannot compute shared availability (aggregate_mode='all') while "
+                            f"these calendars are unavailable: {', '.join(failed_keys)}."
+                        ),
+                    }
+                    logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                    return out
+
                 if len(per_cal_intervals) == 1 or aggregate_mode == "any":
                     available_intervals = _union(per_cal_intervals)
                 else:
@@ -574,11 +603,42 @@ class GCalendarTool(Tool):
                     err = _validate_calendar_key(calendar_key, "list_events")
                     if err:
                         return err
+                    # Refuse to silently return empty when the targeted calendar
+                    # is unavailable — the caller asked for a specific calendar.
+                    ci_one = _cal_for_key(calendar_key)
+                    if not getattr(ci_one, "service", None):
+                        out = {
+                            "status": "error",
+                            "message": f"Calendar '{calendar_key}' is configured but currently unavailable.",
+                        }
+                        logger.warning("list_events: targeted calendar unavailable", call_id=call_id, calendar_key=calendar_key)
+                        logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                        return out
                     pools = {calendar_key: await asyncio.to_thread(_list_for_key, calendar_key)}
                 else:
+                    # Aggregate across selected calendars. If any are unavailable,
+                    # return an error — silently merging the reachable subset
+                    # would hide missing data and make the merged list look
+                    # complete when it isn't.
                     pools = {}
+                    list_failed_keys: list[str] = []
                     for k in selected_keys:
+                        ci_k = _cal_for_key(k)
+                        if not getattr(ci_k, "service", None):
+                            list_failed_keys.append(k)
+                            continue
                         pools[k] = await asyncio.to_thread(_list_for_key, k)
+                    if list_failed_keys:
+                        out = {
+                            "status": "error",
+                            "message": (
+                                f"Cannot list events because these selected calendars are "
+                                f"currently unavailable: {', '.join(list_failed_keys)}."
+                            ),
+                        }
+                        logger.warning("list_events: selected calendars unavailable", call_id=call_id, failed_keys=list_failed_keys)
+                        logger.info("Tool response to AI", call_id=call_id, action=action, status=out.get("status"))
+                        return out
 
                 simplified = []
                 for k, evs in pools.items():

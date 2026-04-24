@@ -185,11 +185,17 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
     const selectedCalKeys: string[] = Array.isArray(rawSelectedCalKeys)
         ? rawSelectedCalKeys.map((k: any) => String(k))
         : [];
+    // Filter against available keys so a stale/removed selection (e.g. a calendar
+    // deleted in Tools after the context was saved) doesn't lock the UI into a
+    // state where hasSelection is true but no checkbox is actually selected,
+    // disabling every option.
+    const selectedCalKeysInOptions: string[] = selectedCalKeys.filter((k) => googleCalKeys.includes(k));
 
     // Single-select: a context uses exactly one calendar. Clicking the current
     // selection clears it; clicking another replaces the selection.
     const toggleSelectedCalendar = (key: string) => {
-        const isCurrentlySelected = selectedCalKeys.length === 1 && selectedCalKeys[0] === key;
+        const isCurrentlySelected =
+            selectedCalKeysInOptions.length === 1 && selectedCalKeysInOptions[0] === key;
         const nextSel = isCurrentlySelected ? [] : [key];
         const next = {
             ...config,
@@ -507,8 +513,8 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                             </div>
                             <div className="flex flex-wrap gap-2">
                                 {googleCalKeys.map((k) => {
-                                    const isSelected = selectedCalKeys.includes(k);
-                                    const hasSelection = selectedCalKeys.length > 0;
+                                    const isSelected = selectedCalKeysInOptions.includes(k);
+                                    const hasSelection = selectedCalKeysInOptions.length > 0;
                                     const isDisabled = hasSelection && !isSelected;
                                     return (
                                         <label

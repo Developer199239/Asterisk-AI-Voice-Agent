@@ -251,7 +251,7 @@ Use this when the context is bound to one calendar via the Admin UI.
 No `calendar_key` is needed because the backend already knows which
 calendar to use.
 
-```
+```text
 You are the scheduling assistant for Acme Dental. You book, reschedule,
 and cancel appointments using the google_calendar tool.
 
@@ -299,7 +299,7 @@ YAML (see "Power-user: cross-calendar availability" above), the LLM
 needs to know the calendar keys by name and which to pick. Add a
 section like this to your system prompt:
 
-```
+```text
 This context has access to two calendars:
 - work — used for customer meetings, demos, and anything work-related.
 - personal — used for personal appointments (dentist, gym, family).
