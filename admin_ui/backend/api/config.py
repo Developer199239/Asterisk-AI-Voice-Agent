@@ -3075,3 +3075,520 @@ async def delete_google_calendar_credentials(filename: str):
             },
         ) from e
     return {"status": "success", "filename": filename}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Microsoft Calendar — Device-Code OAuth + Verify
+# ─────────────────────────────────────────────────────────────────────────────
+
+MICROSOFT_CALENDAR_SECRETS_DIR = "/app/project/secrets"
+# V1 is single-account by design: only `accounts.default` is supported.
+# The token-cache file path is therefore a literal constant — never derived
+# from user input. When multi-account ships (V2), this constraint can be
+# lifted and the path will be derived from a per-account allowlist. Keeping
+# the path as a literal is what lets CodeQL's `py/path-injection` query
+# treat the value as untainted; it's also what the deployed product
+# contract has been all along (UI hardcodes `account_key="default"`,
+# docs document one-account V1).
+MICROSOFT_CALENDAR_TOKEN_CACHE_PATH = (
+    f"{MICROSOFT_CALENDAR_SECRETS_DIR}/microsoft-calendar-default-token-cache.json"
+)
+_MS_TENANT_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_MS_CLIENT_ID_PATTERN = re.compile(r"^[0-9a-fA-F-]{32,64}$")
+_MS_DEVICE_FLOWS: dict[str, dict] = {}
+
+
+def _ms_flow_lock():
+    import threading
+    if not hasattr(_ms_flow_lock, "_lock"):
+        _ms_flow_lock._lock = threading.Lock()  # type: ignore[attr-defined]
+    return _ms_flow_lock._lock  # type: ignore[attr-defined]
+
+
+def _validate_ms_account_key_or_400(key: str) -> str:
+    """V1 supports exactly one Microsoft Calendar account: `default`.
+
+    Rejecting all other keys with a literal-string equality check (rather
+    than a regex pattern) is the simplest contract that matches what the
+    UI already enforces and what the docs document, and it lets CodeQL's
+    `py/path-injection` query treat any downstream path that depends on
+    the validated key as untainted (a literal-string equality check is a
+    recognized sanitizer; `re.fullmatch` against a character class is
+    not). When multi-account ships in V2, this validator can grow to
+    accept a finite allowlist of keys; the path resolver should then
+    derive from a per-key allowlist rather than a free-form string.
+    """
+    candidate = (key if isinstance(key, str) else "").strip()
+    if candidate != "default":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "unsupported_account_key",
+                "message": (
+                    "Microsoft Calendar V1 supports only account_key='default'. "
+                    "Multi-account support is planned for a future release."
+                ),
+            },
+        )
+    return "default"
+
+
+def _validate_ms_tenant_client_or_400(tenant_id: str, client_id: str) -> tuple[str, str]:
+    tenant = (tenant_id or "").strip()
+    client = (client_id or "").strip()
+    if not tenant or not _MS_TENANT_PATTERN.fullmatch(tenant):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "invalid_tenant_id",
+                "message": "tenant_id must be an explicit Entra tenant id or tenant domain. Do not use 'common' in V1.",
+            },
+        )
+    if tenant.lower() == "common":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "common_tenant_not_supported",
+                "message": "Microsoft Calendar V1 requires an explicit tenant_id, not /common.",
+            },
+        )
+    if not client or not _MS_CLIENT_ID_PATTERN.fullmatch(client):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "invalid_client_id",
+                "message": "client_id must be the Application (client) ID from Azure App registrations.",
+            },
+        )
+    return tenant, client
+
+
+def _ms_token_cache_path_for_key(account_key: str) -> str:
+    # V1 single-account: validate the key (only "default" is accepted) and
+    # return the literal constant path. No user-controlled bytes flow into
+    # the result.
+    _validate_ms_account_key_or_400(account_key)
+    return MICROSOFT_CALENDAR_TOKEN_CACHE_PATH
+
+
+class _MicrosoftDeviceStartRequest(BaseModel):
+    tenant_id: str
+    client_id: str
+    account_key: str = "default"
+
+
+class _MicrosoftVerifyRequest(BaseModel):
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    token_cache_path: Optional[str] = None
+    user_principal_name: Optional[str] = None
+    calendar_id: Optional[str] = None
+    timezone: Optional[str] = None
+    account_key: str = "default"
+
+
+class _MicrosoftDisconnectRequest(BaseModel):
+    token_cache_path: Optional[str] = None
+    account_key: str = "default"
+
+
+def _ms_graph_request_with_token(token: str, method: str, path: str, body: Optional[dict] = None) -> dict:
+    import json
+    import urllib.error
+    import urllib.request
+
+    # Accept either a relative path (e.g. "/me") or an absolute Graph URL
+    # (e.g. an "@odata.nextLink" returned from a paginated response). Same
+    # shape as `MicrosoftGraphClient._request` in the runtime client.
+    if path.startswith("https://"):
+        url = path
+    else:
+        url = f"https://graph.microsoft.com/v1.0{path}"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Prefer": 'outlook.timezone="UTC"',
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            payload = {"raw": raw}
+        raise HTTPException(
+            status_code=e.code,
+            detail={
+                "error_code": "microsoft_graph_error",
+                "message": ((payload.get("error") or {}).get("message") or f"Microsoft Graph HTTP {e.code}"),
+                "graph": payload,
+            },
+        )
+
+
+def _persist_ms_token_cache(cache, account_key: str) -> None:
+    # Derive the cache path from the validated account_key (regex-allowlisted
+    # in `_ms_token_cache_path_for_key`). The user-supplied token_cache_path
+    # never reaches `os.path.*` operations — see Codex review feedback on PR
+    # #357 for context (CodeQL py/path-injection couldn't track the previous
+    # sanitizer through a function return).
+    safe_path = _ms_token_cache_path_for_key(account_key)
+    import portalocker  # type: ignore
+
+    os.makedirs(os.path.dirname(safe_path), exist_ok=True)
+    lock_path = f"{safe_path}.lock"
+    with portalocker.Lock(lock_path, timeout=10):
+        tmp_path = f"{safe_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write(cache.serialize())
+        # Owner-only (0o600). admin_ui and ai_engine both run as uid 1000 in
+        # the production containers, so they share owner-rw access; no group
+        # bit is required for cross-container token-cache coordination.
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, safe_path)
+        try:
+            os.chmod(safe_path, 0o600)
+        except OSError:
+            pass
+
+
+def _ms_device_flow_worker(flow_id: str, tenant_id: str, client_id: str, account_key: str) -> None:
+    import msal  # type: ignore
+
+    cache = msal.SerializableTokenCache()
+    app = msal.PublicClientApplication(
+        client_id,
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        token_cache=cache,
+    )
+    with _ms_flow_lock():
+        flow = dict(_MS_DEVICE_FLOWS.get(flow_id, {}).get("flow") or {})
+    try:
+        result = app.acquire_token_by_device_flow(flow)
+        if not result or "access_token" not in result:
+            error = (result or {}).get("error") if isinstance(result, dict) else None
+            description = (result or {}).get("error_description") if isinstance(result, dict) else None
+            with _ms_flow_lock():
+                _MS_DEVICE_FLOWS[flow_id]["status"] = "error"
+                _MS_DEVICE_FLOWS[flow_id]["error"] = {
+                    "error_code": "authorization_failed",
+                    "message": description or error or "Microsoft device-code authorization failed.",
+                }
+            return
+        _persist_ms_token_cache(cache, account_key)
+        access_token = result["access_token"]
+        me = _ms_graph_request_with_token(access_token, "GET", "/me")
+        # Paginate /me/calendars. Without this, accounts with many calendars
+        # would see a truncated picker on Connect (caught by CodeRabbit on
+        # PR #357). Mirrors `MicrosoftGraphClient.list_calendars()`'s shape.
+        calendars: list = []
+        next_url: Optional[str] = "/me/calendars"
+        while next_url:
+            page = _ms_graph_request_with_token(access_token, "GET", next_url)
+            calendars.extend(page.get("value") or [])
+            next_url = page.get("@odata.nextLink")
+        username = (
+            (result.get("id_token_claims") or {}).get("preferred_username")
+            or me.get("userPrincipalName")
+            or me.get("mail")
+            or ""
+        )
+        with _ms_flow_lock():
+            _MS_DEVICE_FLOWS[flow_id]["status"] = "success"
+            _MS_DEVICE_FLOWS[flow_id]["result"] = {
+                "token_cache_path": token_cache_path,
+                "user_principal_name": username,
+                "display_name": me.get("displayName") or "",
+                "mail": me.get("mail") or "",
+                "calendars": [
+                    {
+                        "id": cal.get("id"),
+                        "name": cal.get("name"),
+                        "is_default_calendar": cal.get("isDefaultCalendar"),
+                    }
+                    for cal in calendars
+                ],
+            }
+    except Exception as exc:
+        logger.error("Microsoft device-code flow failed", exc_info=True)
+        with _ms_flow_lock():
+            _MS_DEVICE_FLOWS[flow_id]["status"] = "error"
+            _MS_DEVICE_FLOWS[flow_id]["error"] = {
+                "error_code": "authorization_failed",
+                "message": str(exc),
+            }
+
+
+@router.post("/microsoft-calendar/device/start")
+async def start_microsoft_calendar_device_flow(req: _MicrosoftDeviceStartRequest):
+    import threading
+    import time
+    import uuid
+
+    try:
+        import msal  # type: ignore
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "msal_not_installed",
+                "message": "msal is required for Microsoft Calendar device-code OAuth.",
+            },
+        )
+
+    tenant_id, client_id = _validate_ms_tenant_client_or_400(req.tenant_id, req.client_id)
+    account_key = _validate_ms_account_key_or_400(req.account_key or "default")
+    token_cache_path = _ms_token_cache_path_for_key(account_key)
+
+    app = msal.PublicClientApplication(
+        client_id,
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+    )
+    # MSAL Python only treats `openid`, `profile`, and `offline_access` as
+    # reserved — it auto-adds those itself and raises ValueError if the
+    # caller passes them. `User.Read` is a regular Graph delegated
+    # permission and MUST be requested explicitly; otherwise the issued
+    # access token cannot call `/me` (Authorization_RequestDenied 403),
+    # which we use post-auth to confirm the signed-in identity.
+    flow = app.initiate_device_flow(scopes=["User.Read", "Calendars.ReadWrite"])
+    if not flow or "user_code" not in flow:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "device_flow_start_failed",
+                "message": flow.get("error_description") if isinstance(flow, dict) else "Could not start Microsoft device-code flow.",
+            },
+        )
+
+    flow_id = uuid.uuid4().hex
+    now = int(time.time())
+    with _ms_flow_lock():
+        _MS_DEVICE_FLOWS[flow_id] = {
+            "status": "pending",
+            "flow": flow,
+            "created_at": now,
+            "expires_at": now + int(flow.get("expires_in") or 900),
+            "tenant_id": tenant_id,
+            "client_id": client_id,
+            "account_key": account_key,
+            "token_cache_path": token_cache_path,
+        }
+    worker = threading.Thread(
+        target=_ms_device_flow_worker,
+        args=(flow_id, tenant_id, client_id, account_key),
+        daemon=True,
+    )
+    worker.start()
+    return {
+        "status": "pending",
+        "flow_id": flow_id,
+        "user_code": flow.get("user_code"),
+        "verification_uri": flow.get("verification_uri") or flow.get("verification_url"),
+        "message": flow.get("message"),
+        "expires_in": flow.get("expires_in"),
+        "interval": flow.get("interval", 5),
+    }
+
+
+@router.get("/microsoft-calendar/device/status/{flow_id}")
+async def get_microsoft_calendar_device_flow_status(flow_id: str):
+    import time
+
+    if not re.fullmatch(r"^[a-f0-9]{32}$", flow_id or ""):
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "invalid_flow_id", "message": "Invalid device flow id."},
+        )
+    with _ms_flow_lock():
+        item = dict(_MS_DEVICE_FLOWS.get(flow_id) or {})
+    if not item:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "flow_not_found", "message": "Microsoft device flow not found or expired."},
+        )
+    if item.get("status") == "pending" and item.get("expires_at") and int(time.time()) > int(item["expires_at"]):
+        with _ms_flow_lock():
+            if flow_id in _MS_DEVICE_FLOWS:
+                _MS_DEVICE_FLOWS[flow_id]["status"] = "expired"
+        item["status"] = "expired"
+    response = {
+        "status": item.get("status"),
+        "expires_at": item.get("expires_at"),
+        "account_key": item.get("account_key"),
+    }
+    if item.get("result"):
+        response["result"] = item["result"]
+    if item.get("error"):
+        response["error"] = item["error"]
+    return response
+
+
+def _read_microsoft_calendar_account(account_key: str) -> dict:
+    try:
+        merged = _read_merged_config_dict()
+    except Exception:
+        return {}
+    ms_cfg = (merged.get("tools") or {}).get("microsoft_calendar") or {}
+    accounts = ms_cfg.get("accounts") or {}
+    if isinstance(accounts, dict) and account_key in accounts and isinstance(accounts[account_key], dict):
+        return accounts[account_key]
+    return ms_cfg if isinstance(ms_cfg, dict) else {}
+
+
+@router.post("/microsoft-calendar/verify")
+async def verify_microsoft_calendar(req: _MicrosoftVerifyRequest):
+    project_root = getattr(settings, "PROJECT_ROOT", None)
+    if project_root and project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from src.tools.business.ms_graph_client import MicrosoftAccountConfig, MicrosoftGraphApiError, MicrosoftGraphClient
+
+    account_key = _validate_ms_account_key_or_400(req.account_key or "default")
+    persisted = _read_microsoft_calendar_account(account_key)
+    tenant_id = (req.tenant_id if req.tenant_id is not None else persisted.get("tenant_id", "") or "").strip()
+    client_id = (req.client_id if req.client_id is not None else persisted.get("client_id", "") or "").strip()
+    token_cache_path = (req.token_cache_path if req.token_cache_path is not None else persisted.get("token_cache_path", "") or "").strip()
+    user_principal_name = (
+        req.user_principal_name if req.user_principal_name is not None else persisted.get("user_principal_name", "") or ""
+    ).strip()
+    calendar_id = (req.calendar_id if req.calendar_id is not None else persisted.get("calendar_id", "") or "").strip()
+    timezone = (req.timezone if req.timezone is not None else persisted.get("timezone", "") or "UTC").strip() or "UTC"
+
+    _validate_ms_tenant_client_or_400(tenant_id, client_id)
+    # Derive the path from the validated account_key. Any user-supplied
+    # token_cache_path is accepted only as a basename consistency check —
+    # it never reaches `os.path.*` operations. (Codex review feedback on
+    # PR #357: CodeQL py/path-injection couldn't track the previous
+    # sanitizer through a function return; deriving from account_key
+    # eliminates the user-controlled path data entirely.)
+    safe_token_path = _ms_token_cache_path_for_key(account_key)
+    if token_cache_path:
+        posted_basename = os.path.basename(token_cache_path)
+        if posted_basename and posted_basename != os.path.basename(safe_token_path):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "token_cache_path_mismatch",
+                    "message": (
+                        "Supplied token_cache_path does not match the canonical path "
+                        "derived from account_key. Omit token_cache_path or align it "
+                        "to the canonical filename."
+                    ),
+                },
+            )
+    # `safe_token_path` is `MICROSOFT_CALENDAR_TOKEN_CACHE_PATH`, a literal
+    # constant — no user input can affect it (V1 is single-account; the
+    # validator above only accepts `account_key="default"`).
+    if not os.path.exists(safe_token_path):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error_code": "auth_expired",
+                "message": "Microsoft Calendar is not connected yet. Use Connect to authorize this account.",
+            },
+        )
+    missing = [
+        name for name, value in {
+            "user_principal_name": user_principal_name,
+            "calendar_id": calendar_id,
+        }.items() if not value
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "missing_fields",
+                "message": f"Missing required Microsoft Calendar fields: {', '.join(missing)}.",
+            },
+        )
+
+    account = MicrosoftAccountConfig(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        token_cache_path=safe_token_path,
+        user_principal_name=user_principal_name,
+        calendar_id=calendar_id,
+        timezone=timezone,
+    )
+    client = MicrosoftGraphClient(account)
+    try:
+        me = await asyncio.to_thread(client.me)
+        calendars = await asyncio.to_thread(client.list_calendars)
+    except MicrosoftGraphApiError as exc:
+        raise HTTPException(
+            status_code=exc.status or 400,
+            detail={
+                "error_code": exc.error_code,
+                "message": str(exc),
+            },
+        )
+    matched = next((cal for cal in calendars if cal.get("id") == calendar_id), None)
+    if not matched:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": "calendar_not_found",
+                "message": "The connected Microsoft account cannot see the configured calendar_id.",
+            },
+        )
+    return {
+        "status": "ok",
+        "user_principal_name": me.get("userPrincipalName") or user_principal_name,
+        "display_name": me.get("displayName") or "",
+        "calendar_id": calendar_id,
+        "calendar_name": matched.get("name") or "",
+        "configured_timezone": timezone,
+    }
+
+
+@router.post("/microsoft-calendar/disconnect")
+async def disconnect_microsoft_calendar(req: _MicrosoftDisconnectRequest):
+    account_key = _validate_ms_account_key_or_400(req.account_key or "default")
+    # Derive the path from the validated account_key (regex-allowlisted).
+    # Any user-supplied token_cache_path is accepted only as a basename
+    # consistency check — it never reaches `os.path.*` operations. (See
+    # Codex review feedback on PR #357.)
+    safe_path = _ms_token_cache_path_for_key(account_key)
+    posted = (req.token_cache_path or "").strip()
+    if posted:
+        posted_basename = os.path.basename(posted)
+        if posted_basename and posted_basename != os.path.basename(safe_path):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "token_cache_path_mismatch",
+                    "message": (
+                        "Supplied token_cache_path does not match the canonical path "
+                        "derived from account_key. Omit token_cache_path or align it "
+                        "to the canonical filename."
+                    ),
+                },
+            )
+    removed = False
+    # `safe_path` is `MICROSOFT_CALENDAR_TOKEN_CACHE_PATH`, a literal
+    # constant — no user input can affect it (V1 is single-account; the
+    # validator above only accepts `account_key="default"`). The `.lock`
+    # sibling shares the same trusted prefix.
+    for path in (safe_path, f"{safe_path}.lock"):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                removed = True
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_code": "disconnect_failed",
+                    "message": f"Failed to remove Microsoft token cache: {exc}",
+                },
+            ) from exc
+    return {"status": "success", "removed": removed, "token_cache_path": safe_path}
