@@ -191,41 +191,36 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 - **Per-context `tool_overrides` now actually take effect** on OpenAI Realtime, Deepgram, and Google Live (was silently ignored — only ElevenLabs honored it). Affected `selected_calendars`, custom transfer destinations, webhook URLs, etc.
 - **Google Live — 30-voice catalog** (#349): voice picker expanded from 8 hardcoded voices to all 30 native-audio voices with Google's official tone descriptors
 
-### ⚡ CPU Latency Optimization — Streaming LLM→TTS Overlap (v6.4.1)
-- **Sentence-by-sentence streaming**: LLM tokens are streamed and split at sentence boundaries — each sentence is synthesized and played immediately instead of waiting for the full response. Reduces perceived latency from 3-10s to sub-2s on pipeline configurations.
-- **Pipeline filler audio**: Instant acknowledgment phrase (e.g. "One moment please.") plays in the agent's own voice before LLM starts thinking. Configurable phrases via Admin UI.
-- **Qwen 2.5-1.5B Instruct recommended for CPU**: New 940MB model achieves ~15-30 tok/s on CPU (vs Phi-3's ~0.8 tok/s). Setup Wizard auto-recommends with "⚡ CPU Recommended" badge.
-- **Direct PCM→µ-law conversion**: Eliminates temp WAV file roundtrip in all 5 TTS backends (10-50ms saved per response).
-- **Preflight hardened**: Buildx detection, RAM/disk/network checks, GPU install gated behind `--apply-fixes`, all runtime ports validated.
+### Previously in v6.4.1
+- ⚡ Sentence-by-sentence LLM→TTS streaming reduces perceived latency from 3-10s to sub-2s on pipelines
+- Qwen 2.5-1.5B Instruct recommended for CPU (~15-30 tok/s vs Phi-3's ~0.8 tok/s)
+- Pipeline filler audio, direct PCM→µ-law conversion, preflight hardening
 
-### 📞 Attended Transfer Streaming & Screening (v6.4.0)
-- **Three screening modes**: `basic_tts` (caller ID announcement), `ai_briefing` (experimental AI conversation summary), `caller_recording` (records caller stating name/reason)
-- **Streaming delivery**: ExternalMedia RTP helper eliminates shared storage dependency for transfer announcements
-- **Provider-agnostic tool guidance**: Dynamically exposes configured transfer targets to LLM providers, preventing hallucinated extensions
-- **Live Agents UI**: Redesigned compact layout with auto-polling for agent availability
-
-### 🗣️ Russian Speech Backends (v6.4.0)
-- **Sherpa Offline STT**: VAD-gated offline transducer mode with Silero VAD, configurable thresholds, preroll padding, and debug diagnostics. Set `SHERPA_MODEL_TYPE=offline` to enable.
-- **T-one STT**: Native Russian telephony ASR using streaming CTC pipeline with beam search/greedy decoding. Requires `--build-arg INCLUDE_TONE=true`.
-- **Silero TTS**: Multi-language TTS (ru, en, de, es, fr, ua) with native 8kHz telephony output and multiple speakers. Requires `--build-arg INCLUDE_SILERO=true`.
-
-### 🎧 Admin UI (v6.4.0)
-- **Fullscreen panels**: Maximize/minimize toggle for System Topology, Call Statistics, and Call History with Escape key support
-- **Conversation timestamps**: Per-message timestamps in Call Log UI with LLM payload sanitization
-- **HTTP tool wildcards**: JSONPath `[*]` array extraction now works correctly in output variables
-
-### Previously in v6.3.2
-- Microsoft Azure Speech Service STT & TTS pipeline adapters
-- MiniMax LLM M2.7 via OpenAI-compatible API
-- Call Recording Playback in Admin UI
-- Azure SSRF prevention, PII logging discipline
-
-For full release notes, see [CHANGELOG.md](CHANGELOG.md).
+For older releases, expand **Previous Versions** below. Full release notes in [CHANGELOG.md](CHANGELOG.md).
 
 </details>
 
 <details>
 <summary><b>Previous Versions</b></summary>
+
+#### v6.4.1 - CPU Latency Optimization
+- ⚡ Streaming LLM→TTS overlap — sentence-boundary token streaming, sub-2s perceived latency on pipelines
+- Pipeline filler audio (instant "One moment please" acknowledgment) configurable via Admin UI
+- Qwen 2.5-1.5B Instruct recommended for CPU; ~15-30 tok/s vs Phi-3's ~0.8 tok/s
+- Direct PCM→µ-law conversion in all 5 TTS backends (10-50ms saved per response)
+- Preflight hardening — Buildx detection, RAM/disk/network checks, GPU install gated behind `--apply-fixes`
+
+#### v6.4.0 - Attended Transfer & Russian Speech
+- 📞 Attended transfer with three screening modes: `basic_tts`, `ai_briefing`, `caller_recording`
+- ExternalMedia RTP streaming delivery; provider-agnostic transfer-target tool guidance
+- 🗣️ Russian speech backends: Sherpa Offline STT (VAD-gated), T-one STT, Silero TTS (multi-language)
+- 🎧 Admin UI: fullscreen dashboard panels, per-message conversation timestamps, JSONPath `[*]` HTTP-tool wildcards
+
+#### v6.3.2 - Azure Speech & MiniMax LLM
+- Microsoft Azure Speech Service STT & TTS pipeline adapters (REST batch, WebSocket streaming, SSML)
+- MiniMax LLM M2.7 via OpenAI-compatible API with tool-calling
+- Call Recording Playback in Admin UI Call Details modal
+- Azure SSRF prevention, PII logging discipline, input validation hardening
 
 #### v6.3.1 - Local AI Server & Guardrails
 - Backend enable/rebuild flow, model lifecycle UX, GPU ergonomics, CPU-first onboarding
