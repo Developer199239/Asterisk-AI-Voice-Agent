@@ -324,8 +324,9 @@ though `User.Read` is granted in the app registration, the token
 won't include it unless the device-code initiator asks for it. AAVA
 now passes `["User.Read", "Calendars.ReadWrite"]` for this reason.
 Fix: redeploy past the post-`b4e71a66` rev, then **Disconnect** in
-the UI (deletes `data/secrets/ms_calendar_token.json`) and
-**Connect** again so the device-code flow re-prompts with both
+the UI (deletes the configured `token_cache_path`, default
+`/app/project/secrets/microsoft-calendar-default-token-cache.json`)
+and **Connect** again so the device-code flow re-prompts with both
 scopes.
 
 ### "AADSTS50194: Application is not configured as a multi-tenant application"

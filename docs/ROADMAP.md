@@ -61,7 +61,7 @@ Outbound dialer shipped as Alpha in v5.0.0 — core scheduling, AMD, voicemail d
 
 ### Good First Issues (Beginner-Friendly)
 
-Great for first-time contributors. **AVA helps you with all of these** — just open Windsurf and describe what you want to do. See the [Operator Contributor Guide](contributing/OPERATOR_CONTRIBUTOR_GUIDE.md) to get started.
+Great for first-time contributors. **AVA helps you with all of these** — just open Windsurf and describe what you want to do. Browse the live list of open beginner-friendly issues on GitHub: [`good first issue` issues](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
 
 #### No-Code Tasks (Just Writing/Sharing)
 
@@ -77,10 +77,10 @@ Great for first-time contributors. **AVA helps you with all of these** — just 
 
 | Task | Contribution Area | Why YOU Can Do This |
 |------|-------------------|---------------------|
-| Add a new STT/TTS/LLM pipeline adapter | [Modular Providers](contributing/adding-pipeline-adapter.md) | You know which providers work best — AVA writes the adapter |
-| Add a pre-call CRM lookup hook | [Pre-Call Hooks](contributing/pre-call-hooks-development.md) | You have a CRM — AVA integrates it |
-| Add a post-call webhook (Slack, Discord, n8n) | [Post-Call Hooks](contributing/post-call-hooks-development.md) | You use these tools daily — AVA connects them |
-| Add an in-call appointment checker | [In-Call Hooks](contributing/in-call-hooks-development.md) | You book appointments by phone — AVA builds it |
+| Add a new STT/TTS/LLM pipeline adapter | [open issues: pipeline adapter](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=is%3Aopen+is%3Aissue+pipeline+adapter) — see also `docs/contributing/pipeline-development.md` | You know which providers work best — AVA writes the adapter |
+| Add a pre-call CRM lookup hook | [open issues: pre-call hooks](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=is%3Aopen+is%3Aissue+pre-call) — see also `docs/contributing/tool-development.md` | You have a CRM — AVA integrates it |
+| Add a post-call webhook (Slack, Discord, n8n) | [open issues: post-call hooks](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=is%3Aopen+is%3Aissue+post-call) — see also `docs/TOOL_CALLING_GUIDE.md` (HTTP tools) | You use these tools daily — AVA connects them |
+| Add an in-call appointment checker | [open issues: in-call hooks](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues?q=is%3Aopen+is%3Aissue+in-call) — see also `docs/Google-calendar-tool.md` | You book appointments by phone — AVA builds it |
 | Test coverage for `src/tools/telephony/` | Python, pytest | You understand voicemail — AVA writes the tests |
 | Improve error messages in `agent doctor` | Go CLI | You've seen the confusing errors — AVA fixes them |
 | Admin UI accessibility audit (Lighthouse/axe) | React, CSS | Run the audit, AVA fixes what it finds |

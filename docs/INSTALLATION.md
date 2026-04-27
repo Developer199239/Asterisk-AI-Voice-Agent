@@ -168,7 +168,7 @@ If preflight reports warnings or failures, resolve them first, then re-run prefl
 - Re-run: `sudo ./preflight.sh --apply-fixes`
 - Verify: `agent check`
 
-### 3) Upgrade checklist (4.5.3 → 4.6.0)
+### 3) Legacy upgrade notes (4.x → 4.6)
 
 - `.env`:
   - Review ARI settings: `ASTERISK_ARI_PORT`, `ASTERISK_ARI_SCHEME`, `ASTERISK_ARI_SSL_VERIFY`
