@@ -2701,11 +2701,17 @@ async def validate_api_key(validation: ApiKeyValidation):
                 elif response.status_code in [400, 401]:
                     return {"valid": False, "error": "Invalid API key"}
                 elif response.status_code == 403:
-                    detail = ""
+                    detail = response.text if hasattr(response, "text") else ""
                     try:
-                        detail = response.json().get("error", {}).get("message", "")
-                    except Exception:
-                        detail = response.text if hasattr(response, "text") else ""
+                        payload = response.json()
+                    except ValueError:
+                        payload = None
+                    if isinstance(payload, dict):
+                        error_detail = payload.get("error", {})
+                        if isinstance(error_detail, dict):
+                            detail = error_detail.get("message", "") or detail
+                        elif isinstance(error_detail, str):
+                            detail = error_detail or detail
                     return {
                         "valid": False,
                         "error": detail or (

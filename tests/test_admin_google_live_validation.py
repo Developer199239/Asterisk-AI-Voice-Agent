@@ -1,3 +1,5 @@
+"""Tests for Admin UI Google Live API-key validation behavior."""
+
 import sys
 import types
 from importlib import util
@@ -7,43 +9,81 @@ import pytest
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "admin_ui" / "backend"
-sys.path.insert(0, str(BACKEND_ROOT))
 
-from services.google_live_validation import (  # noqa: E402
-    GOOGLE_LIVE_DEFAULT_MODEL,
-    build_google_key_validation_result,
-    extract_google_live_models,
-    select_google_live_model,
+_google_live_spec = util.spec_from_file_location(
+    "google_live_validation_for_tests",
+    BACKEND_ROOT / "services" / "google_live_validation.py",
 )
+google_live_validation = util.module_from_spec(_google_live_spec)
+assert _google_live_spec.loader is not None
+_google_live_spec.loader.exec_module(google_live_validation)
+
+GOOGLE_LIVE_DEFAULT_MODEL = google_live_validation.GOOGLE_LIVE_DEFAULT_MODEL
+build_google_key_validation_result = google_live_validation.build_google_key_validation_result
+extract_google_live_models = google_live_validation.extract_google_live_models
+select_google_live_model = google_live_validation.select_google_live_model
 
 
 class _FakeGoogleResponse:
+    """Small response double for Google model-discovery calls."""
+
     def __init__(self, status_code, payload=None, text=""):
+        """Store the fake HTTP status, JSON payload, and response text."""
         self.status_code = status_code
         self._payload = payload or {}
         self.text = text
 
     def json(self):
+        """Return the configured JSON payload."""
         return self._payload
 
 
 class _FakeAsyncClient:
+    """Async context-manager double for httpx.AsyncClient."""
+
     response = None
 
     def __init__(self, *args, **kwargs):
+        """Accept the same constructor shape as httpx.AsyncClient."""
         pass
 
     async def __aenter__(self):
+        """Return this fake client from the async context manager."""
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
+        """Do not suppress exceptions from the async context manager."""
         return False
 
     async def get(self, *args, **kwargs):
+        """Return the configured fake response."""
         return self.response
 
 
 def _install_wizard_import_stubs(monkeypatch):
+    """Install minimal import stubs needed to load wizard.py in isolation."""
+    settings = types.ModuleType("settings")
+    settings.ENV_PATH = "/tmp/.env"
+    settings.CONFIG_PATH = "/tmp/ai-agent.yaml"
+    settings.LOCAL_CONFIG_PATH = "/tmp/ai-agent.local.yaml"
+    settings.PROJECT_ROOT = str(BACKEND_ROOT.parents[1])
+    settings.ensure_env_file = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "settings", settings)
+
+    services_pkg = types.ModuleType("services")
+    services_pkg.__path__ = [str(BACKEND_ROOT / "services")]
+    monkeypatch.setitem(sys.modules, "services", services_pkg)
+    monkeypatch.setitem(
+        sys.modules,
+        "services.google_live_validation",
+        google_live_validation,
+    )
+
+    fs = types.ModuleType("services.fs")
+    fs.upsert_env_vars = lambda *args, **kwargs: None
+    fs.atomic_write_text = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "services.fs", fs)
+
     api_pkg = types.ModuleType("api")
     api_pkg.__path__ = [str(BACKEND_ROOT / "api")]
     monkeypatch.setitem(sys.modules, "api", api_pkg)
@@ -51,19 +91,27 @@ def _install_wizard_import_stubs(monkeypatch):
     fastapi = types.ModuleType("fastapi")
 
     class HTTPException(Exception):
+        """Tiny FastAPI HTTPException stand-in."""
+
         def __init__(self, status_code=None, detail=None):
+            """Store status and detail like FastAPI's exception."""
             super().__init__(detail)
             self.status_code = status_code
             self.detail = detail
 
     class APIRouter:
+        """Tiny APIRouter stand-in whose decorators return functions unchanged."""
+
         def post(self, *args, **kwargs):
+            """Return a no-op route decorator for POST handlers."""
             return lambda func: func
 
         def get(self, *args, **kwargs):
+            """Return a no-op route decorator for GET handlers."""
             return lambda func: func
 
         def delete(self, *args, **kwargs):
+            """Return a no-op route decorator for DELETE handlers."""
             return lambda func: func
 
     fastapi.APIRouter = APIRouter
@@ -73,7 +121,10 @@ def _install_wizard_import_stubs(monkeypatch):
     pydantic = types.ModuleType("pydantic")
 
     class BaseModel:
+        """Tiny pydantic BaseModel stand-in for simple attribute storage."""
+
         def __init__(self, **kwargs):
+            """Copy keyword arguments onto the instance."""
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
@@ -124,6 +175,7 @@ def _install_wizard_import_stubs(monkeypatch):
 
 
 def _load_wizard_module(monkeypatch):
+    """Load wizard.py with dependency stubs so route logic can be tested."""
     _install_wizard_import_stubs(monkeypatch)
     module_name = "wizard_for_google_validation_tests"
     module_path = BACKEND_ROOT / "api" / "wizard.py"
@@ -135,6 +187,7 @@ def _load_wizard_module(monkeypatch):
 
 
 def test_google_live_validation_accepts_key_when_live_models_are_not_advertised():
+    """No advertised Live models should warn but still validate the key."""
     result = build_google_key_validation_result(
         [
             {
@@ -152,6 +205,7 @@ def test_google_live_validation_accepts_key_when_live_models_are_not_advertised(
 
 
 def test_google_live_validation_selects_preferred_live_model():
+    """Preferred Google Live model order should win over response order."""
     result = build_google_key_validation_result(
         [
             {
@@ -171,6 +225,7 @@ def test_google_live_validation_selects_preferred_live_model():
 
 
 def test_google_live_model_extraction_strips_models_prefix():
+    """Live model extraction should strip Google's models/ prefix."""
     live_models = extract_google_live_models(
         [
             {
@@ -190,6 +245,7 @@ def test_google_live_model_extraction_strips_models_prefix():
 
 @pytest.mark.asyncio
 async def test_google_validate_key_route_accepts_200_without_live_models(monkeypatch):
+    """The wizard route should accept valid keys with inconclusive discovery."""
     wizard = _load_wizard_module(monkeypatch)
     _FakeAsyncClient.response = _FakeGoogleResponse(
         200,
@@ -216,6 +272,7 @@ async def test_google_validate_key_route_accepts_200_without_live_models(monkeyp
 
 @pytest.mark.asyncio
 async def test_google_validate_key_route_treats_429_as_advisory(monkeypatch):
+    """Rate-limited model discovery should not block setup."""
     wizard = _load_wizard_module(monkeypatch)
     _FakeAsyncClient.response = _FakeGoogleResponse(429, {"error": {"message": "quota"}})
     monkeypatch.setattr(wizard.httpx, "AsyncClient", _FakeAsyncClient)
@@ -233,6 +290,7 @@ async def test_google_validate_key_route_treats_429_as_advisory(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_google_validate_key_route_separates_403_access_denied(monkeypatch):
+    """HTTP 403 should expose access guidance instead of invalid-key text."""
     wizard = _load_wizard_module(monkeypatch)
     _FakeAsyncClient.response = _FakeGoogleResponse(
         403,
