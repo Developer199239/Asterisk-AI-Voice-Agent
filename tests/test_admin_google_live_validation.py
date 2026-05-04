@@ -30,7 +30,7 @@ class _FakeGoogleResponse:
     def __init__(self, status_code, payload=None, text=""):
         """Store the fake HTTP status, JSON payload, and response text."""
         self.status_code = status_code
-        self._payload = payload or {}
+        self._payload = payload if payload is not None else {}
         self.text = text
 
     def json(self):
