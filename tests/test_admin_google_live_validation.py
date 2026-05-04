@@ -38,26 +38,29 @@ class _FakeGoogleResponse:
         return self._payload
 
 
-class _FakeAsyncClient:
-    """Async context-manager double for httpx.AsyncClient."""
+def _fake_async_client_for(response):
+    """Build an AsyncClient double bound to one fake response."""
 
-    response = None
+    class FakeAsyncClient:
+        """Async context-manager double for httpx.AsyncClient."""
 
-    def __init__(self, *args, **kwargs):
-        """Accept the same constructor shape as httpx.AsyncClient."""
-        pass
+        def __init__(self, *args, **kwargs):
+            """Accept the same constructor shape as httpx.AsyncClient."""
+            self.response = response
 
-    async def __aenter__(self):
-        """Return this fake client from the async context manager."""
-        return self
+        async def __aenter__(self):
+            """Return this fake client from the async context manager."""
+            return self
 
-    async def __aexit__(self, exc_type, exc, tb):
-        """Do not suppress exceptions from the async context manager."""
-        return False
+        async def __aexit__(self, exc_type, exc, tb):
+            """Do not suppress exceptions from the async context manager."""
+            return False
 
-    async def get(self, *args, **kwargs):
-        """Return the configured fake response."""
-        return self.response
+        async def get(self, *args, **kwargs):
+            """Return the configured fake response."""
+            return self.response
+
+    return FakeAsyncClient
 
 
 def _install_wizard_import_stubs(monkeypatch):
@@ -247,7 +250,7 @@ def test_google_live_model_extraction_strips_models_prefix():
 async def test_google_validate_key_route_accepts_200_without_live_models(monkeypatch):
     """The wizard route should accept valid keys with inconclusive discovery."""
     wizard = _load_wizard_module(monkeypatch)
-    _FakeAsyncClient.response = _FakeGoogleResponse(
+    response = _FakeGoogleResponse(
         200,
         {
             "models": [
@@ -258,7 +261,7 @@ async def test_google_validate_key_route_accepts_200_without_live_models(monkeyp
             ]
         },
     )
-    monkeypatch.setattr(wizard.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(wizard.httpx, "AsyncClient", _fake_async_client_for(response))
 
     result = await wizard.validate_api_key(
         wizard.ApiKeyValidation(provider="google", api_key="AIza-test-key")
@@ -274,8 +277,8 @@ async def test_google_validate_key_route_accepts_200_without_live_models(monkeyp
 async def test_google_validate_key_route_treats_429_as_advisory(monkeypatch):
     """Rate-limited model discovery should not block setup."""
     wizard = _load_wizard_module(monkeypatch)
-    _FakeAsyncClient.response = _FakeGoogleResponse(429, {"error": {"message": "quota"}})
-    monkeypatch.setattr(wizard.httpx, "AsyncClient", _FakeAsyncClient)
+    response = _FakeGoogleResponse(429, {"error": {"message": "quota"}})
+    monkeypatch.setattr(wizard.httpx, "AsyncClient", _fake_async_client_for(response))
 
     result = await wizard.validate_api_key(
         wizard.ApiKeyValidation(provider="google", api_key="AIza-test-key")
@@ -292,11 +295,11 @@ async def test_google_validate_key_route_treats_429_as_advisory(monkeypatch):
 async def test_google_validate_key_route_separates_403_access_denied(monkeypatch):
     """HTTP 403 should expose access guidance instead of invalid-key text."""
     wizard = _load_wizard_module(monkeypatch)
-    _FakeAsyncClient.response = _FakeGoogleResponse(
+    response = _FakeGoogleResponse(
         403,
         {"error": {"message": "API key not authorized for this project"}},
     )
-    monkeypatch.setattr(wizard.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(wizard.httpx, "AsyncClient", _fake_async_client_for(response))
 
     result = await wizard.validate_api_key(
         wizard.ApiKeyValidation(provider="google", api_key="AIza-test-key")
