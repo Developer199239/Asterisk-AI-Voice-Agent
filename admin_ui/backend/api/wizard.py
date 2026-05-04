@@ -2698,8 +2698,21 @@ async def validate_api_key(validation: ApiKeyValidation):
                     data = response.json()
                     models = data.get("models", [])
                     return build_google_key_validation_result(models)
-                elif response.status_code in [400, 401, 403]:
+                elif response.status_code in [400, 401]:
                     return {"valid": False, "error": "Invalid API key"}
+                elif response.status_code == 403:
+                    detail = ""
+                    try:
+                        detail = response.json().get("error", {}).get("message", "")
+                    except Exception:
+                        detail = response.text if hasattr(response, "text") else ""
+                    return {
+                        "valid": False,
+                        "error": detail or (
+                            "Google API access denied. Verify API enablement, key restrictions, "
+                            "and project permissions."
+                        ),
+                    }
                 elif response.status_code == 429:
                     return {
                         "valid": True,
