@@ -292,6 +292,26 @@ async def test_google_validate_key_route_treats_429_as_advisory(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_google_validate_key_route_rejects_401_invalid_key(monkeypatch):
+    """HTTP 401 should be treated as an invalid Google API key."""
+    wizard = _load_wizard_module(monkeypatch)
+    response = _FakeGoogleResponse(
+        401,
+        {"error": {"message": "Invalid API key"}},
+    )
+    monkeypatch.setattr(wizard.httpx, "AsyncClient", _fake_async_client_for(response))
+
+    result = await wizard.validate_api_key(
+        wizard.ApiKeyValidation(provider="google", api_key="AIza-test-key")
+    )
+
+    assert result["valid"] is False
+    assert result["error"] == "Invalid API key"
+    assert "selected_model" not in result
+    assert "available_models" not in result
+
+
+@pytest.mark.asyncio
 async def test_google_validate_key_route_separates_403_access_denied(monkeypatch):
     """HTTP 403 should expose access guidance instead of invalid-key text."""
     wizard = _load_wizard_module(monkeypatch)
