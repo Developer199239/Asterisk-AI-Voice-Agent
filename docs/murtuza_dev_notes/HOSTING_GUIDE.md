@@ -404,7 +404,7 @@ If you want the services to start automatically when Ubuntu boots:
 ### Backend service
 
 ```bash
-sudo tee /etc/systemd/system/hos-backend.service > /dev/null << EOF
+sudo tee /etc/systemd/system/hos-backend.service > /dev/null << 'EOF'
 [Unit]
 Description=HOS Spring Boot Backend
 After=network.target docker.service
@@ -412,17 +412,14 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=/home/$USER/new_ai_hospital_claude/backend/hos-backend
-
-# Start only postgres + redis from the infra docker-compose
-ExecStartPre=/usr/bin/docker compose -f /home/$USER/new_ai_hospital_claude/infra/docker-compose.yml up -d postgres redis
+User=mr
+WorkingDirectory=/home/mr/workspace/ai_hospital_operating_system/backend/hos-backend
 
 # Wait for postgres to be ready before starting Spring Boot
-ExecStartPre=/bin/bash -c 'until docker exec hos_postgres pg_isready -U hos_user -d hos_db -q; do sleep 1; done'
+# ExecStartPre=/bin/bash -c 'until docker exec hos_postgres pg_isready -U hos_user -d hos_db -q; do sleep 1; done'
 
 # Use bash -c because systemd does NOT expand globs (*.jar)
-ExecStart=/bin/bash -c 'exec java -jar /home/$USER/new_ai_hospital_claude/backend/hos-backend/hos-app/target/hos-app-*.jar --spring.profiles.active=dev --server.address=0.0.0.0'
+ExecStart=/bin/bash -c 'exec java -jar /home/mr/workspace/ai_hospital_operating_system/backend/hos-backend/hos-app/target/hos-app-*.jar --spring.profiles.active=dev --server.address=0.0.0.0'
 
 Restart=on-failure
 RestartSec=10
@@ -434,13 +431,22 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable hos-backend
-sudo systemctl start hos-backend
+sudo systemctl restart hos-backend
+sudo systemctl status hos-backend
 ```
+
+sudo journalctl -u hos-backend -f
 
 ### Frontend service
 
 ```bash
+# Get the real paths first
+SERVE_PATH=$(su - mr -c 'which serve')
+NODE_BIN=$(su - mr -c 'dirname $(which node)')
+echo "serve: $SERVE_PATH"
+echo "node bin: $NODE_BIN"
+
+# Now create the service with correct path
 sudo tee /etc/systemd/system/hos-frontend.service > /dev/null << EOF
 [Unit]
 Description=HOS React Frontend
@@ -448,9 +454,13 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=/path/to/new_ai_hospital_claude/frontend/hospital-os-web
-ExecStart=/usr/local/bin/serve -s dist -l 3000
+User=mr
+WorkingDirectory=/home/mr/workspace/ai_hospital_operating_system/frontend/hospital-os-web
+
+# Add nvm node bin to PATH so systemd can find serve
+Environment="PATH=$NODE_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+ExecStart=$SERVE_PATH -s dist -l 3000
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -461,10 +471,7 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable hos-frontend
-sudo systemctl start hos-frontend
-
-# Check status
+sudo systemctl restart hos-frontend
 sudo systemctl status hos-frontend
 ```
 

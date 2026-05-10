@@ -59,7 +59,10 @@ class InCallHTTPConfig:
     
     # Response limits
     max_response_size_bytes: int = 65536  # 64KB max
-    
+
+    # HTTP status codes treated as success (default: 200 and 201)
+    success_status_codes: List[int] = field(default_factory=lambda: [200, 201])
+
     # Error handling
     error_message: str = "I'm sorry, I couldn't retrieve that information right now."
 
@@ -266,9 +269,9 @@ class InCallHTTPTool(Tool):
                             "message": self.config.error_message,
                         }
                     
-                    if response.status != 200:
+                    if response.status not in self.config.success_status_codes:
                         logger.warning(
-                            f"In-call HTTP tool returned non-200: {self.config.name}",
+                            f"In-call HTTP tool returned non-success status: {self.config.name}",
                             extra={"status": response.status, "call_id": context.call_id}
                         )
                         if debug_enabled(logger):
@@ -602,6 +605,7 @@ def create_in_call_http_tool(name: str, config_dict: Dict[str, Any]) -> InCallHT
         output_variables=config_dict.get('output_variables', {}),
         return_raw_json=config_dict.get('return_raw_json', False),
         max_response_size_bytes=config_dict.get('max_response_size_bytes', 65536),
+        success_status_codes=config_dict.get('success_status_codes', [200, 201]),
         error_message=config_dict.get('error_message', "I'm sorry, I couldn't retrieve that information right now."),
     )
     
