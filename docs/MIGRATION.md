@@ -2,6 +2,31 @@
 
 This guide covers upgrading between major versions of Asterisk AI Voice Agent.
 
+## v6.4.2 to v6.5.x
+
+**Fully back-compatible.** v6.5.0 and v6.5.1 are additive — no required config changes, no breaking schema changes, no behavioral changes for existing deployments.
+
+```bash
+# Standard upgrade
+git fetch --tags
+git checkout v6.5.1
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.5.0 (opt-in):
+- **Local LLM tool-gated response (#368)** — new WS message types `tool_context` / `tool_result` v2 used automatically when local LLM is the active backend; no config changes for existing deployments.
+- **Deepgram Flux v2 + nova-3 default flip** — if you were relying on the implicit `nova-2` default in YAML, behavior is unchanged (the runtime hardcoded `nova-3` regardless of YAML before this flip). Only matters if you intentionally pinned `nova-2` in YAML.
+- **Gemini 3.1 Flash Live** — verified compatible, no engine changes. Model picker now offers `gemini-3.1-flash-live-preview` alongside the existing `gemini-2.5-*` options.
+- **HTTP-tool-test `.env`-first guard (#370)** — no migration; Admin UI Environment-page edits to `AAVA_HTTP_TOOL_TEST_*` now take effect without an `ai_engine` restart (was a bug, now fixed).
+
+New in v6.5.1 (opt-in):
+- **CPU-demo profile** — Faster-Whisper `tiny.en` + Piper + Qwen 0.5B is now selectable end-to-end via the Admin UI Models page. Pre-existing STT/TTS/LLM selections are unaffected.
+- **New env vars (all default-safe)** — `FASTER_WHISPER_DEVICE` (default `cpu`), `FASTER_WHISPER_COMPUTE_TYPE` (default `int8`), `LOCAL_ENABLE_FILLER_AUDIO` (default `false`), `LOCAL_LLM_STREAMING_TTS_OVERLAP` (default `true`). See [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#local-ai-server-local-pipelines).
+- **Runtime toggles** — Filler Audio and LLM/TTS Overlap can be flipped from the Models page without a model reload (filler-audio enable triggers a quick TTS pre-synthesis; disable clears the cache).
+- **Local provider hot-path hardening** — internal change, no operator-visible config; if you observed audio glitching on `local_ai_server` reconnect events under v6.5.0, those should be fixed.
+
+No removed options. No required schema migrations. No required Docker volume migrations.
+
 ## v6.4.1 to v6.4.2
 
 **Mostly back-compatible.** New features are additive or opt-in. A handful of
