@@ -137,43 +137,42 @@ class GenericHTTPLookupTool(PreCallTool):
             if self.config.body_template:
                 body = self._substitute_variables(self.config.body_template, context)
 
-            if debug_enabled(logger):
-                used_brace = extract_used_brace_vars(
-                    self.config.url,
-                    *(self.config.headers or {}).values(),
-                    *(self.config.query_params or {}).values(),
-                    self.config.body_template,
-                )
-                used_env = extract_used_env_vars(
-                    self.config.url,
-                    *(self.config.headers or {}).values(),
-                    *(self.config.query_params or {}).values(),
-                    self.config.body_template,
-                )
-                ctx_values = {
-                    "caller_number": getattr(context, "caller_number", None),
-                    "called_number": getattr(context, "called_number", None),
-                    "caller_name": getattr(context, "caller_name", None),
-                    "context_name": getattr(context, "context_name", None),
-                    "call_id": getattr(context, "call_id", None),
-                    "campaign_id": getattr(context, "campaign_id", None),
-                    "lead_id": getattr(context, "lead_id", None),
-                }
-                logger.debug(
-                    "[HTTP_TOOL_TRACE] request_resolved pre_call tool=%s method=%s url=%s headers=%s params=%s body=%s vars=%s",
-                    self.config.name,
-                    self.config.method,
-                    url,
-                    headers,
-                    params,
-                    preview(body),
-                    build_var_snapshot(
-                        used_brace_vars=used_brace,
-                        used_env_vars=used_env,
-                        values=ctx_values,
-                        env=os.environ,
-                    ),
-                )
+            used_brace = extract_used_brace_vars(
+                self.config.url,
+                *(self.config.headers or {}).values(),
+                *(self.config.query_params or {}).values(),
+                self.config.body_template,
+            )
+            used_env = extract_used_env_vars(
+                self.config.url,
+                *(self.config.headers or {}).values(),
+                *(self.config.query_params or {}).values(),
+                self.config.body_template,
+            )
+            ctx_values = {
+                "caller_number": getattr(context, "caller_number", None),
+                "called_number": getattr(context, "called_number", None),
+                "caller_name": getattr(context, "caller_name", None),
+                "context_name": getattr(context, "context_name", None),
+                "call_id": getattr(context, "call_id", None),
+                "campaign_id": getattr(context, "campaign_id", None),
+                "lead_id": getattr(context, "lead_id", None),
+            }
+            logger.info(
+                "[HTTP_TOOL_TRACE] request_resolved pre_call tool=%s method=%s url=%s headers=%s params=%s body=%s vars=%s",
+                self.config.name,
+                self.config.method,
+                url,
+                headers,
+                params,
+                preview(body),
+                build_var_snapshot(
+                    used_brace_vars=used_brace,
+                    used_env_vars=used_env,
+                    values=ctx_values,
+                    env=os.environ,
+                ),
+            )
 
             logger.info(f"Executing HTTP lookup: {self.config.name} {self.config.method} {self._redact_url(url)}")
             
@@ -188,21 +187,19 @@ class GenericHTTPLookupTool(PreCallTool):
                     data=body,
                 ) as response:
                     if response.status != 200:
-                        logger.warning(f"HTTP lookup returned non-200: {self.config.name} status={response.status}")
-                        if debug_enabled(logger):
-                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
-                            body_preview = ""
-                            try:
-                                body_preview = preview(await response.content.read(4096))
-                            except Exception as e:
-                                body_preview = f"<failed to read body: {e}>"
-                            logger.debug(
-                                "[HTTP_TOOL_TRACE] response_non_200 pre_call tool=%s status=%s elapsed_ms=%s body_preview=%s",
-                                self.config.name,
-                                response.status,
-                                elapsed_ms,
-                                body_preview,
-                            )
+                        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                        body_preview = ""
+                        try:
+                            body_preview = preview(await response.content.read(4096))
+                        except Exception as e:
+                            body_preview = f"<failed to read body: {e}>"
+                        logger.info(
+                            "[HTTP_TOOL_TRACE] response_non_200 pre_call tool=%s status=%s elapsed_ms=%s body_preview=%s",
+                            self.config.name,
+                            response.status,
+                            elapsed_ms,
+                            body_preview,
+                        )
                         return results
 
                     # Check declared response size (best-effort) but always enforce actual size below.
