@@ -540,10 +540,11 @@ Models are **not bundled** in Docker images. Download them via:
 ### Supported STT Models
 
 **Faster Whisper** (recommended with GPU — CUDA accelerated):
-- `tiny`, `base`, `small`, `medium`, `large-v3`
+- `tiny.en`, `tiny`, `base`, `small`, `medium`, `large-v3`
 - Set `LOCAL_STT_BACKEND=faster_whisper` and `LOCAL_STT_MODEL_PATH=base`
 - GPU builds include Faster Whisper by default (`docker-compose.gpu.yml`)
 - CPU builds: set `INCLUDE_FASTER_WHISPER=true` before building
+- `tiny.en` is the fastest CPU demo option. Pair it with `FASTER_WHISPER_DEVICE=cpu` and `FASTER_WHISPER_COMPUTE_TYPE=int8` (or pick those in the Models page Device/Compute selectors). See [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#local-ai-server-local-pipelines) for the full matrix. Faster-Whisper downloads model weights on first load into `models/stt/faster_whisper_cache`; apply the model once after deployment to pre-warm that cache before a live demo.
 
 **Vosk** (CPU-friendly, offline, good accuracy):
 - `vosk-model-en-us-0.22` (English, recommended)
