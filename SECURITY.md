@@ -6,6 +6,10 @@ We actively support the following versions with security updates:
 
 | Version | Supported          | End of Support |
 | ------- | ------------------ | -------------- |
+| 6.5.x   | :white_check_mark: | TBD            |
+| 6.4.x   | :white_check_mark: | TBD            |
+| 6.3.x   | :white_check_mark: | TBD            |
+| 6.2.x   | :white_check_mark: | TBD            |
 | 6.1.x   | :white_check_mark: | TBD            |
 | 6.0.x   | :white_check_mark: | TBD            |
 | 5.x     | :x:                | Ended          |

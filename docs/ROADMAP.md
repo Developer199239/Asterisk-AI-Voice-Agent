@@ -49,6 +49,15 @@ Outbound dialer shipped as Alpha in v5.0.0 — core scheduling, AMD, voicemail d
 | **#351 Google Live barge-in** | Resolved as a documentation issue — production answer is `use_vertex_ai: true`. Architectural silence-gating refactor deferred to v6.6 (the experiment in `1763a441` was reverted in `cead273a` because the AudioSocket forwarding path needs a broader audio-path overhaul). | ✅ Documented |
 | **#370 HTTP-tool-test `.env`-first guard** | Admin UI Environment-page edits to `AAVA_HTTP_TOOL_TEST_*` take effect without an `ai_engine` restart. | ✅ Shipped |
 
+### v6.5.1 — CPU-demo profile + local provider hardening (Shipped May 2026)
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **CPU-demo profile end-to-end (PR #386)** | Faster-Whisper `tiny.en` + Piper + Qwen 0.5B wired through the Admin UI. New Device (`cpu`/`cuda`/`auto`) and Compute (`int8`/`float16`/`float32`) selectors with client-side gating that disables `float16` on CPU. New env vars `FASTER_WHISPER_DEVICE`, `FASTER_WHISPER_COMPUTE_TYPE` persisted by the admin layer. | ✅ Shipped |
+| **Runtime toggles without model reload** | New WS protocol field `runtime_config` for `enable_filler_audio` and `llm_streaming_tts_overlap`. Filler-audio enable pre-synthesizes phrases via the active TTS; disable clears the cache. Control plane skips no-op values; admin layer accepts `no_change` so a toggle flip with the value already at the requested state no longer triggers a container recreate. | ✅ Shipped |
+| **Local provider audio hot-path hardening** | `send_audio()` no longer awaits `_reconnect()` per audio frame on disconnect (was blocking the producer for ~157s of backoff); drops the chunk and kicks `_start_background_reconnect()` instead, gated on prior-connection state. `asyncio.Lock` around `_reconnect()` for single-flight against `_send_loop`'s direct on-`ConnectionClosed` path. STT fragment suppression in full/llm modes narrowed to filler only so common confirmations like `"ok"`, names, numbers reach the LLM. | ✅ Shipped |
+| **Faster-Whisper verify-path tolerance** | Admin verify path no longer rolls back working CPU/int8 fallback configurations as "verification failed" when `local_ai_server` resets device/compute on CUDA model init failure. Frontend CUDA gate also reads pending dropdown selection so picking CUDA on a CPU-only host is caught client-side. | ✅ Shipped |
+
 ### v6.6.0 — Deferred from v6.5 + Local AI Performance & Polish
 
 | Feature | Description | Key Files | Effort |
@@ -139,4 +148,4 @@ Longer-term goals that will shape the project's direction:
 
 ---
 
-**Last Updated**: April 2026 | **Current Version**: v6.4.2
+**Last Updated**: May 2026 | **Current Version**: v6.5.1

@@ -6,7 +6,7 @@
   <img alt="Asterisk AI Voice Agent" src="assets/banner_light_mode.png?v=9" width="100%">
 </picture>
 
-![Version](https://img.shields.io/badge/version-6.4.2-blue.svg)
+![Version](https://img.shields.io/badge/version-6.5.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -161,40 +161,33 @@ docker compose -p asterisk-ai-voice-agent logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v6.4.2
+## 🎉 What's New in v6.5.1
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🗓️ Microsoft Calendar — Outlook / Microsoft 365 integration (NEW, v6.4.2)
-- **Device-code OAuth** for V1 (one work/school account per deployment) — no public redirect URL required, runs entirely from the Tools UI **Connect** button
-- **Native Microsoft Graph free/busy** by default with a working-hours mask (Mon–Fri 09:00–17:00, configurable) — operators don't need to seed "Open" availability events
-- **Per-context account binding** via `contexts.<name>.tool_overrides.microsoft_calendar.selected_accounts`
-- **Server-side delete fallback** absorbs LLMs that hallucinate or omit event_ids on reschedule (validated across Google Live, Deepgram, OpenAI Realtime, ElevenLabs)
-- Personal Outlook.com and tenant-wide application permissions are intentionally out of scope for V1
-- Setup guide: [docs/Microsoft-calendar-tool.md](docs/Microsoft-calendar-tool.md)
+### 💻 CPU-demo profile end-to-end (NEW, v6.5.1)
+- **Faster-Whisper `tiny.en` + Piper + Qwen 0.5B** profile wired through the Admin UI for low-resource boxes
+- Models page exposes new **Device** (`cpu`/`cuda`/`auto`) and **Compute** (`int8`/`float16`/`float32`) selectors for Faster-Whisper, with client-side gating that disables `float16` on CPU and snaps invalid pairs to `int8`
+- Two new **runtime toggles** — Filler Audio and LLM/TTS Overlap — flip without reloading STT/LLM/TTS; enabling filler audio pre-synthesizes phrases via the active TTS, disabling clears the cache
+- New env vars persisted: `FASTER_WHISPER_DEVICE`, `FASTER_WHISPER_COMPUTE_TYPE`, `LOCAL_ENABLE_FILLER_AUDIO`, `LOCAL_LLM_STREAMING_TTS_OVERLAP`
+- New WS protocol field `runtime_config` for runtime toggles; control plane skips no-op values and the admin layer accepts `no_change` so a runtime-only flip with the toggle in its current position no longer triggers a container recreate
 
-### 📅 Google Calendar — major overhaul (v6.4.2)
-- **Multi-account / per-context binding** (#338): single deployments can serve multiple separate calendars (one per business line / agent persona); each Admin UI Context binds to exactly one calendar; cross-calendar `aggregate_mode` for shared availability use cases
-- **JSON upload + auto-discover**: per-row "📁 Upload JSON" button writes the SA file to `secrets/`, authenticates, lists shared calendars, auto-fills credentials path / calendar id / timezone — eliminates the SCP-and-paste workflow for the 90% case
-- **Domain-Wide Delegation** support: optional `subject` per calendar enables Workspace impersonation; UI exposes the SA `client_id` (the #1 setup pitfall) with copy-to-clipboard for paste-into-admin-console
-- **Tools UI polish**: `free_prefix` / `busy_prefix` / `min_slot_duration_minutes` now exposed as form fields (were YAML-only); per-calendar 🩺 **Verify access** button with distinct, actionable error codes (`forbidden_calendar`, `calendar_not_found`, `auth_failed`, `dwd_not_configured`, etc.)
-- **Native free/busy mode**: blank/absent `free_prefix` switches `get_free_slots` to Google's `freebusy.query()` API intersected with a working-hours mask
-- **Slot-count cap** (default 3, configurable) so the agent stops reading 20-slot lists; **event duration cap** (default 240 min) prevents 7-hour bookings from LLM math errors
+### 🛡️ Local provider hot-path hardening (v6.5.1)
+- `send_audio()` no longer awaits `_reconnect()` per audio frame on disconnect (was blocking the producer for ~157s of backoff); drops the chunk and kicks `_start_background_reconnect()` instead, gated on prior-connection state to avoid spinning port-checks for never-reachable servers
+- Added `asyncio.Lock` around `_reconnect()` so concurrent attempts from `send_audio` and the `_send_loop`'s direct on-`ConnectionClosed` path serialize and don't race on websocket / listener / sender lifecycle
+- STT fragment suppression in full/llm modes narrowed to filler only (`{a, an, the, then, uh, um, hmm}`) so common confirmations like `"ok"`, names, numbers, and short commands like `"do it"` reach the LLM
+- Faster-Whisper verify path tolerates the runtime CUDA→CPU fallback so working CPU/int8 fallback configurations no longer get rolled back as "verification failed"
 
-### 🎯 Reschedule reliability across all providers (v6.4.2)
-- Server-side `event_id` tracking + 400/404 fallback eliminates duplicate bookings caused by LLMs hallucinating opaque IDs across conversation turns
-- Date/time prompt placeholders (`{today}`, `{current_date}`, `{current_weekday}`, `{current_time}`, `{current_datetime_iso}`) injected per-call so models stop reasoning with stale years (real bug observed: local_hybrid model thinking it's 2023, ElevenLabs/Claude saying "Tuesday April 27" when April 27 2026 is a Monday)
+### 🎨 Frontend & CLI polish (v6.5.1)
+- CUDA compatibility gate on the Models page now reads the **pending dropdown selection** in addition to env, so picking CUDA on a CPU-only host is caught client-side
+- CLI diagnostics (`agent check --local`, `local_test_report.py`) report runtime device/compute/flags and dispatch the env-fallback STT model lookup on `LOCAL_STT_BACKEND` so reports stay correct under sherpa/vosk/whisper_cpp/tone/kroko in fallback mode
 
-### 🔧 Reliability fixes (v6.4.2)
-- **OpenAI Realtime — duplicate events (3x) on fast tools**: race condition between fast tool execution (~300–500ms) and `response.done` commit caused the LLM to retry the booking. Fixed by gating `function_call_output` on a per-`response_id` async event
-- **Per-context `tool_overrides` now actually take effect** on OpenAI Realtime, Deepgram, and Google Live (was silently ignored — only ElevenLabs honored it). Affected `selected_calendars`, custom transfer destinations, webhook URLs, etc.
-- **Google Live — 30-voice catalog** (#349): voice picker expanded from 8 hardcoded voices to all 30 native-audio voices with Google's official tone descriptors
-
-### Previously in v6.4.1
-- ⚡ Sentence-by-sentence LLM→TTS streaming reduces perceived latency from 3-10s to sub-2s on pipelines
-- Qwen 2.5-1.5B Instruct recommended for CPU (~15-30 tok/s vs Phi-3's ~0.8 tok/s)
-- Pipeline filler audio, direct PCM→µ-law conversion, preflight hardening
+### Previously in v6.5.0
+- 🔧 Local LLM tool-gated response (#368) — new WS protocol message types `tool_context` / `tool_result` v2; per-WebSocket fail-closed sync prevents cross-call ACL/policy/prompt leakage on reused connections
+- ☁️ Gemini 3.1 Flash Live verified compatible (no engine changes); Vertex AI mode is the production answer for #351 barge-in
+- 🎤 Deepgram Flux v2 + nova-3 default flip; Admin UI surfaces "Flux Turn-Detection Tuning" panel for flux-* models
+- 🩺 Admin UI HTTP-tool-test guard now reads `.env` first so Environment-page edits to `AAVA_HTTP_TOOL_TEST_*` take effect without a container restart (#370)
 
 For older releases, expand **Previous Versions** below. Full release notes in [CHANGELOG.md](CHANGELOG.md).
 
@@ -202,6 +195,13 @@ For older releases, expand **Previous Versions** below. Full release notes in [C
 
 <details>
 <summary><b>Previous Versions</b></summary>
+
+#### v6.4.2 - Microsoft Calendar V1 + Google Calendar overhaul
+- 🗓️ Microsoft Calendar — Outlook / Microsoft 365 integration via device-code OAuth, Graph free/busy, per-context account binding, Tools UI Connect/Verify/Disconnect
+- 📅 Google Calendar — multi-account / per-context binding (#338), JSON upload + auto-discover, Domain-Wide Delegation, native free/busy mode
+- 🎯 Reschedule reliability — server-side `event_id` resolution + 400/404 fallback eliminates LLM-id-hallucination duplicate bookings
+- 🔧 Date/time prompt placeholders (`{today}`, `{current_date}`, etc.) so models stop reasoning with stale years
+- OpenAI Realtime duplicate-events fix (per-`response_id` async-event gating); per-context `tool_overrides` now actually take effect on OpenAI Realtime / Deepgram / Google Live; Google Live 30-voice catalog (#349)
 
 #### v6.4.1 - CPU Latency Optimization
 - ⚡ Streaming LLM→TTS overlap — sentence-boundary token streaming, sub-2s perceived latency on pipelines
