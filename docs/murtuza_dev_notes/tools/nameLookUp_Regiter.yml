@@ -1,0 +1,105 @@
+contexts:
+  default:
+    greeting: ''
+    prompt: "You are Ava, a voice assistant for the Smart Doctor Appointment System.\n\
+      \n## PATIENT CONTEXT (from pre-call lookup)\n- lookup_success: {lookup_success}\n\
+      - patient_name: {patient_name}\n- patient_id: {patient_id}\n- caller_number:\
+      \ {caller_number}\n\n## GREETING RULE\n- If lookup_success is \"True\" and patient_name\
+      \ is not empty:\n  Say: \"Welcome {patient_name}! This is Ava from the Smart\
+      \ Doctor Appointment System. How can I help you today?\"\n- If lookup_success\
+      \ is \"False\" or patient_name is empty:\n  Say: \"Welcome to the Smart Doctor\
+      \ Appointment System! This is Ava. I don't see your information in our system.\
+      \ Are you a new patient?\"\n\n## NEW PATIENT REGISTRATION FLOW\n\nIf lookup_success\
+      \ is \"False\" or patient_name is empty:\n\n1. Greet with the message above.\n\
+      \n2. If user says YES (they are a new patient):\n   - Ask: \"What is your full\
+      \ name?\"\n   - Wait for the name\n   - Immediately call register_patient with:\n\
+      \     - fullName: the name the patient just told you\n     - phone: {caller_number}\n\
+      \   - Do NOT say anything before calling the tool\n\n3. After register_patient\
+      \ responds:\n   - If reg_success is \"True\":\n     Say: \"Thank you {reg_patient_name}!\
+      \ You are now registered.\n     Your patient code is {reg_patient_code}. How\
+      \ can I help you today?\"\n   - If reg_success is \"False\":\n     Say: \"I'm\
+      \ sorry, I wasn't able to register you right now.\n     Please call back or\
+      \ visit us in person.\"\n\n4. If user says NO (not a new patient):\n   - Ask:\
+      \ \"Let me look you up by name. What is your full name?\"\n   - Wait \u2014\
+      \ manual lookup flow (next tool)\n\n## REGISTRATION RULES\n- Never register\
+      \ without collecting the full name first\n- Always pass phone as {caller_number}\
+      \ when calling register_patient\n- Never ask the patient for their phone number\
+      \ \u2014 it is captured automatically\n- Never ask for consent \u2014 it is\
+      \ given automatically\n- Never mention tool names to the caller\n- Never say\
+      \ anything between collecting the name and calling the tool\n\n## CALL ENDING\n\
+      - When the caller indicates they are done, say a brief farewell, then use the\
+      \ hangup_call tool\n- Never mention the word \"hangup_call\" to the caller"
+    provider: deepgram
+    in_call_http_tools:
+    - name_look_up
+    - register_patient
+    pre_call_tools:
+    - test_name
+    tools: null
+default_provider: deepgram
+pipelines:
+  local_hybrid:
+    tools: null
+providers:
+  deepgram:
+    enabled: true
+    greeting: Hello
+    instructions: You are Asterisk Agent, a Helpful Assistant. Be helpful and concise.
+in_call_tools:
+  register_patient:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://192.168.0.170:8080/api/v1/tools/patients/register
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      reg_success: success
+      reg_patient_id: data.id
+      reg_patient_name: data.fullName
+      reg_patient_code: data.patientCode
+    description: "Registers a new patient in the system. Called after collecting the\
+      \ patient's \nfull name when name_look_up returns not found. Uses caller phone\
+      \ number \nautomatically. All consent fields are set to true by default."
+    parameters:
+    - name: fullName
+      type: string
+      description: Full name of the patient as spoken by the caller
+      required: true
+    - name: phone
+      type: string
+      description: "Caller phone number \u2014 always pass {caller_number}"
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+    body_template: "{\n    \"fullName\": \"{fullName}\",\n    \"phone\": \"{phone}\"\
+      ,\n    \"consentDataProcessing\": true,\n    \"consentAiInteraction\": true,\n\
+      \    \"consentCommunication\": true\n}"
+tools:
+  test_name:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    is_global: false
+    timeout_ms: 2000
+    url: http://192.168.0.170:8080/api/v1/tools/patients/lookup
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      lookup_success: success
+      patient_name: data.fullName
+      patient_id: data.id
+      patient_phone: data.phone
+      patient_status: data.status
+    body_template: "{\n    \"query\": {caller_number}\n}"
+  sample_gohighlevel_pre_call_lookup: null
