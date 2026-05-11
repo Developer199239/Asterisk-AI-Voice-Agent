@@ -11952,21 +11952,48 @@ class Engine:
                 )
                 if context_config:
                     try:
-                        greeting_to_apply = context_config.greeting
+                        # Pick greeting: if pre-call lookup found the patient use
+                        # greeting_found (falls back to greeting), otherwise use
+                        # greeting_not_found (falls back to greeting).
+                        pre_call_results = getattr(session, "pre_call_results", {}) or {}
+                        lookup_success = str(pre_call_results.get("lookup_success", "")).strip().lower()
+                        patient_name   = str(pre_call_results.get("patient_name",   "")).strip()
+                        patient_found  = (lookup_success == "true" and bool(patient_name))
+
+                        if patient_found:
+                            greeting_to_apply = (
+                                getattr(context_config, "greeting_found", None)
+                                or context_config.greeting
+                            )
+                        else:
+                            greeting_to_apply = (
+                                getattr(context_config, "greeting_not_found", None)
+                                or context_config.greeting
+                            )
+
                         if greeting_to_apply:
                             try:
-                                caller_name = getattr(session, "caller_name", None) or "there"
+                                caller_name   = getattr(session, "caller_name",   None) or "there"
                                 caller_number = getattr(session, "caller_number", None) or "unknown"
-                                greeting_to_apply = greeting_to_apply.format(
-                                    caller_name=caller_name,
-                                    caller_number=caller_number,
-                                )
-                                logger.debug(
+                                # Build substitution dict: caller vars + all pre-call results
+                                sub_vars: dict = {
+                                    "caller_name":   caller_name,
+                                    "caller_number": caller_number,
+                                }
+                                for k, v in pre_call_results.items():
+                                    sub_vars[k] = str(v) if v is not None else ""
+                                # Apply substitution — unknown {keys} are left as-is
+                                import re as _re
+                                def _safe_sub(m):
+                                    return sub_vars.get(m.group(1), m.group(0))
+                                greeting_to_apply = _re.sub(r"\{(\w+)\}", _safe_sub, greeting_to_apply)
+                                logger.info(
                                     "Applied greeting template substitution for provider",
                                     call_id=session.call_id,
-                                    caller_name=caller_name,
+                                    patient_found=patient_found,
+                                    pre_call_keys=list(pre_call_results.keys()),
                                 )
-                            except (KeyError, ValueError) as e:
+                            except Exception as e:
                                 logger.warning(
                                     "Greeting template substitution failed for provider",
                                     call_id=session.call_id,

@@ -674,8 +674,13 @@ class DeepgramProvider(AIProviderInterface):
                         logger.debug("Greeting injection failed", exc_info=True)
             except Exception:
                 pass
-        # Disable fallback greeting injection; avoid extra messages pre-ack
-        # asyncio.create_task(_inject_greeting_if_quiet())
+        # Greeting injection intentionally disabled.
+        # Deepgram's greeting field in Settings is pure TTS — InjectAgentMessage
+        # does NOT trigger LLM generation; it only causes Deepgram to speak that
+        # text and enter listening mode again (double-greeting with no LLM response).
+        # The personalized greeting must be built before Settings are sent, which
+        # is done by the engine's pre-call greeting substitution in engine.py.
+        # asyncio.create_task(_inject_greeting_immediate())
         summary = {
             "input_encoding": str(input_encoding).lower(),
             "input_sample_rate_hz": int(input_sample_rate),
