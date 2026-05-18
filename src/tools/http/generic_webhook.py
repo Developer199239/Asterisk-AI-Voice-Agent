@@ -388,22 +388,45 @@ class GenericWebhookTool(PostCallTool):
         Build payload from template with variable substitution.
         """
         template = self.config.payload_template or "{}"
-        
+
         # Get payload dict from context
         payload_vars = context.to_payload_dict()
-        
+
         # Add schema_version
         payload_vars["schema_version"] = "1"
-        
+
         # Add summary_json as separate variable (keeps transcript_json intact)
         if context.summary:
             payload_vars["summary_json"] = json.dumps(context.summary)
         else:
             payload_vars["summary_json"] = json.dumps("")
-        
+
+        # ── Murtuza change ──────────────────────────────────────────────────
+        # REASON: pre_call_results (e.g. patient_id, patient_name from the
+        # name_look_up pre-call tool) were only available as a single JSON
+        # blob via {pre_call_results_json}.  That forced the receiving API to
+        # parse JSON just to get a single field like patientId.
+        # FIX: flatten every key in pre_call_results into payload_vars so
+        # operators can reference them directly in payload_template, e.g.
+        #   "patientId": {patient_id}
+        # Keys from pre_call_results never override the built-in top-level
+        # variables (call_id, caller_number, etc.) because we only write to a
+        # key that doesn't already exist in payload_vars.
+        #
+        # OLD behaviour (kept for reference):
+        #   # pre_call_results were only reachable as:
+        #   #   "pre_call_data": {pre_call_results_json}
+        #   # with no individual key access.
+        #
+        for pre_key, pre_value in (context.pre_call_results or {}).items():
+            flat_key = pre_key  # e.g. "patient_id", "patient_name"
+            if flat_key not in payload_vars:  # never shadow built-in variables
+                payload_vars[flat_key] = str(pre_value) if pre_value is not None else ""
+        # ── end Murtuza change ──────────────────────────────────────────────
+
         # Substitute variables
         result = template
-        
+
         # Simple variable substitution: {var_name}
         for key, value in payload_vars.items():
             placeholder = "{" + key + "}"
@@ -415,16 +438,16 @@ class GenericWebhookTool(PostCallTool):
                     # Escape for JSON string
                     escaped = json.dumps(str(value))[1:-1]  # Remove outer quotes
                     result = result.replace(placeholder, escaped)
-        
+
         # Environment variables: ${VAR_NAME}
         env_pattern = r'\$\{([A-Z_][A-Z0-9_]*)\}'
         def env_replacer(match):
             var_name = match.group(1)
             value = os.environ.get(var_name, "")
             return json.dumps(value)[1:-1]  # Escape for JSON
-        
+
         result = re.sub(env_pattern, env_replacer, result)
-        
+
         return result
     
     def _substitute_variables(self, template: str, context: PostCallContext) -> str:

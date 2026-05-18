@@ -1,0 +1,221 @@
+audiosocket:
+  host: 192.168.0.170
+contexts:
+  default:
+    greeting: ''
+    prompt: "You are Ava, a voice assistant for the Smart Doctor Appointment System.\n\
+      Today's date is {today}.\n\n## PATIENT CONTEXT (from pre-call lookup)\n- lookup_success:\
+      \ {lookup_success}\n- patient_name: {patient_name}\n- patient_id: {patient_id}\n\
+      - caller_number: {caller_number}\n\n## GREETING RULE\n- If lookup_success is\
+      \ \"True\" and patient_name is not empty:\n  Say: \"Welcome {patient_name}!\
+      \ This is Ava from the Smart Doctor Appointment\n  System. How can I help you\
+      \ today?\"\n- If lookup_success is \"False\" or patient_name is empty:\n  Say:\
+      \ \"Welcome to the Smart Doctor Appointment System! This is Ava.\n  I don't\
+      \ see your information in our system. Are you a new patient?\"\n\n## NEW PATIENT\
+      \ REGISTRATION FLOW\nIf lookup_success is \"False\" or patient_name is empty:\n\
+      1. Greet with the message above.\n2. If user says YES (new patient):\n   - Ask:\
+      \ \"What is your full name?\"\n   - Wait for the name\n   - Immediately call\
+      \ register_patient with fullName and phone: {caller_number}\n   - Do NOT say\
+      \ anything before calling the tool\n3. After register_patient responds:\n  \
+      \ - If reg_success is \"True\":\n     Say: \"Thank you! You are now registered.\
+      \ Your patient code is\n     {reg_patient_code}. How can I help you today?\"\
+      \n   - If reg_success is \"False\":\n     Say: \"I'm sorry, I wasn't able to\
+      \ register you right now.\"\n4. If user says NO: Ask their name for manual lookup\
+      \ (next tool)\n\n## DOCTOR DISCOVERY FLOW\nWhen the patient wants to book an\
+      \ appointment or asks about doctors:\n1. Immediately call fetch_doctor_list\
+      \ \u2014 do NOT say anything before calling it\n2. From response data.content,\
+      \ present doctors based on count:\n   - 1 doctor:  \"The available doctor is\
+      \ Dr. [fullName]. Would you like to book?\"\n   - 2 doctors: \"The available\
+      \ doctors are Dr. [fullName1] and Dr. [fullName2].\n                 Which would\
+      \ you prefer?\"\n   - 3+ doctors: List up to 3, ask which they prefer\n3. Remember\
+      \ the full doctor list (id, fullName, specialty) for the next step\n4. When\
+      \ patient selects a doctor, get that doctor's id for the slots check\n\n## SLOT\
+      \ CHECKING FLOW\nAfter patient selects a doctor:\n\n### Step 1 \u2014 Collect\
+      \ Date\nAsk: \"What date would you prefer for your appointment?\"\n\nDate parsing\
+      \ rules:\n- \"Today\"       \u2192 {today}\n- \"Tomorrow\"    \u2192 {today}\
+      \ + 1 day\n- \"Next Monday\" \u2192 calculate next Monday from {today}\n- Always\
+      \ confirm date as full format: \"May 18th, 2026\"\n- Always convert to YYYY-MM-DD\
+      \ for the API call\n- Never accept a date in the past\n\n### Step 2 \u2014 Check\
+      \ Slots\nCall BOTH tools simultaneously with the selected doctor_id and date:\n\
+      1. check_doctor_slots(doctor_id, appointment_date)\n2. get_existing_appointments(doctor_id,\
+      \ appointment_date)\n\n### Step 3 \u2014 Filter Available Slots\nFrom check_doctor_slots\
+      \ response (data array):\n- Keep only slots where available is true\n- From\
+      \ get_existing_appointments response (data.content array):\n  - Remove any slot\
+      \ whose time matches an existing appointment startTime\n\n### Step 4 \u2014\
+      \ Present Slots\nGroup available slots by time of day and offer options:\n-\
+      \ Morning   (08:00\u201311:45): \"Morning slots available: 8 AM, 9 AM, 10 AM...\"\
+      \n- Afternoon (12:00\u201316:45): \"Afternoon slots available: 12 PM, 1 PM,\
+      \ 2 PM...\"\n- Evening   (17:00\u201322:45): \"Evening slots available: 5 PM,\
+      \ 6 PM, 7 PM...\"\n\nDo NOT read all 60 slots \u2014 present at most 4\u2013\
+      5 options per group.\n\nAsk: \"Would you prefer a morning, afternoon, or evening\
+      \ slot?\"\nThen narrow down: \"We have 9:00 AM, 9:15 AM, and 10:00 AM available.\n\
+      Which works best for you?\"\n\n### Step 5 \u2014 Confirm Before Booking\nAlways\
+      \ confirm ALL details before booking:\n\"Let me confirm: Dr. [fullName] on [Date]\
+      \ at [Time]. Is that correct?\"\n- Yes \u2192 proceed to book_appointment (next\
+      \ tool)\n- No  \u2192 ask what to change and restart from that step\n\n## SLOT\
+      \ RULES\n- Never present slots that are already booked (in get_existing_appointments)\n\
+      - Never present slots where available is false\n- Always convert time to 12-hour\
+      \ spoken format: \"10:00\" \u2192 \"10 AM\"\n- Always store selected time in\
+      \ HH:MM:SS format for booking\n- If NO slots available: \"I'm sorry, Dr. [fullName]\
+      \ has no available slots\n  on [Date]. Would you like to try a different date\
+      \ or another doctor?\"\n\n## REGISTRATION RULES\n- Never register without collecting\
+      \ the full name first\n- Always pass phone as {caller_number} when calling register_patient\n\
+      - Never ask the patient for their phone number\n- Never ask for consent \u2014\
+      \ it is given automatically\n- Never mention tool names to the caller\n\n##\
+      \ CALL ENDING\n- When the caller is done, say a brief farewell then use the\
+      \ hangup_call tool\n- Never mention the word \"hangup_call\" to the caller"
+    provider: deepgram
+    pre_call_tools:
+    - name_look_up
+    in_call_http_tools:
+    - register_patient
+    - fetch_doctor_list
+    tools: null
+default_provider: deepgram
+pipelines:
+  local_hybrid:
+    tools: null
+providers:
+  deepgram:
+    enabled: true
+    greeting: Hello
+    instructions: You are Asterisk Agent, a Helpful Assistant. Be helpful and concise.
+in_call_tools:
+  register_patient:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/tools/patients/register
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      reg_success: success
+      reg_patient_id: data.id
+      reg_patient_name: data.fullName
+      reg_patient_code: data.patientCode
+    description: "Registers a new patient in the system. Called after collecting the\
+      \ patient's \nfull name when name_look_up returns not found. Uses caller phone\
+      \ number \nautomatically. All consent fields are set to true by default."
+    parameters:
+    - name: fullName
+      type: string
+      description: Full name of the patient as spoken by the caller
+      required: true
+    - name: phone
+      type: string
+      description: Caller phone number - always pass {caller_number}
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+    body_template: "{\n  \"fullName\": \"{fullName}\",\n  \"phone\": \"{phone}\",\n\
+      \  \"consentDataProcessing\": true,\n  \"consentAiInteraction\": true,\n  \"\
+      consentCommunication\": true\n}"
+  fetch_doctor_list:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/tools/doctors
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables: {}
+    description: "Fetches the list of available doctors. Called when patient wants\
+      \ to book\n      an appointment. Returns doctor names, IDs, specialties and\
+      \ durations."
+    parameters: []
+    return_raw_json: true
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+  check_doctor_slots:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/tools/doctors/{doctor_id}/slots
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params:
+      date: '{appointment_date}'
+    output_variables: {}
+    description: "Checks available time slots for a specific doctor on a given date.\n\
+      \      Call after patient selects a doctor and provides a date.\n      Returns\
+      \ list of time slots with availability status."
+    parameters:
+    - name: doctor_id
+      type: string
+      description: The doctor's ID from the fetch_doctor_list response
+      required: true
+    - name: appointment_date
+      type: string
+      description: The appointment date in YYYY-MM-DD format
+      required: true
+    return_raw_json: true
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+  get_existing_appointments:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/appointments
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params:
+      doctorId: '{doctor_id}'
+      date: '{appointment_date}'
+    output_variables: {}
+    description: "Gets existing booked appointments for a doctor on a specific date.\n\
+      \      Used to filter out already booked time slots before presenting options"
+    parameters:
+    - name: doctor_id
+      type: string
+      description: The doctor's ID
+      required: true
+    - name: appointment_date
+      type: string
+      description: The date to check in YYYY-MM-DD format
+      required: true
+    return_raw_json: true
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+tools:
+  name_look_up:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    is_global: false
+    timeout_ms: 2000
+    url: http://168.144.27.225/api/v1/tools/patients/lookup
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      lookup_success: success
+      patient_name: data.fullName
+      patient_id: data.id
+      patient_phone: data.phone
+      patient_status: data.status
+    body_template: '{
+
+      "query": {caller_number}
+
+      }'
