@@ -2453,22 +2453,44 @@ class Engine:
                     channel_id=channel_id,
                 )
                 # ── Murtuza change ────────────────────────────────────────────
-                # ROOT-CAUSE FIX: ARI channelVars (set by outbound_trigger.py)
-                # are NOT readable via GET on Local/ channels — all three GETs
-                # for AI_PROVIDER / AI_AUDIO_PROFILE / AI_CONTEXT return 404.
+                # ROOT-CAUSE FIX (v2): ARI originate for Local/ channels returns
+                # the ;2 (dialplan) half as the channel_id.  outbound_trigger.py
+                # then tries to SET vars on that ;2 id → HTTP 409 every time.
+                # The engine only ever sees the ;1 (Stasis) half in StasisStart.
                 #
-                # The ONLY reliable way to make AI_CONTEXT readable is to SET
-                # it on the channel from within the engine, right here, BEFORE
-                # _handle_caller_stasis_start_hybrid starts.
-                # set_channel_var uses POST /channels/{id}/variable, which is
-                # a write that is immediately visible to subsequent GET requests.
-                # _resolve_audio_profile reads AI_CONTEXT ~130 ms later (after
-                # bridge creation + session setup), so there is no race condition.
+                # New approach: outbound_trigger.py embeds all patient data in
+                # appArgs as "outbound_reminder,key=val|key=val|...".
+                # appArgs are baked into the StasisStart event at call-creation
+                # time — available immediately in args[], zero race condition.
                 #
-                # appArgs[0] = "outbound_reminder" (action type, known)
-                # appArgs[1] = context name override if provided, else same value
+                # Here we parse args[1] into a dict and cache it on the engine
+                # instance so _handle_caller_stasis_start_hybrid can pick it up
+                # without touching channel vars at all.
                 # ── end Murtuza change ──────────────────────────────────────
-                _reminder_context_name = args[1] if len(args) > 1 else "outbound_reminder"
+                if not hasattr(self, "_outbound_reminder_vars"):
+                    self._outbound_reminder_vars: dict = {}
+
+                _reminder_context_name = "outbound_reminder"
+                if len(args) > 1 and "=" in args[1]:
+                    # New format: key=value|key=value|...
+                    _parsed_data: dict = {}
+                    for _kv in args[1].split("|"):
+                        if "=" in _kv:
+                            _k, _, _v = _kv.partition("=")
+                            _parsed_data[_k.strip()] = _v.strip()
+                    if _parsed_data:
+                        self._outbound_reminder_vars[channel_id] = _parsed_data
+                        _reminder_context_name = _parsed_data.get("context", "outbound_reminder")
+                        logger.info(
+                            "🔔 OUTBOUND REMINDER - Patient data parsed from appArgs",
+                            channel_id=channel_id,
+                            context=_reminder_context_name,
+                            keys=list(_parsed_data.keys()),
+                        )
+                elif len(args) > 1:
+                    # Legacy format: args[1] is context name only
+                    _reminder_context_name = args[1]
+
                 try:
                     await self.ari_client.set_channel_var(
                         channel_id, "AI_CONTEXT", _reminder_context_name
@@ -3234,72 +3256,50 @@ class Engine:
                         context_name=_ai_ctx_now,
                     )
 
-                # For any outbound_ context, read patient/appointment data that
-                # outbound_trigger.py SET on the channel and seed pre_call_results.
+                # For any outbound_ context, seed pre_call_results with
+                # patient/appointment data so template vars ({patient_name} etc.)
+                # are substituted before the provider session starts.
                 if _ai_ctx_now.startswith("outbound_"):
-                    _outbound_var_map = {
-                        "PATIENT_NAME":     "patient_name",
-                        "PATIENT_ID":       "patient_id",
-                        "APPOINTMENT_ID":   "appointment_id",
-                        "DOCTOR_NAME":      "doctor_name",
-                        "APPOINTMENT_DATE": "appointment_date",
-                        "START_TIME":       "start_time",
-                    }
                     # ── Murtuza change ──────────────────────────────────────────
-                    # RACE FIX: outbound_trigger.py SETs channel vars after it
-                    # receives the HTTP originate response.  For Local/ channels,
-                    # Asterisk fires StasisStart to the engine almost immediately
-                    # after the originate — before outbound_trigger.py has gotten
-                    # its response and fired the 8 SET requests.
+                    # FIX (v3 — appArgs approach, no channel vars needed):
                     #
-                    # Fix: retry with short back-off delays (0 → 150 → 200 → 250 →
-                    # 300 ms) so the engine waits up to ~900 ms for the vars to land.
-                    # In the typical case the second attempt (~+350 ms) succeeds,
-                    # adding only ~150 ms of extra latency before the provider starts.
+                    # PREVIOUS APPROACH: SET/GET channel vars on Local;1 after
+                    # outbound_trigger.py SET them on the originate response.
+                    # ROOT CAUSE: ARI originate returns the Local;2 (dialplan)
+                    # channel ID.  outbound_trigger.py SETs vars on ;2, which is
+                    # NOT in a Stasis app → HTTP 409 every time.  Even with
+                    # retries, the engine GETs from ;1 and finds nothing.
+                    #
+                    # NEW APPROACH: outbound_trigger.py embeds patient data in
+                    # appArgs ("outbound_reminder,key=val|key=val|...").  The
+                    # routing block (_handle_stasis_start) parsed args[1] and
+                    # cached the dict in self._outbound_reminder_vars[channel_id]
+                    # a few milliseconds before this code runs — guaranteed, no
+                    # race, no channel var reads.
                     # ── end Murtuza change ──────────────────────────────────────
                     _outbound_data: Dict[str, str] = {}
-                    _retry_delays = [0, 0.15, 0.20, 0.25, 0.30]
-                    for _retry_idx, _retry_sleep in enumerate(_retry_delays):
-                        if _retry_sleep > 0:
-                            await asyncio.sleep(_retry_sleep)
-                        _outbound_data = {}
-                        for _ch_var, _py_key in _outbound_var_map.items():
-                            try:
-                                _r = await self.ari_client.send_command(
-                                    "GET",
-                                    f"channels/{caller_channel_id}/variable",
-                                    params={"variable": _ch_var},
-                                    tolerate_statuses=[404],
-                                )
-                                if isinstance(_r, dict):
-                                    _v = (_r.get("value") or "").strip()
-                                    if _v:
-                                        _outbound_data[_py_key] = _v
-                            except Exception:
-                                pass
-                        if _outbound_data:
-                            if _retry_idx > 0:
-                                logger.info(
-                                    "Outbound: patient vars readable after %d retry attempt(s)",
-                                    _retry_idx,
-                                    call_id=caller_channel_id,
-                                    keys=list(_outbound_data.keys()),
-                                )
-                            break
+
+                    # Primary: in-memory dict populated from appArgs (no I/O)
+                    if hasattr(self, "_outbound_reminder_vars"):
+                        _outbound_data = self._outbound_reminder_vars.pop(
+                            caller_channel_id, {}
+                        )
+
                     if _outbound_data:
+                        # Remove internal routing key before storing
+                        _outbound_data.pop("context", None)
                         session.pre_call_results = _outbound_data
                         await self._save_session(session)
                         logger.info(
-                            "Outbound: pre-seeded pre_call_results from channel vars",
+                            "Outbound: pre-seeded pre_call_results from appArgs",
                             call_id=caller_channel_id,
                             context=_ai_ctx_now,
                             keys=list(_outbound_data.keys()),
                         )
                     else:
                         logger.warning(
-                            "Outbound: no patient/appointment channel vars readable after retries — "
-                            "template vars will be empty. "
-                            "Check admin_ui logs for 'channel vars SET via ARI'.",
+                            "Outbound: no patient data in appArgs — template vars will be empty. "
+                            "Ensure outbound_trigger.py is up to date (appArgs encoding required).",
                             call_id=caller_channel_id,
                             context=_ai_ctx_now,
                         )

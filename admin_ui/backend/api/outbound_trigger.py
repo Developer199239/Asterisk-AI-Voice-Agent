@@ -238,10 +238,38 @@ async def trigger_outbound_call(
     # normal AI call flow, bypassing the _is_caller_channel() PJSIP/SIP gate.
     # ── end Murtuza change ──────────────────────────────────────────────────
     dial_context = _outbound_dial_context()
+
+    # ── Murtuza change ────────────────────────────────────────────────────────
+    # ROOT-CAUSE FIX: ARI POST /channels returns the Local;2 channel (dialplan
+    # side), NOT the Local;1 channel that enters Stasis. Trying to SET channel
+    # vars on the ;2 ID always returns HTTP 409 ("not in a Stasis application").
+    #
+    # Solution: encode all patient/appointment data directly into appArgs.
+    # appArgs are baked into the Stasis event at call-creation time and are
+    # available immediately in StasisStart.args[] — zero race condition, no
+    # channel-var reads needed at all.
+    #
+    # Format: "outbound_reminder,key=value|key=value|..."
+    # Pipe (|) is used as the field separator (safe — not present in names/dates).
+    # Commas and pipes in field values are replaced with spaces as a safety guard.
+    # ── end Murtuza change ──────────────────────────────────────────────────
+    def _safe(s: str) -> str:
+        return (s or "").replace(",", " ").replace("|", " ")
+
+    _patient_arg = "|".join([
+        f"patient_name={_safe(req.patient_name)}",
+        f"doctor_name={_safe(req.doctor_name)}",
+        f"appointment_date={_safe(req.appointment_date)}",
+        f"start_time={_safe(req.start_time)}",
+        f"appointment_id={_safe(req.appointment_id)}",
+        f"patient_id={_safe(req.patient_id)}",
+        f"context={_safe(req.context)}",
+    ])
+
     ari_query_params = {
         "endpoint": f"Local/{req.phone_number}@{dial_context}",
         "app":      _app_name(),
-        "appArgs":  "outbound_reminder",
+        "appArgs":  f"outbound_reminder,{_patient_arg}",
         "timeout":  "60",
         "callerId": caller_id,
     }
