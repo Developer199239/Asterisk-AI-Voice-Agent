@@ -117,6 +117,15 @@ if _is_remote_bind and _raw_jwt_secret in _placeholder_secrets:
 from api import config, system, wizard, logs, local_ai, ollama, mcp, calls, outbound, tools, docs, custom_models  # noqa: E402
 import auth  # noqa: E402
 
+# ── Murtuza change ────────────────────────────────────────────────────────────
+# REASON: Import the outbound trigger router separately because it must be
+# registered WITHOUT JWT auth (Depends(get_current_user)). It uses its own
+# API key check (OUTBOUND_TRIGGER_API_KEY in .env) for machine-to-machine
+# auth with the HOS backend Java scheduler. All other outbound routes keep
+# their existing JWT dependency unchanged.
+# ── end Murtuza change ────────────────────────────────────────────────────────
+from api.outbound_trigger import trigger_router  # noqa: E402
+
 # Allow disabling API docs in production for security hardening
 _enable_api_docs = os.getenv("ENABLE_API_DOCS", "true").lower() in ("1", "true", "yes")
 
@@ -219,6 +228,13 @@ app.include_router(mcp.router, dependencies=[Depends(auth.get_current_user)])
 app.include_router(ollama.router, tags=["ollama"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(calls.router, prefix="/api", tags=["calls"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(outbound.router, prefix="/api", tags=["outbound"], dependencies=[Depends(auth.get_current_user)])
+# ── Murtuza change ────────────────────────────────────────────────────────────
+# REASON: Register the trigger router WITHOUT JWT dependency.
+# This is intentional — /api/outbound/trigger is called by the HOS backend
+# Java scheduler (machine-to-machine). It authenticates via X-Api-Key header
+# instead of JWT. All other /api/outbound/* routes remain JWT-protected above.
+# ── end Murtuza change ────────────────────────────────────────────────────────
+app.include_router(trigger_router, prefix="/api", tags=["outbound"])
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(docs.router, tags=["documentation"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(custom_models.router, prefix="/api/custom-models", tags=["custom-models"], dependencies=[Depends(auth.get_current_user)])
