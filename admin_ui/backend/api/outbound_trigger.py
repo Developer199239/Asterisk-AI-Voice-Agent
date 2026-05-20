@@ -225,17 +225,23 @@ async def trigger_outbound_call(
     # Confirmed from src/ari_client.py send_command() which does the same split.
     # ── end Murtuza change ──────────────────────────────────────────────────
     # ── Murtuza change ──────────────────────────────────────────────────────
-    # BUG FIX: Do NOT pass appArgs=context_name.
-    # The engine StasisStart handler checks args[0] only to detect outbound
-    # campaigns ("outbound_amd"). Any other value in args[0] causes the engine
-    # to behave unexpectedly and hang up the call.
-    # Context selection is handled entirely by the AI_CONTEXT channel variable
-    # (set in channelVars below) — appArgs is not needed for that.
+    # appArgs="outbound_reminder" is REQUIRED.
+    # The engine's StasisStart handler checks args[0] to route the call:
+    #   - "outbound" / "outbound_amd" → campaign dialer handler
+    #   - "outbound_reminder"          → _handle_caller_stasis_start_hybrid
+    #                                    (Murtuza change in engine.py)
+    #   - anything else with <2 args   → agent action handler → hangup
+    #   - no args + Local channel      → _handle_local_stasis_start_hybrid
+    #                                    (transfer helper, not an AI call)
+    # Without appArgs="outbound_reminder", the Local/;1 channel would be
+    # silently dropped. The engine.py change routes this action type to the
+    # normal AI call flow, bypassing the _is_caller_channel() PJSIP/SIP gate.
     # ── end Murtuza change ──────────────────────────────────────────────────
     dial_context = _outbound_dial_context()
     ari_query_params = {
         "endpoint": f"Local/{req.phone_number}@{dial_context}",
         "app":      _app_name(),
+        "appArgs":  "outbound_reminder",
         "timeout":  "60",
         "callerId": caller_id,
     }
@@ -261,8 +267,9 @@ async def trigger_outbound_call(
     )
 
     try:
-        async with aiohttp.ClientSession(auth=_ari_auth()) as session:
-            async with session.post(
+        async with aiohttp.ClientSession(auth=_ari_auth()) as http_session:
+            # Step 1: Originate the call
+            async with http_session.post(
                 ari_url,
                 params=ari_query_params,  # endpoint/app/timeout → URL query string
                 json=ari_body,            # channelVars → JSON body
@@ -289,12 +296,69 @@ async def trigger_outbound_call(
                     "Outbound trigger: call originated — channel_id=%s phone=%s patient_id=%s appointment_id=%s",
                     channel_id, req.phone_number, req.patient_id, req.appointment_id,
                 )
-                return OutboundTriggerResponse(
-                    ok=True,
-                    channel_id=channel_id,
-                    phone_number=req.phone_number,
-                    context=req.context,
+
+            # ── Murtuza change ────────────────────────────────────────────────
+            # BUG FIX: ARI channelVars sent in the originate JSON body are NOT
+            # readable via GET /channels/{id}/variable on Local/ channels.
+            # All three GET requests (AI_PROVIDER, AI_AUDIO_PROFILE, AI_CONTEXT)
+            # return 404 — confirmed from engine logs.
+            #
+            # Fix: After getting the channel_id, explicitly SET each variable
+            # using POST /channels/{id}/variable.  Variables set this way ARE
+            # readable by subsequent GET requests in the AI engine.
+            #
+            # Timing is safe: the engine reads AI_CONTEXT ~160 ms after
+            # StasisStart (bridge creation + session setup overhead), while
+            # these 8 parallel SET requests complete in ~20–30 ms.
+            # ── end Murtuza change ──────────────────────────────────────────
+            if channel_id and channel_id != "unknown":
+                _var_url = f"{ari_url}/{channel_id}/variable"
+                _vars_to_set = {
+                    "AI_CONTEXT":       req.context,
+                    "CALL_TYPE":        "outbound_reminder",
+                    "PATIENT_NAME":     req.patient_name,
+                    "PATIENT_ID":       req.patient_id,
+                    "APPOINTMENT_ID":   req.appointment_id,
+                    "DOCTOR_NAME":      req.doctor_name,
+                    "APPOINTMENT_DATE": req.appointment_date,
+                    "START_TIME":       req.start_time,
+                }
+                import asyncio as _asyncio
+
+                async def _set_var(vname: str, vval: str) -> None:
+                    if not vval:
+                        return
+                    try:
+                        async with http_session.post(
+                            _var_url,
+                            params={"variable": vname, "value": vval},
+                            timeout=aiohttp.ClientTimeout(total=3),
+                        ) as _r:
+                            if _r.status not in (200, 201, 204):
+                                logger.warning(
+                                    "SET channel var %s returned HTTP %s for channel %s",
+                                    vname, _r.status, channel_id,
+                                )
+                    except Exception as _e:
+                        logger.warning(
+                            "Failed to SET channel var %s on channel %s: %s",
+                            vname, channel_id, _e,
+                        )
+
+                await _asyncio.gather(*[
+                    _set_var(k, str(v)) for k, v in _vars_to_set.items()
+                ])
+                logger.info(
+                    "Outbound trigger: channel vars SET via ARI — channel_id=%s vars=%s",
+                    channel_id, list(_vars_to_set.keys()),
                 )
+
+            return OutboundTriggerResponse(
+                ok=True,
+                channel_id=channel_id,
+                phone_number=req.phone_number,
+                context=req.context,
+            )
 
     except HTTPException:
         raise

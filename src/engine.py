@@ -2431,6 +2431,30 @@ class Engine:
                 await self._handle_outbound_stasis(channel_id, channel, args)
                 return
 
+            # ── Murtuza change ────────────────────────────────────────────
+            # REASON: Outbound reminder calls triggered by HOS backend via
+            # POST /api/outbound/trigger arrive with args=['outbound_reminder']
+            # (set via appArgs in the ARI originate call).
+            #
+            # The normal path after this block checks _is_caller_channel()
+            # which only accepts SIP/PJSIP/DAHDI channels — it rejects Local/
+            # channels. Our outbound reminder uses Local/{phone}@from-internal
+            # so the channel is Local/;1 and would never reach the AI call
+            # handler without this explicit bypass.
+            #
+            # By routing directly to _handle_caller_stasis_start_hybrid we
+            # skip the channel-type gate. The handler reads AI_CONTEXT from
+            # the channel variable (set as channelVars in the ARI originate)
+            # and starts the outbound_reminder AI session normally.
+            # ── end Murtuza change ──────────────────────────────────────────
+            if action_type == "outbound_reminder":
+                logger.info(
+                    "🔔 OUTBOUND REMINDER - Routing to caller handler",
+                    channel_id=channel_id,
+                )
+                await self._handle_caller_stasis_start_hybrid(channel_id, channel)
+                return
+
             # Agent action (transfer, voicemail, queue, etc.)
             logger.info(
                 f"🔀 AGENT ACTION - Stasis entry with action: {action_type}",
@@ -3133,6 +3157,108 @@ class Engine:
             logger.info("Called number captured",
                        call_id=caller_channel_id,
                        called_number=session.called_number)
+
+            # ── Murtuza change ────────────────────────────────────────────────
+            # REASON: Outbound reminder calls triggered by HOS backend via
+            # POST /api/outbound/trigger pass patient/appointment data as ARI
+            # channelVars (PATIENT_NAME, PATIENT_ID, APPOINTMENT_ID, DOCTOR_NAME,
+            # APPOINTMENT_DATE, START_TIME). These must reach the outbound_reminder
+            # prompt template as {patient_name}, {doctor_name}, etc.
+            #
+            # The normal prompt substitution reads from session.pre_call_results.
+            # Pre-call tools run AFTER this point but for outbound_reminder there
+            # are no pre-call tools — so pre_call_results would stay empty and all
+            # template vars would resolve to empty strings.
+            #
+            # Fix: detect CALL_TYPE=outbound_reminder channel var here and
+            # pre-seed session.pre_call_results with the reminder-specific vars.
+            # _execute_pre_call_tools is patched (below) to MERGE rather than
+            # replace, so these pre-seeded values survive when no tools run.
+            # ── end Murtuza change ──────────────────────────────────────────
+            try:
+                _call_type_resp = await self.ari_client.send_command(
+                    "GET",
+                    f"channels/{caller_channel_id}/variable",
+                    params={"variable": "CALL_TYPE"},
+                    tolerate_statuses=[404],
+                )
+                _call_type = (
+                    (_call_type_resp.get("value") or "").strip()
+                    if isinstance(_call_type_resp, dict)
+                    else ""
+                )
+                if _call_type == "outbound_reminder":
+                    # ── also set context_name from AI_CONTEXT channel var (or
+                    # fall back to "outbound_reminder").  This must happen here
+                    # because _resolve_audio_profile (called later) does:
+                    #   session.context_name = channel_vars.get('AI_CONTEXT')
+                    # which sets it to None when the var is unreadable on Local/
+                    # channels — losing any value we set here.  That line is also
+                    # patched (below) to preserve a pre-set context_name.
+                    _ai_ctx_value = ""
+                    try:
+                        _ctx_resp = await self.ari_client.send_command(
+                            "GET",
+                            f"channels/{caller_channel_id}/variable",
+                            params={"variable": "AI_CONTEXT"},
+                            tolerate_statuses=[404],
+                        )
+                        if isinstance(_ctx_resp, dict):
+                            _ai_ctx_value = (_ctx_resp.get("value") or "").strip()
+                    except Exception:
+                        pass
+                    _resolved_context = _ai_ctx_value or "outbound_reminder"
+                    session.context_name = _resolved_context
+                    await self._save_session(session)
+                    logger.info(
+                        "Outbound reminder: context_name pre-set from channel var",
+                        call_id=caller_channel_id,
+                        context_name=_resolved_context,
+                        source="AI_CONTEXT" if _ai_ctx_value else "fallback",
+                    )
+
+                    _reminder_var_map = {
+                        "PATIENT_NAME":     "patient_name",
+                        "PATIENT_ID":       "patient_id",
+                        "APPOINTMENT_ID":   "appointment_id",
+                        "DOCTOR_NAME":      "doctor_name",
+                        "APPOINTMENT_DATE": "appointment_date",
+                        "START_TIME":       "start_time",
+                    }
+                    _reminder_data: Dict[str, str] = {}
+                    for _ch_var, _py_key in _reminder_var_map.items():
+                        try:
+                            _r = await self.ari_client.send_command(
+                                "GET",
+                                f"channels/{caller_channel_id}/variable",
+                                params={"variable": _ch_var},
+                                tolerate_statuses=[404],
+                            )
+                            if isinstance(_r, dict):
+                                _v = (_r.get("value") or "").strip()
+                                if _v:
+                                    _reminder_data[_py_key] = _v
+                        except Exception:
+                            pass
+                    if _reminder_data:
+                        session.pre_call_results = _reminder_data
+                        await self._save_session(session)
+                        logger.info(
+                            "Outbound reminder: pre-seeded pre_call_results from channel vars",
+                            call_id=caller_channel_id,
+                            keys=list(_reminder_data.keys()),
+                        )
+                    else:
+                        logger.warning(
+                            "Outbound reminder: CALL_TYPE=outbound_reminder but no reminder channel vars found",
+                            call_id=caller_channel_id,
+                        )
+            except Exception:
+                logger.debug(
+                    "Failed to read outbound_reminder channel vars",
+                    call_id=caller_channel_id,
+                    exc_info=True,
+                )
 
             # If outbound, pull outbound metadata from channel vars (set during origination).
             if is_outbound:
@@ -11799,7 +11925,18 @@ class Engine:
         
         # CRITICAL: Store context_name FIRST, before any early returns
         # This ensures pipeline mode gets the context even if provider lookup fails
-        session.context_name = channel_vars.get('AI_CONTEXT')
+        # ── Murtuza change ────────────────────────────────────────────────────
+        # BUG FIX: For outbound_reminder calls the AI_CONTEXT channel var is
+        # not readable from Local/ channels via ARI GET (returns 404).
+        # session.context_name is pre-set earlier in
+        # _handle_caller_stasis_start_hybrid from the CALL_TYPE channel var.
+        # Only overwrite if we actually got a value — don't wipe a pre-set name
+        # with None just because the GET returned 404.
+        # ── end Murtuza change ──────────────────────────────────────────────
+        _resolved_context_name = channel_vars.get('AI_CONTEXT')
+        if _resolved_context_name:
+            session.context_name = _resolved_context_name
+        # else: keep whatever was already set (e.g., from CALL_TYPE detection)
         await self._save_session(session)
         logger.debug(
             "Stored context_name in session",
@@ -14008,8 +14145,18 @@ class Engine:
                 if isinstance(output, dict):
                     results.update(output)
             
+            # ── Murtuza change ────────────────────────────────────────────────
+            # REASON: Merge tool results ON TOP OF any pre-seeded values
+            # (e.g., outbound_reminder channel vars seeded earlier in
+            # _handle_caller_stasis_start_hybrid). Previously this was a
+            # plain assignment that always wiped pre-seeded data. Now:
+            #   - pre-seeded keys survive when no tools ran (outbound_reminder)
+            #   - tool results always win if a tool returns the same key
+            # ── end Murtuza change ──────────────────────────────────────────
+            _pre_seeded = dict(getattr(session, "pre_call_results", {}) or {})
+            _pre_seeded.update(results)   # Tool results win over pre-seeded values
             # Store pre-call results in session for debugging and in-call access
-            session.pre_call_results = results
+            session.pre_call_results = _pre_seeded
             # Execution metadata for the call history UI (one entry per tool).
             session.pre_call_tool_calls = tool_call_records
             await self._save_session(session)
