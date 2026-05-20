@@ -2452,6 +2452,38 @@ class Engine:
                     "🔔 OUTBOUND REMINDER - Routing to caller handler",
                     channel_id=channel_id,
                 )
+                # ── Murtuza change ────────────────────────────────────────────
+                # ROOT-CAUSE FIX: ARI channelVars (set by outbound_trigger.py)
+                # are NOT readable via GET on Local/ channels — all three GETs
+                # for AI_PROVIDER / AI_AUDIO_PROFILE / AI_CONTEXT return 404.
+                #
+                # The ONLY reliable way to make AI_CONTEXT readable is to SET
+                # it on the channel from within the engine, right here, BEFORE
+                # _handle_caller_stasis_start_hybrid starts.
+                # set_channel_var uses POST /channels/{id}/variable, which is
+                # a write that is immediately visible to subsequent GET requests.
+                # _resolve_audio_profile reads AI_CONTEXT ~130 ms later (after
+                # bridge creation + session setup), so there is no race condition.
+                #
+                # appArgs[0] = "outbound_reminder" (action type, known)
+                # appArgs[1] = context name override if provided, else same value
+                # ── end Murtuza change ──────────────────────────────────────
+                _reminder_context_name = args[1] if len(args) > 1 else "outbound_reminder"
+                try:
+                    await self.ari_client.set_channel_var(
+                        channel_id, "AI_CONTEXT", _reminder_context_name
+                    )
+                    logger.info(
+                        "🔔 OUTBOUND REMINDER - SET AI_CONTEXT=%s on channel",
+                        _reminder_context_name,
+                        channel_id=channel_id,
+                    )
+                except Exception:
+                    logger.debug(
+                        "OUTBOUND REMINDER: failed to SET AI_CONTEXT; will use fallback",
+                        channel_id=channel_id,
+                        exc_info=True,
+                    )
                 await self._handle_caller_stasis_start_hybrid(channel_id, channel)
                 return
 
