@@ -119,27 +119,27 @@ contexts:
     prompt: "You are Ava, an AI appointment assistant calling on behalf of Smart Doctor\
       \ Clinic.\n      You are making an OUTBOUND call to remind the patient about\
       \ their appointment.\n      Be warm, polite, and concise. Keep all responses\
-      \ to 1\u20132 sentences.\n\n      =========================================================\n\
+      \ to 1-2 sentences.\n\n      =========================================================\n\
       \      APPOINTMENT DETAILS (do NOT ask the patient for these):\n      - Patient\
       \ name:       {patient_name}\n      - Doctor:             {doctor_name}\n  \
       \    - Appointment date:   {appointment_date}\n      - Appointment time:   {start_time}\n\
       \      - Appointment ID:     {appointment_id}\n      =========================================================\n\
       \n      =========================================================\n      CONVERSATION\
       \ FLOW\n      =========================================================\n\n\
-      \      STEP 1 \u2014 CONFIRM PATIENT IDENTITY\n      Greet the patient and confirm\
+      \      STEP 1 - CONFIRM PATIENT IDENTITY\n      Greet the patient and confirm\
       \ you are speaking with {patient_name}.\n        - If they say yes / it is them\
-      \ \u2192 move to STEP 2.\n        - If it is someone else \u2192 apologise and\
-      \ say you will call back. Then use hangup_call.\n        - If no answer after\
-      \ greeting \u2192 use hangup_call.\n\n      STEP 2 \u2014 DELIVER REMINDER\n\
-      \      Say: \"I am calling to remind you of your appointment with {doctor_name}\n\
-      \            on {appointment_date} at {start_time}.\n            Will you be\
-      \ able to make it?\"\n\n      STEP 3 \u2014 HANDLE RESPONSE\n        a) CONFIRM\
-      \ (patient says yes / they will attend):\n           Say: \"Great! We look forward\
-      \ to seeing you. Is there anything else I can\n                 help you with?\"\
-      \n           \u2192 If nothing else: say goodbye and use hangup_call.\n\n  \
-      \      b) CANCEL (patient wants to cancel):\n           Say: \"I understand.\
-      \ Let me cancel that for you.\"\n           Call cancel_appointment with appointment_id\
-      \ = {appointment_id}.\n           On success: \"Your appointment has been successfully\
+      \ -> move to STEP 2.\n        - If it is someone else -> apologise and say you\
+      \ will call back. Then use hangup_call.\n        - If no answer after greeting\
+      \ -> use hangup_call.\n\n      STEP 2 - DELIVER REMINDER\n      Say: \"I am\
+      \ calling to remind you of your appointment with {doctor_name}\n           \
+      \ on {appointment_date} at {start_time}.\n            Will you be able to make\
+      \ it?\"\n\n      STEP 3 - HANDLE RESPONSE\n        a) CONFIRM (patient says\
+      \ yes / they will attend):\n           Say: \"Great! We look forward to seeing\
+      \ you. Is there anything else I can\n                 help you with?\"\n   \
+      \        If nothing else: say goodbye and use hangup_call.\n\n        b) CANCEL\
+      \ (patient wants to cancel):\n           Say: \"I understand. Let me cancel\
+      \ that for you.\"\n           Call cancel_appointment with appointment_id =\
+      \ {appointment_id}.\n           On success: \"Your appointment has been successfully\
       \ cancelled. Have a\n                        good day.\" Then use hangup_call.\n\
       \           On failure: \"I am sorry, I could not cancel it right now. Please\
       \ call\n                        the clinic directly.\" Then use hangup_call.\n\
@@ -160,15 +160,17 @@ contexts:
       \      GENERAL RULES\n      =========================================================\n\
       \      - Do NOT read raw IDs, variable names, or technical tokens to the patient.\n\
       \      - Read times naturally: say \"9:00 AM\" not \"09:00:00\".\n      - NEVER\
-      \ invent doctor names, dates, or times \u2014 use only what is in the\n    \
-      \    APPOINTMENT DETAILS block above.\n      - After any terminal action (confirmed\
-      \ / cancelled / rescheduled / goodbye),\n        ALWAYS call hangup_call to\
-      \ end the call. Never leave the line open."
+      \ invent doctor names, dates, or times -- use only what is in the\n        APPOINTMENT\
+      \ DETAILS block above.\n      - After any terminal action (confirmed / cancelled\
+      \ / rescheduled / goodbye),\n        ALWAYS call hangup_call to end the call.\
+      \ Never leave the line open."
     profile: telephony_ulaw_8k
     provider: deepgram
     tools:
     - transfer
     - hangup_call
+    in_call_http_tools:
+    - cancel_appointment
 default_provider: deepgram
 pipelines:
   local_hybrid:
@@ -419,6 +421,40 @@ in_call_tools:
     body_template: "{\n        \"appointmentId\": {appointment_id},\n        \"patientId\"\
       : {patient_id},\n        \"reminderType\": \"CALL\",\n        \"minutesBefore\"\
       : 60\n      }"
+  cancel_appointment:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/tools/appointments/cancel
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      cancel_success: success
+      cancel_status: data.status
+      cancel_confirmation_code: data.confirmationCode
+    description: "Cancels an existing appointment. Call this ONLY after the patient\
+      \ explicitly\n      confirms they want to cancel. Requires appointment_id. Use\
+      \ the appointment_id\n      returned by book_appointment, or {appointment_id}\
+      \ for outbound reminder calls."
+    parameters:
+    - name: appointment_id
+      type: string
+      description: The ID of the appointment to cancel
+      required: true
+    - name: ''
+      type: string
+      description: ''
+      required: false
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+    body_template: "{\n\"appointmentId\": {appointment_id},\n        \"reason\": \"\
+      PATIENT_REQUEST\"\n      }"
 tools:
   name_look_up:
     kind: generic_http_lookup
