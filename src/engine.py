@@ -3119,8 +3119,48 @@ class Engine:
         # Check if call is already in progress
         existing_session = await self.session_store.get_by_call_id(caller_channel_id)
         if existing_session:
-            logger.warning("🎯 HYBRID ARI - Caller already in progress", channel_id=caller_channel_id)
-            return
+            # ── Murtuza change ────────────────────────────────────────────────
+            # FIX: transfer re-entry race condition.
+            #
+            # When transfer_call fires ARI continueInDialplan, the same channel
+            # immediately re-enters Stasis (~3 ms later).  But session_store
+            # .remove_call() is the LAST step of cleanup (~400 ms later, after
+            # Deepgram disconnect + bridge teardown).  So the new StasisStart
+            # always arrives while the old session is still in the store, and
+            # the hard "return" below would silently kill the new sub-agent.
+            #
+            # Fix: if the existing session was transferred, wait up to 2 s for
+            # cleanup to remove it (polling every 50 ms).  If it clears in
+            # time, fall through and start the new session normally.  If it
+            # never clears, force-remove the stale entry so we can proceed.
+            # ── end Murtuza change ────────────────────────────────────────────
+            if self._session_was_transferred(existing_session):
+                logger.info(
+                    "🎯 HYBRID ARI - Channel re-entered Stasis after transfer — "
+                    "waiting for old session cleanup",
+                    channel_id=caller_channel_id,
+                )
+                import asyncio as _asyncio
+                for _attempt in range(40):          # 40 × 50 ms = 2 s max wait
+                    await _asyncio.sleep(0.05)
+                    existing_session = await self.session_store.get_by_call_id(caller_channel_id)
+                    if not existing_session:
+                        logger.info(
+                            "🎯 HYBRID ARI - Old session cleared, starting new sub-agent session",
+                            channel_id=caller_channel_id,
+                            attempts=_attempt + 1,
+                        )
+                        break
+                else:
+                    logger.warning(
+                        "🎯 HYBRID ARI - Stale transferred session did not clear in 2 s — "
+                        "force-removing so sub-agent can start",
+                        channel_id=caller_channel_id,
+                    )
+                    await self.session_store.remove_call(caller_channel_id)
+            else:
+                logger.warning("🎯 HYBRID ARI - Caller already in progress", channel_id=caller_channel_id)
+                return
         
         try:
             # Answer the caller (inbound) or skip (outbound already answered)

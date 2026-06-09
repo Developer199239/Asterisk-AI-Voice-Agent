@@ -46,3 +46,10 @@ docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate ai_engi
 
   4. For local_hybrid or local_only pipeline, also start:
      docker compose -p asterisk-ai-voice-agent up -d local_ai_server
+
+
+
+ava run: 3003
+admin/12345
+
+agent: 7000
