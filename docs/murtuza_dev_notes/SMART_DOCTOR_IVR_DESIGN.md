@@ -38,33 +38,39 @@
 
 ## 1. IVR Tree Overview
 
+> **Design decision (v1.1):** The `ivr_appointments` sub-menu (7001) has been
+> merged directly into `ivr_main` (7000). When the patient says "Appointments",
+> the main agent presents the appointment sub-menu **inline** — no transfer hop.
+> This removes one round-trip, one Stasis re-entry, and one greeting.
+
 ```
 CALLER DIALS CLINIC NUMBER
         │
         ▼
-┌───────────────────────────────────────────────────────────┐
-│  EXT 7000 — MAIN IVR PARENT                               │
-│  "Welcome to Smart Doctor. Press 1 for Appointments,      │
-│   Press 2 for Diagnostics, Press 3 for Admissions."       │
-└───────────────┬───────────────┬───────────────────────────┘
-                │               │               │
-       Press 1  │      Press 2  │      Press 3  │
-                ▼               ▼               ▼
-        ┌───────────┐   ┌───────────┐   ┌───────────┐
-        │ EXT 7001  │   │ EXT 7005  │   │ EXT 7006  │
-        │ APPT MENU │   │DIAGNOSTIC │   │ ADMISSION │
-        └─────┬─────┘   │   MENU    │   │   MENU    │
-              │         └───────────┘   └───────────┘
-    ┌─────────┼─────────────────────┐
-    │         │                     │
-Press 1  Press 2  Press 3  Press 4  Press 5
-    │         │         │         │         │
-    ▼         ▼         ▼         ▼         ▼
+┌───────────────────────────────────────────────────────────────┐
+│  EXT 7000 — MAIN IVR (ivr_main)                               │
+│                                                               │
+│  STEP 1 — Top menu:                                           │
+│    "Appointments [1] / Diagnostics [2] / Admissions [3]"      │
+│                                                               │
+│  STEP 2 — If patient says "Appointments":                     │
+│    Inline sub-menu (NO transfer to 7001):                     │
+│    "New [1] / Reschedule [2] / Cancel [3] /                   │
+│     Check [4] / Doctors [5] / Back [0]"                       │
+└───┬──────────┬──────────┬──────────┬──────────┬──────────────┘
+    │          │          │          │          │
+  New[1]  Resched[2]  Cancel[3]  Check[4]  Doctors[5]
+    │          │          │          │          │
+    ▼          ▼          ▼          ▼          ▼
 ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐
 │ 7002  │ │ 7003  │ │ 7004  │ │ 7007  │ │ 7008  │
 │  NEW  │ │RESCHED│ │CANCEL │ │QUERY  │ │DOCTOR │
 │ APPT  │ │  APPT │ │ APPT  │ │ APPTS │ │ INFO  │
 └───────┘ └───────┘ └───────┘ └───────┘ └───────┘
+
+Press 2 (Diagnostics) → EXT 7005 (ivr_diagnostics)
+Press 3 (Admissions)  → EXT 7006 (ivr_admission)
+"Receptionist"        → EXT 100  (human reception)
 ```
 
 ---
@@ -105,8 +111,8 @@ This is the most important concept. When one AI agent transfers to another,
 
 | Extension | Context Name | Agent Role | Transfers To |
 |-----------|-------------|------------|-------------|
-| **7000** | `ivr_main` | Parent IVR — main menu | 7001, 7005, 7006 |
-| **7001** | `ivr_appointments` | Appointment sub-menu | 7002, 7003, 7004, 7007, 7008 |
+| **7000** | `ivr_main` | Main IVR — top menu **+ inline appointment sub-menu** | 7002, 7003, 7004, 7005, 7006, 7007, 7008, 100 |
+| ~~7001~~ | ~~`ivr_appointments`~~ | ~~Appointment sub-menu~~ | ⛔ Merged into 7000 — no longer needed as a transfer hop |
 | **7002** | `default` | New appointment booking | — (existing flow) |
 | **7003** | `ivr_reschedule` | Reschedule existing appointment | — |
 | **7004** | `ivr_cancel` | Cancel existing appointment | — |
@@ -302,16 +308,21 @@ the `contexts:` section.
 
 ### 7000 — Main IVR Parent
 
+> **v1.1:** The appointment sub-menu is now handled **inline** inside this
+> context. There is no transfer to 7001. When the patient says "Appointments",
+> Ava presents the sub-menu directly and waits for the sub-choice before
+> transferring to the actual task agent (7002–7008).
+
 ```yaml
 contexts:
 
   ivr_main:
     provider: deepgram
-    greeting: "Welcome to Smart Doctor Clinic."
+    greeting: ''
     prompt: |
       You are Ava, the AI receptionist for Smart Doctor Clinic.
-      Your job is to listen to the patient's need and route them
-      to the correct department. Be warm and brief.
+      Your job is to greet the patient, understand their need, and route them
+      to the correct service. Be warm, brief, and efficient.
 
       =========================================================
       PATIENT CONTEXT (injected before call):
@@ -319,51 +330,102 @@ contexts:
       - patient_name:   {patient_name}
       =========================================================
 
-      GREETING:
+      =========================================================
+      STEP 1 — GREETING
+      =========================================================
       If {lookup_success} is "true" and {patient_name} is not empty:
         Say: "Welcome back, {patient_name}! How can I help you today?"
       Else:
         Say: "Welcome to Smart Doctor Clinic. How can I help you today?"
 
       Then say:
-        "For appointment services, say Appointments or press 1.
+        "For appointments, say Appointments or press 1.
          For diagnostic services, say Diagnostics or press 2.
          For admission inquiries, say Admissions or press 3.
          To speak with our receptionist, say Receptionist at any time."
 
       =========================================================
-      ROUTING RULES
+      STEP 2 — MAIN MENU ROUTING
       =========================================================
-      Listen for the patient's choice and transfer IMMEDIATELY.
-      Do NOT ask follow-up questions before transferring.
-
-      - "appointments" / "appointment" / "1" / "one"
-          -> Call transfer_call with destination "appointment_menu"
+      Listen for the patient's top-level choice.
 
       - "diagnostics" / "diagnostic" / "lab" / "test" / "2" / "two"
+          -> Say: "Connecting you to our diagnostic services."
           -> Call transfer_call with destination "diagnostics_menu"
 
       - "admission" / "admissions" / "admit" / "ward" / "3" / "three"
+          -> Say: "Connecting you to our admissions team."
           -> Call transfer_call with destination "admission_menu"
 
       - "receptionist" / "operator" / "human" / "agent" / "help"
           -> Say: "Connecting you to our reception desk."
           -> Call transfer_call with destination "reception"
 
-      - Patient is confused or repeats wrong input 2 times:
-          -> Read the menu options again once.
+      - "appointments" / "appointment" / "book" / "schedule" / "1" / "one"
+          -> Do NOT transfer yet. Go to STEP 3.
+
+      - Patient is confused or gives 2 wrong inputs:
+          -> Re-read the top-level menu options once.
           -> If still unclear: transfer to "reception".
 
-      GENERAL RULES:
-      - Never mention tool names or technical terms.
-      - If the patient says goodbye without choosing, say farewell and
-        use hangup_call.
+      =========================================================
+      STEP 3 — APPOINTMENT SUB-MENU (inline — no transfer needed)
+      =========================================================
+      The patient wants appointment services. Present the sub-menu directly:
+
+      Say:
+        "For a new appointment, say New or press 1.
+         To reschedule an appointment, say Reschedule or press 2.
+         To cancel an appointment, say Cancel or press 3.
+         To check your existing appointments, say Check or press 4.
+         For doctor information, say Doctors or press 5.
+         To go back to the main menu, say Back or press 0."
+
+      Then listen and route:
+
+      - "new" / "book" / "new appointment" / "1" / "one"
+          -> Say: "Taking you to our booking service."
+          -> Call transfer_call with destination "new_appointment"
+
+      - "reschedule" / "change" / "move" / "2" / "two"
+          -> Say: "Taking you to our rescheduling service."
+          -> Call transfer_call with destination "reschedule_appointment"
+
+      - "cancel" / "3" / "three"
+          -> Say: "Taking you to our cancellation service."
+          -> Call transfer_call with destination "cancel_appointment_agent"
+
+      - "check" / "query" / "existing" / "what appointments" / "4" / "four"
+          -> Say: "Let me pull up your appointments."
+          -> Call transfer_call with destination "appointment_query"
+
+      - "doctor" / "doctors" / "information" / "specialist" / "5" / "five"
+          -> Say: "Let me get you our doctor information."
+          -> Call transfer_call with destination "doctor_info"
+
+      - "back" / "main menu" / "0" / "zero"
+          -> Go back to STEP 1 and re-read the main menu options.
+
+      - "receptionist" / "operator" / "human" / "help"
+          -> Say: "Connecting you to our reception desk."
+          -> Call transfer_call with destination "reception"
+
+      - Patient is confused or gives 2 wrong inputs in the sub-menu:
+          -> Re-read the appointment sub-menu options once.
+          -> If still unclear: transfer to "reception".
+
+      =========================================================
+      GENERAL RULES
+      =========================================================
+      - Never mention tool names or technical terms to the patient.
+      - Do NOT transfer to appointment_menu (7001) — handle appointments inline.
+      - If the patient says goodbye at any point, say farewell and use hangup_call.
 
     pre_call_tools:
       - name_look_up
 
     tools:
-      - transfer_call
+      - transfer
       - hangup_call
 ```
 
@@ -929,46 +991,51 @@ Real conversation examples for each agent.
 
 ---
 
-### 7000 — Main IVR: Known Patient
+### 7000 — Main IVR: Known Patient → Books Appointment (inline sub-menu)
 
 ```
-Ava:     "Welcome back, Ahmed Khan! How can I help you today?"
+Ava:     "Welcome back, Ahmed Khan! How can I help you today?
+          For appointments say one, for diagnostics say two,
+          for admissions say three."
 
-Patient: "I need to book an appointment."
+Patient: "Appointments."
 
-Ava:     "Taking you to our appointments service."
-         [calls transfer_call("appointment_menu") → transfers to 7001]
+Ava:     "For a new appointment, say New or press 1.
+          To reschedule an appointment, say Reschedule or press 2.
+          To cancel an appointment, say Cancel or press 3.
+          To check your existing appointments, say Check or press 4.
+          For doctor information, say Doctors or press 5."
+          [NO transfer — sub-menu presented inline by the same agent]
+
+Patient: "Cancel."
+
+Ava:     "Taking you to our cancellation service."
+         [calls transfer_call("cancel_appointment_agent") → transfers to 7004]
 ```
 
-### 7000 — Main IVR: Unknown Patient
+### 7000 — Main IVR: Unknown Patient → Diagnostics
 
 ```
 Ava:     "Welcome to Smart Doctor Clinic. How can I help you today?
           For appointments say one, for diagnostics say two,
           for admissions say three."
 
-Patient: "Uh, diagnostics?"
+Patient: "Diagnostics."
 
 Ava:     "Connecting you to our diagnostic services."
          [calls transfer_call("diagnostics_menu") → transfers to 7005]
 ```
 
----
-
-### 7001 — Appointment Menu
+### 7000 — Main IVR: Patient says Back from sub-menu
 
 ```
-Ava:     "Hello Ahmed, I can help you with appointments.
-          For a new appointment say New,
-          to reschedule say Reschedule,
-          to cancel say Cancel,
-          to check your appointments say Check,
-          for doctor information say Doctors."
+Ava:     "For a new appointment, say New or press 1..."
 
-Patient: "I want to cancel."
+Patient: "Back."
 
-Ava:     "Taking you to our cancellation service."
-         [calls transfer_call("cancel_appointment_agent") → transfers to 7004]
+Ava:     "Of course. For appointments say one, for diagnostics say two,
+          for admissions say three."
+          [No transfer — returns to top-level menu in the same session]
 ```
 
 ---
@@ -1247,8 +1314,8 @@ pre_call_tools:
 
 | Extension | Context | Ready? | Depends On |
 |-----------|---------|--------|-----------|
-| 7000 | `ivr_main` | ✅ Ready now | transfer tool |
-| 7001 | `ivr_appointments` | ✅ Ready now | transfer tool |
+| 7000 | `ivr_main` | ✅ Ready now | transfer tool — **handles appointment sub-menu inline** |
+| ~~7001~~ | ~~`ivr_appointments`~~ | ⛔ No longer a transfer hop | Merged into 7000 |
 | 7002 | `default` | ✅ Already built | — |
 | 7003 | `ivr_reschedule` | ⚠️ Needs HOS endpoint | `get_patient_appointments` API |
 | 7004 | `ivr_cancel` | ⚠️ Needs HOS endpoint | `get_patient_appointments` API |
