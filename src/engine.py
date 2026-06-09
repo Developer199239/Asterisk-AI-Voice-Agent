@@ -14157,7 +14157,8 @@ class Engine:
                                call_id=call_id,
                                tool=tool_name,
                                duration_ms=round(duration_ms, 2),
-                               output_keys=list(tool_results.keys()))
+                               output_keys=list(tool_results.keys()),
+                               output_values=tool_results)
                 except asyncio.TimeoutError:
                     duration_ms = (time.time() - tool_start) * 1000
                     exec_status = "timeout"

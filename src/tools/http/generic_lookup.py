@@ -290,7 +290,11 @@ class GenericHTTPLookupTool(PreCallTool):
                             results,
                         )
                     
-                    logger.info(f"HTTP lookup completed: {self.config.name} status={response.status} keys={list(results.keys())}")
+                    logger.info(
+                        f"HTTP lookup completed: {self.config.name} "
+                        f"status={response.status} "
+                        f"response={results}"
+                    )
         
         except aiohttp.ClientError as e:
             logger.warning(f"HTTP lookup request failed: {self.config.name} error={e}")
