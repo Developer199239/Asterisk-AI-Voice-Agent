@@ -187,7 +187,7 @@ class PreCallContext:
     
     # Channel variables from Asterisk
     channel_vars: Dict[str, str] = field(default_factory=dict)
-    
+
     # System access
     config: Any = None  # Config dict
     ari_client: Any = None  # ARIClient instance (for hold audio playback)
