@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from src.tools.http.path_utils import extract_path
 
 import aiohttp
+import structlog
 
 from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolPhase, ToolParameter
 from src.tools.context import ToolExecutionContext
@@ -27,7 +28,7 @@ from src.tools.http.debug_trace import (
     preview,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -234,11 +235,10 @@ class InCallHTTPTool(Tool):
             
             logger.info(
                 f"Executing in-call HTTP tool: {self.config.name}",
-                extra={
-                    "method": self.config.method,
-                    "url": self._redact_url(url),
-                    "call_id": context.call_id,
-                }
+                method=self.config.method,
+                url=self._redact_url(url),
+                request_body=json.dumps(json_body) if json_body is not None else body,
+                call_id=context.call_id,
             )
             
             # Make request
@@ -270,25 +270,17 @@ class InCallHTTPTool(Tool):
                         }
                     
                     if response.status not in self.config.success_status_codes:
+                        response_body = ""
+                        try:
+                            response_body = await response.text()
+                        except Exception as e:
+                            response_body = f"<failed to read body: {e}>"
                         logger.warning(
                             f"In-call HTTP tool returned non-success status: {self.config.name}",
-                            extra={"status": response.status, "call_id": context.call_id}
+                            status=response.status,
+                            response_body=response_body,
+                            call_id=context.call_id,
                         )
-                        if debug_enabled(logger):
-                            elapsed_ms = round((time.monotonic() - started) * 1000, 2)
-                            body_preview = ""
-                            try:
-                                body_preview = preview(await response.text())
-                            except Exception as e:
-                                body_preview = f"<failed to read body: {e}>"
-                            logger.debug(
-                                "[HTTP_TOOL_TRACE] response_non_200 in_call tool=%s status=%s elapsed_ms=%s body_preview=%s call_id=%s",
-                                self.config.name,
-                                response.status,
-                                elapsed_ms,
-                                body_preview,
-                                context.call_id,
-                            )
                         return {
                             "status": "failed",
                             "message": self.config.error_message,
@@ -417,11 +409,9 @@ class InCallHTTPTool(Tool):
                     
                     logger.info(
                         f"In-call HTTP tool completed: {self.config.name}",
-                        extra={
-                            "status": response.status,
-                            "call_id": context.call_id,
-                            "output_keys": list(result.get("data", {}).keys()),
-                        }
+                        status=response.status,
+                        call_id=context.call_id,
+                        output_values=result.get("data", {}),
                     )
                     
                     return result
