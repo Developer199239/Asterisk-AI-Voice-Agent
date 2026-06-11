@@ -1,0 +1,41 @@
+# Windows Docker Desktop override
+#
+# Replaces network_mode: host (Linux-only) with bridge networking.
+# With bridge mode, Docker Desktop creates real port proxies on Windows.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+#
+# Stop:
+#   docker compose -f docker-compose.yml -f docker-compose.windows.yml down
+#
+# Logs:
+#   docker compose -f docker-compose.yml -f docker-compose.windows.yml logs -f ai_engine
+
+name: asterisk-ai-voice-agent
+
+services:
+
+  ai_engine:
+    network_mode: bridge
+    ports:
+      - "8090:8090"                          # AudioSocket — Asterisk connects here
+      - "15000:15000"                        # Prometheus metrics + health endpoint
+      - "18080-18099:18080-18099/udp"        # ExternalMedia RTP (if used)
+    environment:
+      - LOCAL_WS_URL=ws://host.docker.internal:8765   # reach local_ai_server via Windows host
+
+  local_ai_server:
+    network_mode: bridge
+    ports:
+      - "8765:8765"                          # Local AI WebSocket
+    environment:
+      - LOCAL_WS_HOST=0.0.0.0               # bind to all interfaces
+
+  admin_ui:
+    network_mode: bridge
+    ports:
+      - "3003:3003"                          # Admin UI — http://localhost:3003
+    environment:
+      - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT:-//e/workstation/voip/Asterisk-AI/Asterisk-AI-Voice-Agent}
+      - HEALTH_CHECK_AI_ENGINE_URL=http://host.docker.internal:15000/health

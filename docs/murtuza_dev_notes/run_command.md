@@ -53,3 +53,10 @@ ava run: 3003
 admin/12345
 
 agent: 7000
+
+
+# windows
+docker compose -f docker-compose.yml -f docker-compose.windows.yml down
+docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d ai_engine
+
+docker compose -f docker-compose.yml -f docker-compose.windows.yml restart ai_engine
