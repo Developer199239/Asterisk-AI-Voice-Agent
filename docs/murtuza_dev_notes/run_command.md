@@ -60,3 +60,8 @@ docker compose -f docker-compose.yml -f docker-compose.windows.yml down
 docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d ai_engine
 
 docker compose -f docker-compose.yml -f docker-compose.windows.yml restart ai_engine
+
+.local.yml
+audiosocket:
+  host: 0.0.0.0
+  advertise_host: 192.168.0.108
