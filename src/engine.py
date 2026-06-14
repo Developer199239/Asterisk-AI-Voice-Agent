@@ -13684,6 +13684,7 @@ class Engine:
             # (similar to /mcp/status) and should not include secrets or PII.
             app.router.add_get('/tools/definitions', self._tools_definitions_handler)
             app.router.add_get('/sessions/stats', self._sessions_stats_handler)
+            app.router.add_get('/outbound/context-status', self._outbound_context_status_handler)
             runner = web.AppRunner(app)
             await runner.setup()
             # Host/port configurable via YAML health block with environment overrides (AAVA-30)
@@ -13792,6 +13793,52 @@ class Engine:
         except Exception as exc:
             logger.debug("Sessions stats handler failed", error=str(exc), exc_info=True)
             return web.json_response({"active_calls": 0, "error": "internal_error"}, status=500)
+
+    async def _outbound_context_status_handler(self, request):
+        """Return whether a given AI context has any active outbound calls.
+
+        Used by HOS backend queue worker to decide whether to trigger the next
+        outbound call or wait.
+
+        GET /outbound/context-status?context=outbound_reminder
+
+        Response:
+            {
+                "context": "outbound_reminder",
+                "busy": true,
+                "active_calls": 1,
+                "calls": [{"call_id": "...", "status": "active", "context": "outbound_reminder"}]
+            }
+        """
+        if not self._is_request_authorized(request):
+            return web.json_response({"error": "Forbidden"}, status=403)
+
+        context = request.rel_url.query.get("context", "").strip()
+        if not context:
+            return web.json_response(
+                {"error": "missing_context", "message": "Provide ?context=<context_name>"},
+                status=400,
+            )
+
+        try:
+            stats = await self.session_store.get_session_stats()
+            matching = [
+                {"call_id": s["call_id"], "status": s["status"], "context": s["context"]}
+                for s in stats.get("sessions", [])
+                if s.get("context") == context
+            ]
+            return web.json_response(
+                {
+                    "context": context,
+                    "busy": len(matching) > 0,
+                    "active_calls": len(matching),
+                    "calls": matching,
+                },
+                status=200,
+            )
+        except Exception as exc:
+            logger.error("Outbound context status handler failed", error=str(exc), exc_info=True)
+            return web.json_response({"error": "internal_error"}, status=500)
 
     async def _mcp_status_handler(self, request):
         """Return MCP server/tool status for Admin UI (sanitized)."""
