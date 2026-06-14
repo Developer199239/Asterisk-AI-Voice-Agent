@@ -36,7 +36,7 @@ import os
 from typing import Optional
 
 import aiohttp
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # ── Murtuza change ─────────────────────────────────────────────────────────
@@ -399,3 +399,54 @@ async def trigger_outbound_call(
     except Exception as e:
         logger.error("Unexpected error in outbound trigger: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+def _engine_health_base() -> str:
+    url = _env("HEALTH_CHECK_AI_ENGINE_URL", "http://localhost:15000/health")
+    return url.rstrip("/").rsplit("/health", 1)[0]
+
+
+@trigger_router.get(
+    "/context-status",
+    summary="Check if an AI context has an active call",
+    description=(
+        "Proxies GET /outbound/context-status?context=<name> to the engine health server. "
+        "Authenticates via X-Api-Key header (same key as /trigger). "
+        "No JWT required — designed for machine-to-machine calls from HOS backend."
+    ),
+)
+async def outbound_context_status(
+    context: str = Query(..., description="AI context name, e.g. outbound_reminder"),
+    x_api_key: Optional[str] = Header(default=None),
+):
+    api_key = _outbound_trigger_api_key()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Outbound trigger is not configured.")
+    if not x_api_key or x_api_key != api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    health_token = _env("HEALTH_API_TOKEN", "")
+    engine_url = f"{_engine_health_base()}/outbound/context-status"
+    headers = {}
+    if health_token:
+        headers["Authorization"] = f"Bearer {health_token}"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                engine_url,
+                params={"context": context},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                body = await resp.json(content_type=None)
+                if resp.status != 200:
+                    raise HTTPException(status_code=resp.status, detail=body)
+                return body
+    except HTTPException:
+        raise
+    except aiohttp.ClientConnectorError:
+        raise HTTPException(status_code=503, detail="Engine health server unreachable")
+    except Exception as exc:
+        logger.error("context-status proxy failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
