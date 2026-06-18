@@ -266,11 +266,19 @@ async def trigger_outbound_call(
         f"context={_safe(req.context)}",
     ])
 
+    # Encode appointment_id and patient_id into the extension string so the
+    # dialplan (Local;2) can read them via CUT().  Channel vars set via ARI
+    # only land on ;1 (Stasis side) — ;2 never sees them.
+    # Format: PHONE_APPTID_PATID  e.g. 6002_29_3
+    # Underscores are safe: phone numbers, appointment IDs, and patient IDs
+    # never contain underscores.  The _X. pattern in from-ai-outbound matches.
+    _dial_ext = f"{req.phone_number}_{req.appointment_id}_{req.patient_id}"
+
     ari_query_params = {
-        "endpoint": f"Local/{req.phone_number}@{dial_context}",
+        "endpoint": f"Local/{_dial_ext}@{dial_context}",
         "app":      _app_name(),
         "appArgs":  f"outbound_reminder,{_patient_arg}",
-        "timeout":  "60",
+        "timeout":  "20",
         "callerId": caller_id,
     }
 

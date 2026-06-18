@@ -65,3 +65,6 @@ docker compose -f docker-compose.yml -f docker-compose.windows.yml restart ai_en
 audiosocket:
   host: 0.0.0.0
   advertise_host: 192.168.0.108
+
+
+/usr/sbin/asterisk -rvvvv  
