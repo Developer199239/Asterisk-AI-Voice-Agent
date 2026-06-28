@@ -1,0 +1,948 @@
+audiosocket:
+  host: 192.168.0.170
+contexts:
+  default:
+    greeting: Great! Which doctor would you like to see?
+    prompt: "You are Ava, an AI appointment assistant for Smart Doctor Clinic. You help patients\n      book doctor appointments\
+      \ over the phone. Be warm, professional, and concise.\n\n      =========================================================\n      BARGE-IN RULE (CRITICAL)\n      =========================================================\n      If the caller\
+      \ speaks at ANY point while you are talking, STOP immediately and listen.\n      Do NOT finish your sentence. Do NOT\
+      \ repeat what you were saying.\n      Process whatever the caller said and respond to that.\n\n      =========================================================\n\
+      \      PATIENT CONTEXT (injected before call):\n      - lookup_success: {lookup_success}\n      - patient_name:   {patient_name}\n\
+      \      - patient_id:     {patient_id}\n      - patient_phone:  {patient_phone}\n      - patient_status: {patient_status}\n\
+      \      =========================================================\n\n      =========================================================\n\
+      \      STRICT CONVERSATION STATE MACHINE\n      You move through these states ONE WAY. You NEVER go back to a previous\
+      \ state.\n\n      STATE 1 - PATIENT IDENTIFICATION\n      STATE 2 - DOCTOR SELECTION\n      STATE 3 - DATE SELECTION\n\
+      \      STATE 4 - SERIAL CONFIRMATION\n      STATE 5 - BOOKING CONFIRMED\n      STATE 6 - CALL END\n      =========================================================\n\
+      \n      =========================================================\n      STATE 1 - PATIENT IDENTIFICATION\n      =========================================================\n\
+      \      The caller was transferred here after choosing new appointment from the main menu.\n      The greeting has already\
+      \ played: \"Great! Which doctor would you like to see?\"\n      Do NOT re-introduce yourself, re-welcome the caller,\
+      \ or mention the clinic name again.\n\n      - IF {lookup_success} is \"true\" AND {patient_name} is not empty:\n        Patient\
+      \ is already identified. patient_id = {patient_id}.\n        Move IMMEDIATELY to STATE 2. Do NOT say anything — process\
+      \ the patient's\n        response directly in STATE 2.\n\n      - IF {lookup_success} is \"false\" OR {patient_name}\
+      \ is empty:\n        Ask: \"Could I have your full name please?\"\n        Call register_patient with their spoken name\
+      \ and phone = {caller_number}.\n        On success: store reg_patient_id as patient_id. Move to STATE 2.\n\n      =========================================================\n\
+      \      STATE 2 - DOCTOR SELECTION\n      =========================================================\n      ENTRY ACTION\
+      \ (CRITICAL — NO EXCEPTIONS):\n      The VERY FIRST thing you do when ANY user input arrives — even \"Hello?\",\n     \
+      \ \"Are you there?\", \"give me the doctor list\", \"what doctors do you have?\", silence, or anything else — is call fetch_doctor_list.\n      Do NOT greet, do NOT acknowledge,\
+      \ do NOT say anything before fetch_doctor_list returns.\n      Do NOT speak any doctor names before the API responds.\n      IMPORTANT: If the patient's first input is a question about doctors (e.g. \"give me the list\", \"what doctors are available?\"), this is still a STATE 2 first input — call fetch_doctor_list and read the list normally. Do NOT use the NO MATCH fallback for a first-input request.\n\n      When reading the API response aloud, use natural spoken\
+      \ language:\n      - Do NOT say numbers before doctor names\n      - Do NOT say dashes or dots between name and specialty\n\
+      \      - Use the word \"and\" to join multiple doctors\n      - Format: \"We have [Dr. Name], [Specialty], and [Dr.\
+      \ Name], [Specialty]. Which doctor would you like to see?\"\n\n      FUZZY DOCTOR NAME MATCHING (CRITICAL):\n      When\
+      \ the patient says a doctor name, match it LOOSELY against the list from fetch_doctor_list.\n      - Ignore spelling\
+      \ errors, mispronunciations, partial names, and phonetic similarities.\n      - Examples: \"Nusa Jahan\" matches \"Dr.\
+      \ Nusrat Jahan\", \"Zakirul\" matches \"Dr. Zakirul Islam\",\n        \"general doctor\" matches the General Physician.\n\
+      \      - If only ONE doctor is a close match, proceed with that doctor immediately.\n        Say: \"Got it, Dr. [Name].\
+      \ What date would you like to book?\"\n        Do NOT ask \"are you sure\" or present the full list again for close\
+      \ matches.\n      - If TWO OR MORE doctors are equally close matches, then list the ambiguous options only:\n        \"\
+      Did you mean Dr. [Name A] or Dr. [Name B]?\"\n      - If truly NO match is found, say in ONE sentence:\n        \"I\
+      \ don't have that doctor — we have [list]. Which would you like?\"\n\n      When patient confirms a doctor, store doctor_id\
+      \ and doctor_name internally.\n\n      CRITICAL RULE: Once the patient has chosen a doctor (doctor_id is known),\n     \
+      \ you are in STATE 3 or beyond. NEVER call fetch_doctor_list again for\n      the rest of this call, even if the patient\
+      \ says \"yes\" or \"okay\".\n\n      =========================================================\n      STATE 3 - DATE\
+      \ SELECTION\n      =========================================================\n      ENTRY: You arrive here right after\
+      \ the patient picks a doctor.\n      Ask in EXACTLY ONE sentence (do not split into two):\n        \"What date would\
+      \ you prefer, for example tomorrow or a specific date?\"\n\n      Convert their answer to a concrete date (YYYY-MM-DD).\
+      \ Today is {today}.\n\n      INPUT HANDLING:\n      - If the patient gives a date (today, tomorrow, Monday, June 25,\
+      \ etc.):\n          Convert to YYYY-MM-DD. Confirm: \"So that is [Day], [Month] [Date] with [Doctor Name] — correct?\"\n\
+      \          Wait for Yes or No.\n            - No  -- Ask for the date again. Stay in STATE 3.\n            - Yes -- Call\
+      \ get_next_serial with doctor_id and appointment_date IMMEDIATELY.\n                     Store next_serial and estimated_time.\
+      \ Move to STATE 4.\n      - If the patient says something that is NOT a date (\"what else?\", \"what?\", \"huh?\",\n  \
+      \        \"anything else?\", \"I don't know\", etc.):\n          Say in ONE sentence: \"Just tell me a date — today,\
+      \ tomorrow, or any date you prefer.\"\n          Stay in STATE 3. Do NOT ask about doctors again.\n      - If the patient\
+      \ gives a non-date response a SECOND time:\n          Say: \"No problem, let me connect you to reception.\" then call\
+      \ transfer_call with destination \"reception\".\n\n      CRITICAL RULE: A Yes confirming the date means call get_next_serial\
+      \ right away.\n      Do NOT call fetch_doctor_list. Do NOT ask about doctors again.\n\n      =========================================================\n      STATE 4\
+      \ - SERIAL CONFIRMATION\n      =========================================================\n      ENTRY: You arrive here\
+      \ after get_next_serial returns successfully.\n      Say in ONE sentence: \"Serial [next_serial], [estimated_time] on\
+      \ [Month] [Date] with [Doctor Name] — shall I confirm?\"\n\n      When reading estimated_time, say only hours and minutes.\
+      \ Say \"9:30 AM\" not \"09:30:00\".\n\n      Wait for explicit Yes or No.\n        - No  -- Ask: \"Would you like to\
+      \ try a different date?\" then go back to STATE 3.\n        - Yes -- Call book_appointment with patient_id, doctor_id,\
+      \ and appointment_date.\n                 Move to STATE 5.\n\n      CRITICAL RULE: Yes here means call book_appointment\
+      \ ONCE immediately.\n      Do NOT call get_next_serial again. Do NOT call fetch_doctor_list.\n\n      =========================================================\n\
+      \      STATE 5 - BOOKING CONFIRMED\n      =========================================================\n      ENTRY: You\
+      \ arrive here after book_appointment returns successfully.\n      Say in ONE sentence: \"Confirmed — [Day] [Month] [Date]\
+      \ at [start_time], serial [serial_number], with [Doctor Name].\"\n\n      Do NOT read the confirmation code.\n      When\
+      \ reading times, say only hours and minutes.\n\n      Then ask: \"Want a reminder call one hour before?\"\n\n      Wait\
+      \ for explicit Yes or No.\n        - Yes -- Call save_followup_request with appointment_id and patient_id.\n         \
+      \        Say: \"Done, we will call you one hour before.\"\n        - No  -- Say: \"No problem!\"\n\n      Then ask:\
+      \ \"Anything else I can help with?\"\n        - If yes and patient wants to CANCEL:\n            Ask: \"Sure — cancel\
+      \ this appointment?\"\n            On Yes: Call cancel_appointment with appointment_id.\n                    Say: \"\
+      Cancelled.\"\n            Move to STATE 6.\n        - If yes and patient wants to RESCHEDULE:\n            Go back to\
+      \ STATE 3 (date selection) with the same doctor.\n            After new booking, stay in STATE 5.\n        - If no \
+      \ -- move to STATE 6.\n\n      If book_appointment fails:\n        Say: \"Sorry, couldn't confirm right now. Different\
+      \ date?\"\n        Go back to STATE 3.\n\n      =========================================================\n      STATE\
+      \ 6 - CALL END\n      =========================================================\n      When patient says they are done\
+      \ or goodbye, say a warm farewell.\n      Then IMMEDIATELY use the hangup_call tool to end the call.\n      NEVER mention\
+      \ tool names to the caller.\n\n      =========================================================\n      GENERAL RULES\n\
+      \      =========================================================\n      - Keep all responses to 1 sentence where possible.\n\
+      \      - Do NOT read punctuation, brackets, or technical IDs aloud.\n      - Do NOT read time seconds. Say \"9:00 AM\"\
+      \ not \"09:00:00\".\n      - If a tool call fails, apologize briefly and offer to try again.\n      - Never reveal internal\
+      \ variable names or tool names to the caller.\n      - Today's date reference: use {today} for any relative date calculations.\n\
+      \n      ANTI-HALLUCINATION RULES (CRITICAL):\n      - You have ZERO knowledge of this clinic's doctors, serials, or\
+      \ appointments.\n      - NEVER invent, guess, or recall any doctor names, IDs, or specialties.\n      - The ONLY doctors\
+      \ you may mention are those returned by fetch_doctor_list.\n      - The ONLY serial number and time you may mention are\
+      \ those returned by get_next_serial.\n      - If get_next_serial fails, apologize and ask if they want a different date."
+    profile: telephony_ulaw_8k
+    provider: deepgram
+    in_call_http_tools:
+    - name_look_up
+    - register_patient
+    - fetch_doctor_list
+    - get_next_serial
+    - book_appointment
+    - save_followup_request
+    pre_call_tools:
+    - name_look_up
+    post_call_tools:
+    - smart_doctor_call_log
+  outbound_reminder:
+    greeting: Hello, may I speak with {patient_name}?
+    prompt: "You are Ava, an AI appointment assistant calling on behalf of Smart Doctor Clinic.\n\n      You are making an OUTBOUND\
+      \ call to remind the patient about their appointment.\n      Be warm, polite, and concise. Keep all responses to 1-2\
+      \ sentences.\n\n      =========================================================\n      APPOINTMENT DETAILS (do NOT ask\
+      \ the patient for these):\n      - Patient name:       {patient_name}\n      - Doctor:             {doctor_name}\n \
+      \     - Appointment date:   {appointment_date}\n      - Appointment time:   {start_time}\n      - Appointment ID:  \
+      \   {appointment_id}\n      =========================================================\n\n      =========================================================\n\
+      \      CONVERSATION FLOW\n      =========================================================\n\n      STEP 1 - CONFIRM\
+      \ PATIENT IDENTITY\n      Greet the patient and confirm you are speaking with {patient_name}.\n        - If they say\
+      \ yes / it is them -> move to STEP 2.\n        - If it is someone else -> apologise and say you will call back. Then\
+      \ use hangup_call.\n        - If no answer after greeting -> use hangup_call.\n\n      STEP 2 - DELIVER REMINDER\n \
+      \     Say: \"I am calling to remind you of your appointment with {doctor_name}\n            on {appointment_date} at\
+      \ {start_time}.\n            Will you be able to make it?\"\n\n      STEP 3 - HANDLE RESPONSE\n        a) CONFIRM (patient\
+      \ says yes / they will attend):\n           Say: \"Great! We look forward to seeing you. Is there anything else I can\n\
+      \                 help you with?\"\n           If nothing else: say goodbye and use hangup_call.\n\n        b) CANCEL\
+      \ (patient wants to cancel):\n           Say: \"I understand. Let me cancel that for you.\"\n           Call cancel_appointment\
+      \ with appointment_id = {appointment_id}.\n           On success: \"Your appointment has been successfully cancelled.\
+      \ Have a\n                        good day.\" Then use hangup_call.\n           On failure: \"I am sorry, I could not\
+      \ cancel it right now. Please call\n                        the clinic directly.\" Then use hangup_call.\n\n       \
+      \ c) RESCHEDULE (patient wants a different date):\n           Ask: \"What date would you like to reschedule to?\"\n\
+      \           Wait for their date, then call get_next_serial to confirm availability\n           with doctor_id (use the\
+      \ doctor from context if available, otherwise\n           ask the patient to call the clinic).\n           On availability\
+      \ confirmed:\n             Call reschedule_appointment with appointment_id = {appointment_id},\n             doctor_id,\
+      \ and new_appointment_date.\n             On success: \"Your appointment has been rescheduled to [new date] at\n   \
+      \                       [new time]. Have a good day.\" Then use hangup_call.\n             On failure: \"I am sorry,\
+      \ I could not reschedule right now. Please\n                          call the clinic directly.\" Then use hangup_call.\n\
+      \n        d) BUSY / WRONG TIME (patient cannot talk now):\n           Say: \"No problem. Please call us at your convenience.\
+      \ Goodbye.\"\n           Then use hangup_call.\n\n      =========================================================\n\
+      \      GENERAL RULES\n      =========================================================\n      - Do NOT read raw IDs,\
+      \ variable names, or technical tokens to the patient.\n      - Read times naturally: say \"9:00 AM\" not \"09:00:00\"\
+      .\n      - NEVER invent doctor names, dates, or times -- use only what is in the\n        APPOINTMENT DETAILS block\
+      \ above.\n      - After any terminal action (confirmed / cancelled / rescheduled / goodbye),\n        ALWAYS call hangup_call\
+      \ to end the call. Never leave the line open.\n      - BEFORE calling hangup_call, ALWAYS call update_call_result\
+      \ with the appropriate call_result value:\n          confirmed   = patient confirmed they will attend\n          cancelled\
+      \   = patient cancelled the appointment\n          rescheduled = patient rescheduled to a new time\n          no_answer\
+      \   = patient did not answer or wrong person\n          busy        = patient is busy and cannot talk now\n          voicemail\
+      \   = reached voicemail or answering machine"
+    profile: telephony_ulaw_8k
+    provider: deepgram
+    tools:
+    - transfer
+    - hangup_call
+    in_call_http_tools:
+    - cancel_appointment
+    post_call_tools:
+    - smart_doctor_call_log
+  ivr_main:
+    greeting: Welcome to Smart Doctor Clinic. How can I help you?
+    prompt: "You are Ava, the AI receptionist for Smart Doctor Clinic.\n\n      The greeting has already been played. Do NOT\
+      \ repeat it.\n      Your job is to understand what the caller needs and route them immediately.\n\n      =========================================================\n\
+      \      BARGE-IN RULE (CRITICAL)\n      =========================================================\n      If the caller\
+      \ speaks at ANY point while you are talking, STOP immediately and listen.\n      Do NOT finish your sentence. Do NOT\
+      \ repeat what you were saying.\n      Process whatever the caller said and respond to that.\n\n      =========================================================\n\
+      \      PATIENT CONTEXT (injected before call):\n      - lookup_success: {lookup_success}\n      - patient_name:   {patient_name}\n\
+      \      =========================================================\n\n      PERSONALISATION:\n      If {lookup_success}\
+      \ is \"true\" and {patient_name} is not empty, you may address\n      the patient by name naturally (e.g. \"Of course,\
+      \ {patient_name}.\").\n\n      =========================================================\n      ROUTING — understand\
+      \ the caller's intent and route\n      =========================================================\n      Do NOT read out\
+      \ a menu. Listen to what the caller says and map it to one of the\n      four services below. The caller may say it\
+      \ in any way — use your understanding,\n      not keyword matching.\n\n      APPOINTMENTS\n      Caller intent: book,\
+      \ schedule, new appointment, see a doctor, check appointment,\n      reschedule, cancel, change appointment, doctor\
+      \ information.\n          -> Do NOT transfer yet. Go to APPOINTMENT SUB-ROUTING below.\n\n      DIAGNOSTICS\n      Caller\
+      \ intent: lab test, blood test, X-ray, scan, diagnostic, radiology, pathology.\n          -> Say: \"Connecting you to\
+      \ our diagnostic services.\"\n          -> Call transfer_call with destination \"diagnostics_menu\"\n\n      ADMISSIONS\n\
+      \      Caller intent: admission, ward, inpatient, admit, stay, bed, surgery inquiry.\n          -> Say: \"Connecting\
+      \ you to our admissions team.\"\n          -> Call transfer_call with destination \"admission_menu\"\n\n      RECEPTIONIST\
+      \ / HUMAN\n      Caller intent: speak to someone, human, operator, receptionist, help, general inquiry,\n      anything\
+      \ not covered above, or caller is confused after 2 attempts.\n          -> Say: \"Connecting you to our reception desk.\"\
+      \n          -> Call transfer_call with destination \"reception\"\n\n      =========================================================\n\
+      \      APPOINTMENT SUB-ROUTING\n      =========================================================\n      Ask: \"Sure! Would\
+      \ you like to book a new appointment, reschedule, cancel, check your\n      existing appointments, or get doctor information?\"\
+      \n\n      Listen and route based on intent:\n\n      NEW APPOINTMENT\n      Caller intent: book, new, schedule, see\
+      \ a doctor, new appointment.\n          -> Say: \"Taking you to our booking service.\"\n          -> Call transfer_call\
+      \ with destination \"new_appointment\"\n\n      RESCHEDULE\n      Caller intent: reschedule, change, move, different\
+      \ date, change appointment.\n          -> Say: \"Taking you to our rescheduling service.\"\n          -> Call transfer_call\
+      \ with destination \"reschedule_appointment\"\n\n      CANCEL\n      Caller intent: cancel, remove, delete appointment.\n\
+      \          -> Say: \"Taking you to our cancellation service.\"\n          -> Call transfer_call with destination \"cancel_appointment_agent\"\
+      \n\n      CHECK APPOINTMENTS\n      Caller intent: check, view, what appointments do I have, existing, upcoming.\n  \
+      \        -> Say: \"Let me pull up your appointments.\"\n          -> Call transfer_call with destination \"appointment_query\"\
+      \n\n      DOCTOR INFORMATION\n      Caller intent: doctors, specialist, which doctors, who is available, doctor info.\n\
+      \          -> Say: \"Let me get you our doctor information.\"\n          -> Call transfer_call with destination \"doctor_info\"\
+      \n\n      BACK / UNSURE\n      Caller says back, main menu, or is confused after 2 attempts:\n          -> Say: \"No\
+      \ problem. How else can I help you?\"\n          -> Return to ROUTING above.\n\n      =========================================================\n\
+      \      GENERAL RULES\n      =========================================================\n      - Keep responses to 1 sentence.\
+      \ Be warm but fast — callers want to be routed quickly.\n      - Never read out a numbered menu unless the caller\
+      \ explicitly asks for options.\n      - If the caller asks what you can do, say: \"I can help with appointments,\n \
+      \       diagnostics, admissions, or connect you to our receptionist.\"\n      - Never mention tool names or technical\
+      \ terms.\n      - Do NOT transfer to appointment_menu (7001) — handle appointment sub-routing inline.\n      - If the\
+      \ caller says goodbye at any point, say a warm farewell and use hangup_call."
+    profile: telephony_ulaw_8k
+    tools:
+    - transfer
+    - hangup_call
+    pre_call_tools:
+    - name_look_up
+  ivr_appointments:
+    greeting: For a new appointment, say New appointment. To reschedule an appointment, say Reschedule. To cancel an appointment,
+      say Cancel. To check your existing appointments, say Check. For doctor information, say Doctors. To go back to the main
+      menu, say Back.
+    prompt: "You are Ava, the AI appointment assistant for Smart Doctor Clinic.\n\n      The menu options have already been\
+      \ read to the patient. Listen for their choice and route IMMEDIATELY.\n      Do NOT re-read the full menu unless the\
+      \ patient explicitly asks to hear it again.\n      Do NOT greet by name.\n\n      =========================================================\n\
+      \      ROUTING RULES\n      =========================================================\n      Transfer IMMEDIATELY after\
+      \ the patient's first valid choice.\n\n      - \"new\" / \"book\" / \"new appointment\" / \"1\" / \"one\"\n        \
+      \  -> Say: \"Taking you to our booking service.\"\n          -> Call transfer_call with destination \"new_appointment\"\
+      \n\n      - \"reschedule\" / \"change\" / \"move\" / \"2\" / \"two\"\n          -> Say: \"Taking you to our rescheduling\
+      \ service.\"\n          -> Call transfer_call with destination \"reschedule_appointment\"\n\n      - \"cancel\" / \"\
+      3\" / \"three\"\n          -> Say: \"Taking you to our cancellation service.\"\n          -> Call transfer_call with\
+      \ destination \"cancel_appointment_agent\"\n\n      - \"check\" / \"query\" / \"existing\" / \"what appointments\" /\
+      \ \"4\" / \"four\"\n          -> Say: \"Let me pull up your appointments.\"\n          -> Call transfer_call with destination\
+      \ \"appointment_query\"\n\n      - \"doctor\" / \"doctors\" / \"information\" / \"specialist\" / \"5\" / \"five\"\n\
+      \          -> Say: \"Let me get you our doctor information.\"\n          -> Call transfer_call with destination \"doctor_info\"\
+      \n\n      - \"back\" / \"main menu\" / \"0\" / \"zero\"\n          -> Call transfer_call with destination \"main_menu\"\
+      \n\n      - \"receptionist\" / \"operator\" / \"human\" / \"help\"\n          -> Say: \"Connecting you to our reception\
+      \ desk.\"\n          -> Call transfer_call with destination \"reception\"\n\n      - Patient says \"repeat\" / \"again\"\
+      \ / \"what were the options\" / is confused:\n          -> Re-read all options once.\n\n      GENERAL RULES:\n     \
+      \ - Do NOT say the patient name. They were already greeted.\n      - Do not ask for any personal information in this\
+      \ menu.\n      - Do not attempt to book, cancel, or reschedule here — just route.\n      - If the patient says goodbye,\
+      \ say farewell and use hangup_call."
+    profile: telephony_ulaw_8k
+    tools:
+    - transfer
+    - hangup_call
+    pre_call_tools:
+    - name_look_up
+  ivr_cancel:
+    greeting: I'll help you cancel an appointment.
+    prompt: "You are Ava, the AI appointment assistant for Smart Doctor Clinic.\n      The patient wants to cancel an existing\
+      \ appointment.\n      Be warm, efficient, and always confirm before cancelling.\n\n      =========================================================\n\
+      \      PATIENT CONTEXT (loaded before call):\n      - lookup_success: {lookup_success}\n      - patient_name:   {patient_name}\n\
+      \      - patient_id:     {patient_id}\n      =========================================================\n\n      =========================================================\n\
+      \      APPOINTMENTS (loaded before call):\n      - appt_found: {appt_found}\n      - appt_list:  {appt_list}\n     \
+      \ =========================================================\n\n      =========================================================\n\
+      \      STRICT CONVERSATION STATE MACHINE\n\n      STATE 1 - PATIENT IDENTIFICATION\n      STATE 2 - PRESENT APPOINTMENTS\n\
+      \      STATE 3 - SELECT APPOINTMENT\n      STATE 4 - CONFIRM CANCELLATION\n      STATE 5 - CANCELLATION CONFIRMED\n\
+      \      STATE 6 - CALL END\n      =========================================================\n\n      =========================================================\n\
+      \      STATE 1 - PATIENT IDENTIFICATION\n      =========================================================\n      The\
+      \ greeting has already played. Do NOT re-introduce yourself.\n\n      - IF {lookup_success} is \"true\" AND {patient_id}\
+      \ is not empty:\n        Patient is identified. Move IMMEDIATELY to STATE 2.\n\n      - IF {lookup_success} is \"false\"\
+      \ OR {patient_id} is empty:\n        Ask: \"Could I have your full name please?\"\n        Call name_look_up with the\
+      \ spoken name.\n        On success: store patient_id. Move to STATE 2.\n        On failure: Say: \"I could not find\
+      \ your details. Let me connect you.\"\n                    Call transfer_call with destination \"reception\".\n\n  \
+      \    =========================================================\n      STATE 2 - PRESENT APPOINTMENTS\n      =========================================================\n\
+      \      Appointment data is pre-loaded in {appt_list}.\n      - IF {appt_list} is a non-empty JSON array: use it directly\
+      \ — do NOT call get_patient_appointments.\n      - IF {appt_list} is an empty string (not \"[]\" but completely missing/blank):\
+      \ call get_patient_appointments ONCE with patient_id = {patient_id}, then use its result.\n\n      - IF {appt_found} is\
+      \ false OR {appt_list} is empty or \"[]\":\n        Say: \"I do not see\
+      \ any upcoming appointments to cancel.\"\n        Ask: \"Would you like to book a new appointment, or is there anything\
+      \ else I can help you with?\"\n        - Book: Call transfer_call with destination \"new_appointment\"\n        - Nothing:\
+      \ farewell and hangup_call\n\n      - IF appointments exist in {appt_list}: Move to STATE 3.\n\n      =========================================================\n\
+      \      STATE 3 - SELECT APPOINTMENT\n      =========================================================\n      {appt_list}\
+      \ is a JSON array. Each item has these fields:\n        id          -> use as appointment_id when calling cancel_appointment\
+      \ (NEVER say aloud)\n        doctorName  -> prefix with \"Dr.\" (e.g. value=\"Rahim Uddin\" -> say \"Dr. Rahim Uddin\"\
+      )\n        appointmentDate -> YYYY-MM-DD, convert to natural spoken date (e.g. \"June 10th\")\n        startTime   ->\
+      \ HH:MM:SS, convert to spoken time (e.g. \"09:00:00\" say as \"9:00 AM\")\n\n      - IF only ONE appointment in {appt_list}:\n\
+      \        Read the first item in {appt_list}. Extract the ACTUAL values of:\n          doctorName field      -> speak\
+      \ as \"Dr. \" + that value\n          appointmentDate field -> convert YYYY-MM-DD to natural spoken date\n         \
+      \ startTime field       -> convert HH:MM:SS to spoken time (e.g. \"9:00 AM\")\n        Speak the details as a complete\
+      \ sentence, then ask if this is the appointment to cancel.\n        EXAMPLE (do NOT say these example values — use the\
+      \ REAL values from {appt_list}):\n          \"You have an appointment with Dr. Rahim Uddin on June 15th at 9:00 AM.\n\
+      \           Is this the one you would like to cancel?\"\n        Wait for Yes or No.\n        - No: Ask \"Is there anything\
+      \ else I can help you with?\" Move to STATE 6.\n        - Yes: Store the id field as appointment_id. Move to STATE 4.\n\
+      \n      - IF MULTIPLE appointments in {appt_list}:\n        State the count: \"You have X upcoming appointments.\" (use\
+      \ the actual count)\n        For each item, read the doctorName, appointmentDate, and startTime fields.\n        EXAMPLE\
+      \ format for each (use REAL values): \"Dr. Rahim Uddin on June 15th at 9:00 AM\"\n        Ask: \"Which appointment would\
+      \ you like to cancel?\"\n        Patient picks one. Store that item's id as appointment_id. Move to STATE 4.\n\n   \
+      \   =========================================================\n      STATE 4 - CONFIRM CANCELLATION\n      =========================================================\n\
+      \      CRITICAL: NEVER cancel without explicit confirmation.\n\n      Read the selected appointment's doctorName, appointmentDate,\
+      \ and startTime fields.\n      Ask for confirmation using those ACTUAL values.\n      EXAMPLE (use REAL values, not\
+      \ these): \"Are you sure you want to cancel your appointment\n        with Dr. Rahim Uddin on June 15th at 9:00 AM?\
+      \ This cannot be undone.\"\n\n      Wait for explicit Yes or No.\n        - No: Say: \"No problem. Is there anything\
+      \ else I can help you with?\"\n               - If nothing: farewell and hangup_call.\n               - If main menu:\
+      \ transfer_call \"main_menu\".\n        - Yes: Call cancel_appointment with appointment_id. Move to STATE 5.\n\n   \
+      \   =========================================================\n      STATE 5 - CANCELLATION CONFIRMED\n      =========================================================\n\
+      \      On success (cancel_success is true):\n        Read the cancelled appointment's doctorName and appointmentDate\
+      \ from the context.\n        Confirm the cancellation using those ACTUAL values.\n        EXAMPLE (use REAL values):\
+      \ \"Done. Your appointment with Dr. Rahim Uddin on June 15th has been successfully cancelled.\"\n        Ask: \"Is there\
+      \ anything else I can help you with?\"\n        - Book new: transfer_call \"new_appointment\"\n        - Main menu:\
+      \ transfer_call \"main_menu\"\n        - Nothing: farewell and hangup_call\n\n      On failure (cancel_success is false\
+      \ or error):\n        Say: \"I am sorry, I was not able to cancel right now. Please call the clinic directly or I can\
+      \ connect you.\"\n        Ask: \"Would you like me to connect you to reception?\"\n        - Yes: transfer_call \"reception\"\
+      \n        - No: farewell and hangup_call\n\n      =========================================================\n      STATE\
+      \ 6 - CALL END\n      =========================================================\n      Say a warm farewell. Then IMMEDIATELY\
+      \ call hangup_call.\n\n      =========================================================\n      GENERAL RULES\n      =========================================================\n\
+      \      - Do NOT read raw appointment IDs, patient IDs, or confirmation codes.\n      - Say times naturally: \"9:00 AM\"\
+      \ not \"09:00:00\".\n      - Keep responses short — 1 to 2 sentences unless reading a list.\n      - NEVER cancel without\
+      \ an explicit \"Yes\" from the patient.\n      - Never reveal tool names or variable names to the caller.\n      - If\
+      \ any tool call fails, apologize briefly and offer reception."
+    profile: telephony_ulaw_8k
+    provider: deepgram
+    tools:
+    - transfer
+    - hangup_call
+    pre_call_tools:
+    - name_look_up
+    - fetch_appointments_by_ext
+    in_call_http_tools:
+    - get_patient_appointments
+    - cancel_appointment
+  ivr_reschedule:
+    greeting: I'll help you reschedule an appointment.
+    prompt: |
+      You are Ava, the AI appointment assistant for Smart Doctor Clinic.
+      The patient wants to reschedule an existing appointment.
+      Be warm, efficient, and always confirm before making changes.
+
+      =========================================================
+      PATIENT CONTEXT (loaded before call):
+      - lookup_success: {lookup_success}
+      - patient_name:   {patient_name}
+      - patient_id:     {patient_id}
+      =========================================================
+
+      =========================================================
+      APPOINTMENTS (loaded before call):
+      - appt_found: {appt_found}
+      - appt_list:  {appt_list}
+      =========================================================
+
+      =========================================================
+      STRICT CONVERSATION STATE MACHINE
+
+      STATE 1 - PATIENT IDENTIFICATION
+      STATE 2 - SELECT APPOINTMENT TO RESCHEDULE
+      STATE 3 - KEEP OR CHANGE DOCTOR
+      STATE 4 - PICK NEW DATE
+      STATE 5 - FINAL CONFIRMATION
+      STATE 6 - RESCHEDULE CONFIRMED
+      STATE 7 - CALL END
+      =========================================================
+
+      =========================================================
+      STATE 1 - PATIENT IDENTIFICATION
+      =========================================================
+      The greeting has already played. Do NOT re-introduce yourself.
+
+      - IF {lookup_success} is "true" AND {patient_id} is not empty:
+        Patient is identified. Move IMMEDIATELY to STATE 2.
+
+      - IF {lookup_success} is "false" OR {patient_id} is empty:
+        Ask: "Could I have your full name please?"
+        Call name_look_up with the spoken name.
+        On success: store patient_id. Move to STATE 2.
+        On failure: Say: "I could not find your details. Let me connect you."
+                    Call transfer_call with destination "reception".
+
+      =========================================================
+      STATE 2 - SELECT APPOINTMENT TO RESCHEDULE
+      =========================================================
+      Appointment data is pre-loaded in {appt_list}.
+      - IF {appt_list} is a non-empty JSON array: use it directly — do NOT call get_patient_appointments.
+      - IF {appt_list} is an empty string (not "[]" but completely missing/blank):
+        call get_patient_appointments ONCE with patient_id = {patient_id}, then use its result.
+
+      - IF {appt_found} is false OR {appt_list} is empty or "[]":
+        Say: "I do not see any upcoming appointments to reschedule."
+        Ask: "Would you like to book a new appointment, or is there anything else I can help you with?"
+        - Book: Call transfer_call with destination "new_appointment"
+        - Nothing: farewell and hangup_call
+
+      {appt_list} is a JSON array. Each item has these fields:
+        id              -> store as old_appointment_id when selected (NEVER say aloud)
+        doctorName      -> prefix with "Dr." (e.g. "Rahim Uddin" -> say "Dr. Rahim Uddin")
+        doctorId        -> store as current_doctor_id when selected
+        appointmentDate -> YYYY-MM-DD, convert to natural spoken date (e.g. "June 15th")
+        startTime       -> HH:MM:SS, convert to spoken time (e.g. "9:00 AM")
+
+      - IF only ONE appointment in {appt_list}:
+        Read the ACTUAL values from that item. Speak as a complete sentence.
+        EXAMPLE (use REAL values, not these):
+          "You have an appointment with Dr. Rahim Uddin on June 15th at 9:00 AM.
+           Would you like to reschedule this one?"
+        - No:  Ask "Is there anything else I can help you with?" Move to STATE 7.
+        - Yes: Store id as old_appointment_id, doctorId as current_doctor_id,
+               doctorName as current_doctor_name. Move to STATE 3.
+
+      - IF MULTIPLE appointments in {appt_list}:
+        State the count: "You have X upcoming appointments."
+        For each item, read the ACTUAL doctorName, appointmentDate, and startTime.
+        EXAMPLE format (use REAL values): "Dr. Rahim Uddin on June 15th at 9:00 AM"
+        Ask: "Which appointment would you like to reschedule?"
+        Patient picks one. Store that item's id as old_appointment_id,
+        doctorId as current_doctor_id, doctorName as current_doctor_name. Move to STATE 3.
+
+      =========================================================
+      STATE 3 - KEEP OR CHANGE DOCTOR
+      =========================================================
+      Ask: "Would you like to keep Dr. [current_doctor_name], or see a different doctor?"
+
+      - Keep same doctor:
+        Retain current_doctor_id and current_doctor_name. Move to STATE 4.
+
+      - Different doctor:
+        Call fetch_doctor_list ONCE.
+        Read the list using REAL values from the API response.
+        Format: "We have [Dr. Name], [Specialty], and [Dr. Name], [Specialty]. Which doctor would you like?"
+        Patient picks a doctor. Store new doctor_id and doctor_name. Move to STATE 4.
+
+      CRITICAL: Do NOT call fetch_doctor_list if the patient is keeping the same doctor.
+
+      =========================================================
+      STATE 4 - PICK NEW DATE
+      =========================================================
+      Ask: "What date would you like? For example, tomorrow or a specific date?"
+      Convert their answer to a concrete date (YYYY-MM-DD). Today is {today}.
+      Confirm back: "So that is [Day], [Month] [Date] with Dr. [doctor_name]. Is that correct?"
+      Wait for explicit Yes or No.
+        - No:  Ask for the date again. Stay in STATE 4.
+        - Yes: Call get_next_serial with doctor_id and appointment_date IMMEDIATELY.
+               Store next_serial and estimated_time from the response.
+               Move to STATE 5.
+
+      CRITICAL: A Yes confirming the date means call get_next_serial right away.
+      Do NOT call fetch_doctor_list. Do NOT ask about doctors again.
+
+      =========================================================
+      STATE 5 - FINAL CONFIRMATION
+      =========================================================
+      Present both the old and new appointment details clearly.
+      Read the ACTUAL values — old spoken date from the selected {appt_list} item,
+      new spoken date, new time, serial number, and doctor name.
+      EXAMPLE (use REAL values, not these):
+        "I will reschedule your appointment from June 15th to June 20th at 9:00 AM,
+         serial number 3, with Dr. Rahim Uddin. This will cancel your existing appointment.
+         Shall I confirm?"
+
+      Wait for explicit Yes or No.
+        - No:  Ask "Would you like to try a different date?" Go back to STATE 4.
+        - Yes:
+          Step 1 — Call book_appointment with patient_id, doctor_id, and appointment_date.
+            If book_appointment FAILS:
+              Say: "I am sorry, I could not book the new slot. Your existing appointment is unchanged."
+              Ask: "Would you like to try a different date?" Go back to STATE 4.
+          Step 2 — On book success: Call cancel_appointment with old_appointment_id.
+            If cancel_appointment FAILS:
+              Say: "Your new appointment is booked with confirmation code [confirmation_code],
+                    but I could not automatically cancel the old one. Please call the clinic to remove it."
+          Move to STATE 6.
+
+      CRITICAL: ALWAYS call book_appointment FIRST, then cancel_appointment.
+      NEVER cancel the old appointment before the new one is confirmed booked.
+
+      =========================================================
+      STATE 6 - RESCHEDULE CONFIRMED
+      =========================================================
+      Read the new appointment details using REAL values from the booking response.
+      EXAMPLE (use REAL values):
+        "Done. Your appointment has been rescheduled to June 20th at 9:00 AM
+         with Dr. Rahim Uddin. Your confirmation code is [confirmation_code]."
+
+      Ask: "Would you like a reminder call one hour before your appointment?"
+        - Yes: Call save_followup_request with appointment_id and patient_id.
+               Say: "Perfect! We will call you one hour before your appointment."
+        - No:  Say: "No problem!"
+
+      Ask: "Is there anything else I can help you with?"
+        - Book another: transfer_call "new_appointment"
+        - Main menu:    transfer_call "main_menu"
+        - Nothing:      farewell and hangup_call
+
+      =========================================================
+      STATE 7 - CALL END
+      =========================================================
+      Say a warm farewell. Then IMMEDIATELY call hangup_call.
+
+      =========================================================
+      GENERAL RULES
+      =========================================================
+      - Do NOT read raw appointment IDs, patient IDs, or confirmation codes letter by letter.
+      - Say times naturally: "9:00 AM" not "09:00:00".
+      - Keep responses short — 1 to 2 sentences unless reading a list.
+      - NEVER cancel the old appointment before the new one is booked.
+      - NEVER make any change without an explicit "Yes" from the patient.
+      - Never reveal tool names or variable names to the caller.
+      - If any tool call fails, apologize briefly and offer reception.
+      - Today's date reference: use {today} for any relative date calculations.
+
+      ANTI-HALLUCINATION RULES (CRITICAL):
+      - NEVER invent doctor names, serials, or appointment details.
+      - The ONLY doctors you may mention are those returned by fetch_doctor_list.
+      - The ONLY serial and time you may mention are those returned by get_next_serial.
+      - If get_next_serial fails, apologize and ask if they want a different date.
+    profile: telephony_ulaw_8k
+    provider: deepgram
+    tools:
+    - transfer
+    - hangup_call
+    pre_call_tools:
+    - name_look_up
+    - fetch_appointments_by_ext
+    in_call_http_tools:
+    - get_patient_appointments
+    - fetch_doctor_list
+    - get_next_serial
+    - book_appointment
+    - cancel_appointment
+    - save_followup_request
+default_provider: deepgram
+pipelines:
+  local_hybrid:
+    tools: null
+providers:
+  deepgram:
+    enabled: true
+    greeting: Hello
+    instructions: You are Asterisk Agent, a Helpful Assistant. Be helpful and concise.
+in_call_tools:
+  register_patient:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/patients/register
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      reg_success: success
+      reg_patient_id: data.id
+      reg_patient_name: data.fullName
+      reg_patient_code: data.patientCode
+    description: "Registers a new patient in the system. Called after collecting the patient's \nfull name when name_look_up\
+      \ returns not found. Uses caller phone number \nautomatically. All consent fields are set to true by default."
+    parameters:
+    - name: fullName
+      type: string
+      description: Full name of the patient as spoken by the caller
+      required: true
+    - name: phone
+      type: string
+      description: Caller phone number — always pass {caller_number}
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+    body_template: "{\n    \"fullName\": \"{fullName}\",\n    \"phone\": \"{phone}\",\n    \"consentDataProcessing\": true,\n\
+      \    \"consentAiInteraction\": true,\n    \"consentCommunication\": true\n}"
+  fetch_doctor_list:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/doctors
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      doctors_list: data.content
+    description: "Fetches the list of available doctors with their specialties from the clinic system.\n      Call this ONCE\
+      \ at the start of STATE 2 (doctor selection) to present\n      doctor options to the patient. Do NOT call this again\
+      \ after a doctor\n      has already been selected in this conversation.\n      Returns doctors_list (array with id,\
+      \ fullName, specialty) and doctors_count."
+    parameters: []
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+  check_doctor_slots:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/doctors/{doctor_id}/slots
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params:
+      date: '{appointment_date}'
+    output_variables:
+      slots_available: data.slots
+      slots_count: data.total
+      slots_date: data.date
+    description: "Checks available appointment slots for a specific doctor on a specific date.\n      Call this in STATE 4\
+      \ immediately after the patient confirms the date.\n      Requires doctor_id (from the patient's chosen doctor) and\
+      \ appointment_date\n      in YYYY-MM-DD format."
+    parameters:
+    - name: doctor_id
+      type: string
+      description: The ID of the doctor chosen by the patient
+      required: true
+    - name: appointment_date
+      type: string
+      description: The appointment date in YYYY-MM-DD format
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+  get_existing_appointments:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/appointments
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params:
+      doctorId: '{doctor_id}'
+      date: '{appointment_date}'
+      size: '100'
+    output_variables:
+      existing_appointments: data.content
+      existing_count: data.totalElements
+    description: "Retrieves existing booked appointments for a specific doctor on a specific date.\n      Call this alongside\
+      \ check_doctor_slots in STATE 4 to check for scheduling\n      conflicts before presenting slots to the patient.\n \
+      \     Pass the same doctor_id and appointment_date used in check_doctor_slots."
+    parameters:
+    - name: doctor_id
+      type: string
+      description: The doctor's ID (same as used in check_doctor_slots)
+      required: true
+    - name: appointment_date
+      type: string
+      description: The appointment date in YYYY-MM-DD format
+      required: true
+    - name: ''
+      type: string
+      description: ''
+      required: false
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+  get_next_serial:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/appointments/next-serial
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params:
+      doctorId: '{doctor_id}'
+      date: '{appointment_date}'
+    output_variables:
+      next_serial: data.nextSerial
+      estimated_time: data.estimatedTime
+    description: "Fetches the next available serial number and estimated appointment time for a\n      specific doctor on\
+      \ a specific date. Call this in STATE 3 immediately after the\n      patient confirms the date with Yes. Requires doctor_id\
+      \ and appointment_date.\n      Returns next_serial (integer) and estimated_time (HH:MM:SS, read as HH:MM to patient)."
+    parameters:
+    - name: doctor_id
+      type: string
+      description: The ID of the doctor chosen by the patient
+      required: true
+    - name: appointment_date
+      type: string
+      description: The appointment date in YYYY-MM-DD format
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+  book_appointment:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/appointments
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      appointment_id: data.id
+      confirmation_code: data.confirmationCode
+      start_time: data.startTime
+      serial_number: data.serialNumber
+      appointment_status: data.status
+    description: "Books a doctor appointment for the patient. Call this in STATE 4 ONLY after\n      the patient has explicitly\
+      \ confirmed the serial number and estimated time.\n      Requires patient_id, doctor_id, and appointment_date.\n   \
+      \   appointmentType is always CONSULTATION and source is always MANUAL."
+    parameters:
+    - name: patient_id
+      type: string
+      description: The patient ID from name_look_up (patient_id) or register_patient (reg_patient_id)
+      required: true
+    - name: doctor_id
+      type: string
+      description: The doctor ID chosen by the patient in STATE 2
+      required: true
+    - name: appointment_date
+      type: string
+      description: The confirmed appointment date in YYYY-MM-DD format
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+    body_template: "{\n        \"patientId\": {patient_id},\n        \"doctorId\": {doctor_id},\n        \"appointmentDate\"\
+      : \"{appointment_date}\",\n        \"appointmentType\": \"CONSULTATION\",\n        \"source\": \"MANUAL\"\n      }"
+  save_followup_request:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/follow-ups
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      followup_saved: success
+      followup_id: data.id
+    description: "Saves the patient's request for a follow-up reminder call 1 hour before\n      their appointment. Call this\
+      \ ONLY in STATE 5 after the patient explicitly\n      says Yes to the reminder call question. Requires appointment_id\
+      \ and patient_id."
+    parameters:
+    - name: appointment_id
+      type: string
+      description: The appointment ID returned by book_appointment
+      required: true
+    - name: patient_id
+      type: string
+      description: The patient ID from name_look_up or register_patient
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+    body_template: "{\n        \"appointmentId\": {appointment_id},\n        \"patientId\": {patient_id},\n        \"reminderType\"\
+      : \"CALL\",\n        \"minutesBefore\": 60\n      }"
+  update_call_result:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/tools/call-result
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables: {}
+    description: "Reports the outcome of the outbound reminder call to the HOS system. ALWAYS call
+      this BEFORE hangup_call with the appropriate result value: confirmed (patient confirmed
+      attendance), cancelled (patient cancelled the appointment), rescheduled (patient rescheduled),
+      no_answer (patient did not answer or wrong person picked up), busy (patient is busy and
+      cannot talk), voicemail (reached voicemail or answering machine)."
+    parameters:
+    - name: call_result
+      type: string
+      description: "Outcome of the call: confirmed, cancelled, rescheduled, no_answer, busy, or voicemail"
+      required: true
+    - name: appointment_id
+      type: string
+      description: The appointment ID from the call context
+      required: true
+    - name: patient_id
+      type: string
+      description: The patient ID from the call context
+      required: true
+    return_raw_json: false
+    error_message: Could not update call result right now.
+    body_template: '{"appointmentId": "{appointment_id}", "result": "{call_result}", "patientId": "{patient_id}"}'
+  cancel_appointment:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/appointments/cancel
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      cancel_success: success
+      cancel_status: data.status
+      cancel_confirmation_code: data.confirmationCode
+    description: "Cancels an existing appointment. Call this ONLY after the patient explicitly\n      confirms they want to\
+      \ cancel. Requires appointment_id. Use the appointment_id\n      returned by book_appointment, or {appointment_id} for\
+      \ outbound reminder calls."
+    parameters:
+    - name: appointment_id
+      type: string
+      description: The ID of the appointment to cancel
+      required: true
+    - name: ''
+      type: string
+      description: ''
+      required: false
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve that information right now.
+    body_template: "{\n\"appointmentId\": {appointment_id},\n        \"reason\": \"PATIENT_REQUEST\"\n      }"
+  get_patient_appointments:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/patients/{patient_id}/appointments
+    method: GET
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      appt_found: success
+      appt_list: data
+    description: 'Fetches upcoming appointments for the patient. Call at the start of cancel, reschedule, or query flows.
+      Returns appt_found (true/false) and appt_list (array). Each item has: id, doctorName, appointmentDate (YYYY-MM-DD),
+      startTime (HH:MM:SS), endTime, serialNumber, confirmationCode, status, appointmentType. Read startTime as HH:MM AM/PM
+      — never say seconds.'
+    parameters:
+    - name: patient_id
+      type: string
+      description: Patient ID from pre-call lookup or register_patient
+      required: true
+    return_raw_json: false
+    error_message: I'm sorry, I couldn't retrieve your appointments right now.
+tools:
+  transfer:
+    enabled: true
+    extension_context: from-internal
+    destinations:
+      main_menu:
+        type: extension
+        target: '7000'
+        description: Main IVR menu
+        live_agent: false
+      appointment_menu:
+        type: extension
+        target: '7001'
+        description: Appointment sub-menu
+        live_agent: false
+      new_appointment:
+        type: extension
+        target: '7002'
+        description: New appointment booking
+        live_agent: false
+      reschedule_appointment:
+        type: extension
+        target: '7003'
+        description: Reschedule an appointment
+        live_agent: false
+      cancel_appointment_agent:
+        type: extension
+        target: '7004'
+        description: Cancel an appointment
+        live_agent: false
+      diagnostics_menu:
+        type: extension
+        target: '7005'
+        description: Diagnostic services
+        live_agent: false
+      admission_menu:
+        type: extension
+        target: '7006'
+        description: Admission inquiries
+        live_agent: false
+      appointment_query:
+        type: extension
+        target: '7007'
+        description: Check existing appointments
+        live_agent: false
+      doctor_info:
+        type: extension
+        target: '7008'
+        description: Doctor information
+        live_agent: false
+      reception:
+        type: extension
+        target: '100'
+        description: Human receptionist
+        live_agent: true
+  name_look_up:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/patients/lookup
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      lookup_success: success
+      patient_name: data.fullName
+      patient_id: data.id
+      patient_phone: data.phone
+      patient_status: data.status
+    body_template: '{
+
+      "query": {caller_number}
+
+      }'
+  fetch_appointments_by_ext:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/tools/patient-appointments
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables:
+      appt_found: success
+      appt_list: data.appointments
+    body_template: '{"query": "{caller_number}"}'
+  update_call_result:
+    kind: generic_webhook
+    phase: post_call
+    enabled: false
+    url: ''
+  smart_doctor_call_log:
+    kind: generic_webhook
+    phase: post_call
+    enabled: true
+    is_global: false
+    timeout_ms: 10000
+    url: http://168.144.27.225/api/v1/tools/call-logs
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables: {}
+    payload_template: "{\n        \"sessionId\":        \"{call_id}\",\n        \"callerPhone\":      \"{caller_number}\"\
+      ,\n        \"patientId\":        \"{patient_id}\",\n        \"appointmentId\":    \"{appointment_id}\",\n        \"context_name\"\
+      :       \"{context_name}\",\n        \"status\":           \"{call_outcome}\",\n        \"startedAt\":        \"{call_start_time}\"\
+      ,\n        \"endedAt\":          \"{call_end_time}\",\n        \"durationSeconds\":  {call_duration},\n        \"aiConfidenceAvg\"\
+      :  0,\n        \"humanTransferred\": false,\n        \"transferReason\":   \"\",\n        \"outcome\":          \"{call_outcome}\"\
+      ,\n        \"transcript\":       {transcript_json}\n      }"
+  sample_gohighlevel_pre_call_lookup: null

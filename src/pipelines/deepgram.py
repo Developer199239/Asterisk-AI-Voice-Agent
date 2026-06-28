@@ -1,786 +1,1719 @@
-"""
-# Milestone7: Deepgram cloud component adapters for configurable pipelines.
-
-This module introduces concrete implementations for Deepgram STT and TTS adapters
-used by the pipeline orchestrator. Both adapters honour pipeline/provider options,
-support latency-aware logging, and integrate with Deepgram's REST APIs for
-pre-recorded STT (batch processing) and TTS (synthesis).
-"""
-
-from __future__ import annotations
-
 import asyncio
+import contextlib
 import json
-import time
-import uuid
-from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable, Dict, Iterable, Optional, Tuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-
-import aiohttp
 import websockets
+import time
+import array
+import re
+import audioop
+from typing import Callable, Optional, List, Dict, Any
+import websockets.exceptions
+from websockets.asyncio.client import ClientConnection
 
-from ..audio import convert_pcm16le_to_target_format, mulaw_to_pcm16le, resample_audio
-from ..config import AppConfig, DeepgramProviderConfig
-from ..logging_config import get_logger
-from .base import STTComponent, TTSComponent
+from structlog import get_logger
+from prometheus_client import Gauge, Info
+from ..audio.resampler import (
+    mulaw_to_pcm16le,
+    pcm16le_to_mulaw,
+    resample_audio,
+)
+from ..config import LLMConfig
+from .base import AIProviderInterface, ProviderCapabilities
+
+# Tool calling support
+from src.tools.registry import tool_registry
+from src.tools.adapters.deepgram import DeepgramToolAdapter
 
 logger = get_logger(__name__)
 
 
-# Shared helpers -----------------------------------------------------------------
+def _log_provider_task_exception(task: asyncio.Task) -> None:
+    """Done-callback: log exceptions from fire-and-forget provider tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error("Provider background task failed", task_name=task.get_name(), error=str(exc), exc_info=exc)
 
 
-def _normalize_stt_url(base_url: Optional[str]) -> str:
-    """Normalize base URL to Deepgram pre-recorded STT endpoint."""
-    default = "https://api.deepgram.com/v1/listen"
-    if not base_url:
-        return default
-    parsed = urlparse(base_url)
-    if parsed.path.endswith("/v1/listen"):
-        return urlunparse(parsed)
-    path = parsed.path.rstrip("/") + "/v1/listen"
-    return urlunparse(parsed._replace(path=path))
+def build_listen_provider_block(
+    *,
+    model: str,
+    eot_threshold: Optional[float] = 0.7,
+    eager_eot_threshold: Optional[float] = None,
+    keyterms: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Build the `agent.listen.provider` block for the Deepgram Voice Agent
+    Settings JSON.
 
+    Pre-v6.5.0 the listen model was hardcoded to ``nova-3`` regardless of
+    config. v6.5.0 makes the model honor config and additionally builds a
+    Flux-aware payload when the configured model starts with ``flux``,
+    matching Deepgram's published Voice Agent configuration:
+    https://developers.deepgram.com/docs/configure-voice-agent
 
-def _normalize_rest_url(base_url: Optional[str]) -> str:
-    default = "https://api.deepgram.com/v1/speak"
-    if not base_url:
-        return default
-    parsed = urlparse(base_url)
-    if parsed.path.endswith("/v1/speak"):
-        return urlunparse(parsed)
-    path = parsed.path.rstrip("/") + "/v1/speak"
-    return urlunparse(parsed._replace(path=path))
+    Behavior:
+      - Nova-* models (default): emit ``{"type": "deepgram", "model": <model>}``.
+      - Flux models (``flux-general-en``, ``flux-general-multi``): additionally
+        emit ``version: "v2"`` (required) plus the Flux-specific tuning fields
+        ``eot_threshold`` (default 0.7, valid range 0.5-0.9), optional
+        ``eager_eot_threshold`` (default None, valid range 0.3-0.9), and
+        optional ``keyterms`` (list of strings to bias recognition).
 
+    Centralized as a module-level pure function so the Settings-builder
+    behavior can be unit-tested without spinning up a full
+    ``DeepgramProvider`` (which requires WebSocket, asyncio loop, etc.).
 
-def _merge_dicts(base: Dict[str, Any], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    merged = dict(base)
-    if override:
-        for key, value in override.items():
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                merged[key] = _merge_dicts(merged[key], value)
-            elif value is not None:
-                merged[key] = value
-    return merged
+    Args:
+        model: The configured listen model. Required.
+        eot_threshold: Flux end-of-turn confidence threshold. Ignored for Nova.
+        eager_eot_threshold: Flux eager end-of-turn confidence threshold.
+            Ignored for Nova; ``None`` disables the eager VAD on Flux.
+        keyterms: Optional list of strings to bias Flux recognition. Ignored
+            for Nova; empty/None values are dropped.
 
-
-def _bytes_per_sample(encoding: str) -> int:
-    fmt = (encoding or "").lower()
-    if fmt in ("ulaw", "mulaw", "mu-law", "g711_ulaw"):
-        return 1
-    return 2
-
-
-# Deepgram STT Adapter ------------------------------------------------------------
-
-
-@dataclass
-class _STTSessionState:
-    """Tracks per-call STT session state (API key, model, encoding, etc)."""
-    options: Dict[str, Any]
-    http_session: aiohttp.ClientSession
-    # Streaming fields (optional, only used when streaming: true)
-    websocket: Optional[Any] = None
-    transcript_queue: Optional[asyncio.Queue] = None
-    receiver_task: Optional[asyncio.Task] = None
-    active: bool = True
-    resample_state: Optional[tuple] = None
-
-
-class DeepgramSTTAdapter(STTComponent):
+    Returns:
+        dict suitable for use as the ``agent.listen.provider`` block.
     """
-    # Milestone7: Deepgram STT adapter with dual-mode support.
+    block: Dict[str, Any] = {"type": "deepgram", "model": model}
+    if not isinstance(model, str) or not model.lower().startswith("flux"):
+        return block
 
-    Supports both REST (batch) and WebSocket (streaming) modes:
-    - REST mode (streaming: false): HTTP POST for discrete chunks
-    - Streaming mode (streaming: true): WebSocket for continuous audio
+    # Flux-specific augmentations.
+    block["version"] = "v2"
+    if eot_threshold is not None:
+        block["eot_threshold"] = float(eot_threshold)
+    if eager_eot_threshold is not None:
+        block["eager_eot_threshold"] = float(eager_eot_threshold)
+    if isinstance(keyterms, list) and keyterms:
+        cleaned = [str(k) for k in keyterms if str(k).strip()]
+        if cleaned:
+            block["keyterms"] = cleaned
+    return block
 
-    Configure via pipeline options:
-      options:
-        stt:
-          streaming: false  # Use REST API (transcribe method)
-          streaming: true   # Use WebSocket streaming (start_stream, send_audio, iter_results)
 
-    Note: This is separate from src/providers/deepgram.py (monolithic full agent).
-    """
+_DEEPGRAM_INPUT_RATE = Gauge(
+    "ai_agent_deepgram_input_sample_rate_hz",
+    "Configured Deepgram input sample rate per call",
+)
+_DEEPGRAM_OUTPUT_RATE = Gauge(
+    "ai_agent_deepgram_output_sample_rate_hz",
+    "Configured Deepgram output sample rate per call",
+)
+_DEEPGRAM_SESSION_AUDIO_INFO = Info(
+    "ai_agent_deepgram_session_audio",
+    "Deepgram session audio encodings/sample rates",
+)
+_DEEPGRAM_SETTINGS_ACK_LATENCY_MS = Gauge(
+    "ai_agent_deepgram_settings_ack_latency_ms",
+    "Latency from Settings send to SettingsApplied ACK (ms)",
+)
 
-    def __init__(
-        self,
-        component_key: str,
-        app_config: AppConfig,
-        provider_config: DeepgramProviderConfig,
-        options: Optional[Dict[str, Any]] = None,
-        *,
-        session_factory: Optional[Callable[[], aiohttp.ClientSession]] = None,
-    ):
-        self.component_key = component_key
-        self._app_config = app_config
-        self._provider_defaults = provider_config
-        self._pipeline_defaults = options or {}
-        self._session_factory = session_factory
-        self._sessions: Dict[str, _STTSessionState] = {}
-        self._default_timeout = float(self._pipeline_defaults.get("response_timeout_sec", 5.0))
+class DeepgramProvider(AIProviderInterface):
+    @staticmethod
+    def _canonicalize_encoding(value: Optional[str]) -> str:
+        t = (value or '').strip().lower()
+        if t in ('mulaw', 'mu-law', 'g711_ulaw', 'g711ulaw', 'g711-ula', 'g711ulaw', 'ulaw'):
+            return 'mulaw'
+        if t in ('slin16', 'linear16', 'pcm16'):
+            return 'linear16'
+        return t or 'mulaw'
 
-    async def start(self) -> None:
-        # No global warm-up required yet.
-        logger.debug(
-            "Deepgram STT adapter initialized",
-            component=self.component_key,
-            default_model=self._provider_defaults.model,
-        )
-
-    async def stop(self) -> None:
-        # Close any lingering sessions.
-        for call_id in list(self._sessions.keys()):
-            await self.close_call(call_id)
-
-    async def open_call(self, call_id: str, options: Dict[str, Any]) -> None:
-        merged = self._compose_options(options)
-        api_key = merged.get("api_key")
-        if not api_key:
-            raise RuntimeError("Deepgram STT requires an API key")
-
-        # Create HTTP session for reuse across multiple transcribe() calls
-        factory = self._session_factory or aiohttp.ClientSession
-        http_session = factory()
-        self._sessions[call_id] = _STTSessionState(options=merged, http_session=http_session)
-
-        logger.info(
-            "Deepgram STT session opened (REST API)",
-            call_id=call_id,
-            model=merged.get("model"),
-            encoding=merged.get("encoding"),
-            sample_rate=merged.get("sample_rate"),
-            component=self.component_key,
-        )
-
-    async def close_call(self, call_id: str) -> None:
-        session = self._sessions.pop(call_id, None)
-        if not session:
-            return
-        
-        # Close streaming resources if active
-        if session.websocket:
-            session.active = False
-            if session.receiver_task and not session.receiver_task.done():
-                session.receiver_task.cancel()
-                try:
-                    await session.receiver_task
-                except asyncio.CancelledError:
-                    pass
-            try:
-                await session.websocket.close()
-            except Exception:
-                pass
-        
-        # Close HTTP session
+    def _get_config_value(self, key: str, default: Optional[Any] = None) -> Optional[Any]:
         try:
-            await session.http_session.close()
-        finally:
-            logger.info("Deepgram STT session closed", call_id=call_id)
+            if isinstance(self.config, dict):
+                return self.config.get(key, default)
+            return getattr(self.config, key, default)
+        except Exception:
+            return default
 
-    async def transcribe(
-        self,
-        call_id: str,
-        audio_pcm16: bytes,
-        sample_rate_hz: int,
-        options: Dict[str, Any],
-    ) -> str:
-        session = self._sessions.get(call_id)
-        if not session:
-            raise RuntimeError(f"Deepgram STT session not found for call {call_id}")
-
-        merged = _merge_dicts(session.options, options or {})
-        timeout = float(merged.get("response_timeout_sec", self._default_timeout))
-        request_id = f"dg-stt-{uuid.uuid4().hex[:12]}"
-
-        # Get API requirements from session options (set during open_call)
-        api_encoding = merged.get("encoding", "linear16")
-        api_sample_rate = int(merged.get("sample_rate", 16000))
-        
-        # Transcode audio to match API expectations
-        api_audio = audio_pcm16
-        
-        # Resample if needed
-        if sample_rate_hz != api_sample_rate:
-            api_audio, session.resample_state = resample_audio(api_audio, sample_rate_hz, api_sample_rate, state=session.resample_state)
-            logger.debug(
-                "STT resampled audio",
-                call_id=call_id,
-                from_rate=sample_rate_hz,
-                to_rate=api_sample_rate,
-                bytes=len(api_audio),
-            )
-        
-        # Encode if needed
-        if api_encoding in ("mulaw", "g711_ulaw", "mu-law"):
-            import audioop
-            api_audio = audioop.lin2ulaw(api_audio, 2)
-            logger.debug("STT encoded PCM16 → mulaw", call_id=call_id, bytes=len(api_audio))
-        elif api_encoding in ("alaw", "g711_alaw"):
-            import audioop
-            api_audio = audioop.lin2alaw(api_audio, 2)
-            logger.debug("STT encoded PCM16 → alaw", call_id=call_id, bytes=len(api_audio))
-        # "linear16", "pcm16" = no encoding needed
-
-        # Build query parameters
-        query_params = {
-            "model": merged.get("model"),
-            "language": merged.get("language"),
-            "smart_format": str(merged.get("smart_format", True)).lower(),
-        }
-        query_params = {k: v for k, v in query_params.items() if v}
-
-        # Build REST URL
-        base_url = _normalize_stt_url(merged.get("base_url"))
-        parsed = urlparse(base_url)
-        existing = dict(parse_qsl(parsed.query))
-        existing.update({k: str(v) for k, v in query_params.items()})
-        rest_url = urlunparse(parsed._replace(query=urlencode(existing)))
-
-        # Determine Content-Type based on encoding
-        if api_encoding in ("mulaw", "g711_ulaw", "mu-law"):
-            content_type = f"audio/mulaw; rate={api_sample_rate}"
-        elif api_encoding in ("alaw", "g711_alaw"):
-            content_type = f"audio/alaw; rate={api_sample_rate}"
-        elif api_encoding in ("linear16", "pcm16"):
-            content_type = f"audio/pcm; rate={api_sample_rate}"
-        else:
-            content_type = "audio/wav"
-
-        headers = {
-            "Authorization": f"Token {merged.get('api_key')}",
-            "Content-Type": content_type,
-            "User-Agent": "Asterisk-AI-Voice-Agent/1.0",
-        }
-
-        logger.debug(
-            "Deepgram STT sending audio chunk (REST)",
-            call_id=call_id,
-            request_id=request_id,
-            chunk_bytes=len(api_audio),
-            api_encoding=api_encoding,
-            api_sample_rate=api_sample_rate,
-            url=rest_url,
-        )
-
-        started_at = time.perf_counter()
+    def _extract_request_session_ids(self, payload: Any) -> tuple[Optional[str], Optional[str]]:
+        rid: Optional[str] = None
+        sid: Optional[str] = None
         try:
-            async with session.http_session.post(
-                rest_url,
-                headers=headers,
-                data=api_audio,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise RuntimeError(
-                        f"Deepgram API error {response.status}: {error_text}"
+            if isinstance(payload, dict):
+                v = payload.get("request_id")
+                if isinstance(v, str) and not rid:
+                    rid = v
+                v = payload.get("session_id") or payload.get("sessionId")
+                if isinstance(v, str) and not sid:
+                    sid = v
+                hdrs = payload.get("headers") or {}
+                if isinstance(hdrs, dict) and not rid:
+                    hv = hdrs.get("x-request-id") or hdrs.get("X-Request-Id")
+                    if isinstance(hv, str):
+                        rid = hv
+                sess = payload.get("session") or {}
+                if isinstance(sess, dict) and not sid:
+                    sv = sess.get("id") or sess.get("session_id")
+                    if isinstance(sv, str):
+                        sid = sv
+            def walk(obj: Any):
+                nonlocal rid, sid
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        kl = str(k).lower()
+                        if rid is None and "request" in kl and isinstance(v, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", v or ""):
+                            rid = v
+                        if sid is None and (kl == "session_id" or kl == "sessionid") and isinstance(v, str):
+                            sid = v
+                        if isinstance(v, (dict, list)):
+                            walk(v)
+                elif isinstance(obj, list):
+                    for it in obj:
+                        walk(it)
+            if rid is None or sid is None:
+                walk(payload)
+        except Exception:
+            pass
+        return rid, sid
+
+    def _update_output_format(self, encoding: Optional[str], sample_rate: Optional[Any], source: str = "runtime") -> None:
+        try:
+            if encoding:
+                canon = self._canonicalize_encoding(encoding)
+                if canon and canon != self._dg_output_encoding:
+                    logger.info(
+                        "Deepgram output format override",
+                        call_id=self.call_id,
+                        previous_encoding=self._dg_output_encoding,
+                        new_encoding=canon,
+                        source=source,
                     )
-                
-                result = await response.json()
-                transcript = self._extract_transcript_from_rest(result)
-                
-                if not transcript:
-                    raise RuntimeError("No transcript in Deepgram response")
-                
-                latency_ms = (time.perf_counter() - started_at) * 1000.0
-                logger.info(
-                    "Deepgram STT transcript received (REST)",
-                    call_id=call_id,
-                    request_id=request_id,
-                    latency_ms=round(latency_ms, 2),
-                    transcript_preview=transcript[:50],
-                )
-                return transcript
-                
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Deepgram STT request timeout",
-                call_id=call_id,
-                request_id=request_id,
-                timeout_sec=timeout,
+                    self._dg_output_encoding = canon
+            if sample_rate:
+                try:
+                    rate_val = int(sample_rate)
+                    if rate_val > 0 and rate_val != self._dg_output_rate:
+                        logger.info(
+                            "Deepgram output sample rate override",
+                            call_id=self.call_id,
+                            previous_rate=self._dg_output_rate,
+                            new_rate=rate_val,
+                            source=source,
+                        )
+                        self._dg_output_rate = rate_val
+                except Exception:
+                    logger.debug("Deepgram output sample rate parse failed", value=sample_rate, exc_info=True)
+        except Exception:
+            logger.debug("Deepgram output format update failed", encoding=encoding, sample_rate=sample_rate, source=source, exc_info=True)
+
+    def __init__(self, config: Dict[str, Any], llm_config: LLMConfig, on_event: Callable[[Dict[str, Any]], None]):
+        super().__init__(on_event)
+        self.config = config
+        self.llm_config = llm_config
+        self.websocket: Optional[ClientConnection] = None
+        self._keep_alive_task: Optional[asyncio.Task] = None
+        self._receive_task: Optional[asyncio.Task] = None
+        self._is_audio_flowing = False
+        self.request_id: Optional[str] = None
+        self.session_id: Optional[str] = None
+        self.call_id: Optional[str] = None
+        
+        # Tool calling support
+        self.tool_adapter = DeepgramToolAdapter(tool_registry)
+        logger.info("🛠️ Deepgram provider initialized with tool support")
+        self._allowed_tools: Optional[List[str]] = None
+        self._in_audio_burst: bool = False
+        self._first_output_chunk_logged: bool = False
+        self._closing: bool = False
+        self._closed: bool = False
+        # Maintain resample state for smoother conversion
+        self._input_resample_state = None
+        
+        # Turn latency tracking (Milestone 21 - Call History)
+        self._turn_start_time: Optional[float] = None
+        self._turn_first_audio_received: bool = False
+        self._session_store = None  # Will be set via set_session_store()
+        # Settings/stream readiness
+        self._settings_sent: bool = False
+        # Only set to True on explicit SettingsApplied lifecycle event
+        self._settings_acked: bool = False
+        self._ready_to_stream: bool = False
+        self._settings_ts: float = 0.0
+        self._prestream_queue: list[bytes] = []  # small buffer for early frames
+        self._pcm16_accum = bytearray()
+        # Settings ACK gating
+        self._ack_event: Optional[asyncio.Event] = None
+        # Greeting injection guard
+        self._greeting_injected: bool = False
+        self._greeting_injections: int = 0
+        # Upstream RMS tracking
+        self._rms_ma: float = 0.0
+        self._low_rms_streak: int = 0
+        self._rms_log_started: bool = False
+        # Per-call low RMS warning suppression (AAVA-15)
+        self._low_rms_warnings_logged: Dict[str, int] = {}
+        # User transcript counters
+        self._user_txn_count: int = 0
+        self._user_last_ts: float = 0.0
+        # Hangup tracking (for farewell + HangupReady event)
+        self._hangup_pending: bool = False
+        self._farewell_message: Optional[str] = None
+        # Cache declared Deepgram input settings
+        try:
+            self._dg_input_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
+        except Exception:
+            self._dg_input_rate = 8000
+        # Cache provider output settings for downstream conversion/metadata
+        self._original_output_encoding = self._get_config_value('output_encoding', None) or 'mulaw'
+        self._original_output_rate = self._get_config_value('output_sample_rate_hz', 8000) or 8000
+        self._dg_output_encoding = self._canonicalize_encoding(self._original_output_encoding)
+        try:
+            self._dg_output_rate = int(self._original_output_rate)
+        except Exception:
+            self._dg_output_rate = 8000
+        # Allow optional runtime detection when explicitly enabled
+        self.allow_output_autodetect = bool(self._get_config_value('allow_output_autodetect', False))
+        self._dg_output_inferred = not self.allow_output_autodetect
+        # Settings retry state
+        self._settings_retry_attempted: bool = False
+        self._last_settings_payload: Optional[dict] = None
+        self._last_settings_minimal: Optional[dict] = None
+
+    def set_session_store(self, session_store):
+        """Set the session store for turn latency tracking (Milestone 21)."""
+        self._session_store = session_store
+
+    @property
+    def supported_codecs(self) -> List[str]:
+        return ["ulaw"]
+
+    def is_ready(self) -> bool:
+        """Check if provider is properly configured with required API key."""
+        api_key = self._get_config_value('api_key', '')
+        return bool(api_key and str(api_key).strip())
+
+    # P1: Static capability hints for orchestrator
+    def get_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            # Audio format capabilities
+            input_encodings=["mulaw", "linear16"],
+            input_sample_rates_hz=[8000, 16000],
+            output_encodings=["mulaw"],
+            output_sample_rates_hz=[8000],
+            preferred_chunk_ms=20,
+            can_negotiate=True,  # Uses SettingsApplied ACK for runtime negotiation
+            # Provider type and audio processing capabilities
+            is_full_agent=True,  # Full voice agent (STT + LLM + TTS integrated)
+            has_native_vad=True,  # Deepgram Voice Agent has built-in VAD
+            has_native_barge_in=True,  # Handles interruptions internally
+            requires_continuous_audio=True,  # Needs continuous audio for VAD
+        )
+    
+    def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
+        """
+        Parse SettingsApplied event from Deepgram to extract actual negotiated formats.
+        
+        Returns capabilities based on provider ACK, or None if not a SettingsApplied event.
+        """
+        event_type = event_data.get('type')
+        if event_type != 'SettingsApplied':
+            return None
+        
+        try:
+            settings = event_data.get('settings', {})
+            audio = settings.get('audio', {})
+            input_audio = audio.get('input', {})
+            output_audio = audio.get('output', {})
+            
+            input_enc = self._canonicalize_encoding(input_audio.get('encoding', 'mulaw'))
+            output_enc = self._canonicalize_encoding(output_audio.get('encoding', 'mulaw'))
+            input_rate = int(input_audio.get('sample_rate', 8000))
+            output_rate = int(output_audio.get('sample_rate', 8000))
+            
+            logger.info(
+                "Parsed Deepgram SettingsApplied ACK",
+                call_id=self.call_id,
+                input_encoding=input_enc,
+                input_sample_rate=input_rate,
+                output_encoding=output_enc,
+                output_sample_rate=output_rate,
             )
-            raise
+            
+            return ProviderCapabilities(
+                input_encodings=[input_enc],
+                input_sample_rates_hz=[input_rate],
+                output_encodings=[output_enc],
+                output_sample_rates_hz=[output_rate],
+                preferred_chunk_ms=20,
+                can_negotiate=True,  # ACK confirmed successful negotiation
+            )
         except Exception as exc:
             logger.warning(
-                "Deepgram STT request failed",
-                call_id=call_id,
-                request_id=request_id,
+                "Failed to parse Deepgram SettingsApplied event",
+                call_id=self.call_id,
                 error=str(exc),
             )
-            raise
-
-    def _compose_options(self, runtime_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        runtime_options = runtime_options or {}
-        merged = {
-            "base_url": runtime_options.get("base_url", self._pipeline_defaults.get("base_url", self._provider_defaults.base_url)),
-            "model": runtime_options.get("model", self._pipeline_defaults.get("model", self._provider_defaults.model)),
-            "language": runtime_options.get("language", self._pipeline_defaults.get("language", self._provider_defaults.stt_language)),
-            "encoding": runtime_options.get("encoding", self._pipeline_defaults.get("encoding", self._provider_defaults.input_encoding)),
-            "sample_rate": runtime_options.get("sample_rate", self._pipeline_defaults.get("sample_rate", self._provider_defaults.input_sample_rate_hz)),
-            "smart_format": runtime_options.get("smart_format", self._pipeline_defaults.get("smart_format", True)),
-            "api_key": runtime_options.get("api_key", self._pipeline_defaults.get("api_key", self._provider_defaults.api_key)),
-        }
-        if runtime_options.get("response_timeout_sec") is not None:
-            merged["response_timeout_sec"] = runtime_options["response_timeout_sec"]
-        return merged
-
-    @staticmethod
-    def _extract_transcript_from_rest(result: Dict[str, Any]) -> Optional[str]:
-        """
-        Extract transcript from Deepgram pre-recorded API response.
-        Response format:
-        {
-          "results": {
-            "channels": [
-              {
-                "alternatives": [
-                  {"transcript": "...", "confidence": 0.95}
-                ]
-              }
-            ]
-          }
-        }
-        """
-        try:
-            results = result.get("results", {})
-            channels = results.get("channels", [])
-            if not channels:
-                return None
-            
-            alternatives = channels[0].get("alternatives", [])
-            if not alternatives:
-                return None
-            
-            transcript = alternatives[0].get("transcript", "")
-            return transcript.strip() if transcript else None
-        except (KeyError, IndexError, AttributeError) as exc:
-            logger.debug("Failed to extract transcript from Deepgram response", error=str(exc))
             return None
 
-    # Streaming Methods (for streaming: true mode) --------------------------------
-
-    async def start_stream(self, call_id: str, options: Dict[str, Any]) -> None:
-        """Open WebSocket streaming connection to Deepgram."""
-        session = self._sessions.get(call_id)
-        if not session:
-            raise RuntimeError(f"Deepgram STT session not found for call {call_id}")
-
-        merged = _merge_dicts(session.options, options or {})
-        api_key = merged.get("api_key")
-        if not api_key:
-            raise RuntimeError("Deepgram STT streaming requires an API key")
-
-        # Build WebSocket URL
-        base_url = merged.get("base_url", "https://api.deepgram.com")
-        # Convert https:// to wss:// for WebSocket
-        if base_url.startswith("https://"):
-            ws_base = base_url.replace("https://", "wss://", 1)
-        elif base_url.startswith("http://"):
-            ws_base = base_url.replace("http://", "ws://", 1)
-        else:
-            ws_base = base_url
-
-        # Build v1/listen endpoint
-        parsed = urlparse(ws_base)
-        if not parsed.path or parsed.path == "/":
-            path = "/v1/listen"
-        elif "/v1/listen" in parsed.path:
-            path = parsed.path
-        else:
-            path = parsed.path.rstrip("/") + "/v1/listen"
-
-        # Build query parameters
-        query_params = {
-            "model": merged.get("model", "nova-2"),
-            "language": merged.get("language", "en-US"),
-            "encoding": merged.get("encoding", "linear16"),
-            "sample_rate": str(merged.get("sample_rate", 16000)),
-            "channels": "1",
-        }
-        existing = dict(parse_qsl(parsed.query))
-        existing.update(query_params)
-        ws_url = urlunparse(parsed._replace(path=path, query=urlencode(existing)))
-
-        logger.info(
-            "Deepgram STT opening streaming session",
-            call_id=call_id,
-            url=ws_url,
-            component=self.component_key,
-        )
-
-        headers = [
-            ("Authorization", f"Token {api_key}"),
-            ("User-Agent", "Asterisk-AI-Voice-Agent/1.0"),
-        ]
-
-        try:
-            websocket = await websockets.connect(
-                ws_url,
-                additional_headers=headers,
-                max_size=16 * 1024 * 1024,
-                ping_interval=20,
-                ping_timeout=10,
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed to connect to Deepgram streaming",
-                call_id=call_id,
-                error=str(exc),
-                exc_info=True,
-            )
-            raise RuntimeError(f"Deepgram streaming connection failed: {exc}") from exc
-
-        # Update session with streaming resources
-        session.websocket = websocket
-        session.transcript_queue = asyncio.Queue(maxsize=8)
-        session.active = True
-
-        # Start async receiver task
-        session.receiver_task = asyncio.create_task(
-            self._receive_loop(call_id, session)
-        )
-
-        logger.info(
-            "Deepgram STT streaming session opened",
-            call_id=call_id,
-            model=merged.get("model"),
-        )
-
-    async def send_audio(
+    # ------------------------------------------------------------------ #
+    # Metrics helpers
+    # ------------------------------------------------------------------ #
+    def _record_session_audio(
         self,
-        call_id: str,
-        audio_pcm16: bytes,
-        fmt: str = "pcm16_16k",
-    ) -> None:
-        """Send audio chunk to Deepgram streaming WebSocket."""
-        session = self._sessions.get(call_id)
-        if not session or not session.websocket or not session.active:
-            return
-
-        try:
-            await session.websocket.send(audio_pcm16)
-        except (websockets.ConnectionClosed, websockets.WebSocketException) as exc:
-            logger.warning(
-                "Deepgram streaming websocket closed while sending audio",
-                call_id=call_id,
-                error=str(exc),
-            )
-            session.active = False
-        except Exception as exc:
-            logger.error(
-                "Error sending audio to Deepgram streaming",
-                call_id=call_id,
-                error=str(exc),
-                exc_info=True,
-            )
-
-    async def iter_results(self, call_id: str) -> AsyncIterator[str]:
-        """Yield transcripts as they arrive from Deepgram streaming."""
-        session = self._sessions.get(call_id)
-        if not session or not session.transcript_queue:
-            return
-
-        while True:
-            try:
-                transcript = await session.transcript_queue.get()
-                if transcript is None:
-                    break
-                yield transcript
-            except asyncio.CancelledError:
-                break
-
-    async def stop_stream(self, call_id: str) -> None:
-        """Stop streaming session (cleanup handled in close_call)."""
-        session = self._sessions.get(call_id)
-        if session and session.websocket:
-            logger.debug(
-                "Deepgram STT stop_stream (cleanup in close_call)",
-                call_id=call_id,
-            )
-
-    async def _receive_loop(self, call_id: str, session: _STTSessionState) -> None:
-        """Async receiver loop for Deepgram streaming results."""
-        try:
-            async for message in session.websocket:
-                if not session.active:
-                    break
-
-                try:
-                    data = json.loads(message) if isinstance(message, str) else message
-                except (json.JSONDecodeError, TypeError):
-                    continue
-
-                msg_type = data.get("type")
-
-                if msg_type == "Results":
-                    transcript = self._extract_transcript_from_streaming(data)
-                    if transcript:
-                        is_final = data.get("is_final", False)
-                        speech_final = data.get("speech_final", False)
-
-                        logger.debug(
-                            "Deepgram streaming transcript received",
-                            call_id=call_id,
-                            transcript_preview=transcript[:50],
-                            is_final=is_final,
-                            speech_final=speech_final,
-                        )
-
-                        # Only queue final transcripts
-                        if is_final and transcript.strip():
-                            try:
-                                session.transcript_queue.put_nowait(transcript)
-                            except asyncio.QueueFull:
-                                # Drop oldest transcript if queue full
-                                try:
-                                    session.transcript_queue.get_nowait()
-                                except asyncio.QueueEmpty:
-                                    pass
-                                await session.transcript_queue.put(transcript)
-
-        except websockets.ConnectionClosed:
-            logger.info(
-                "Deepgram streaming websocket closed",
-                call_id=call_id,
-            )
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.error(
-                "Deepgram streaming receive loop error",
-                call_id=call_id,
-                error=str(exc),
-                exc_info=True,
-            )
-        finally:
-            session.active = False
-            # Signal end to transcript queue
-            if session.transcript_queue:
-                try:
-                    session.transcript_queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass
-
-    @staticmethod
-    def _extract_transcript_from_streaming(message: Dict[str, Any]) -> Optional[str]:
-        """Extract transcript from Deepgram streaming Results message."""
-        try:
-            channel = message.get("channel", {})
-            alternatives = channel.get("alternatives", [])
-            if alternatives:
-                return alternatives[0].get("transcript", "").strip()
-        except (KeyError, IndexError, AttributeError):
-            pass
-        return None
-
-
-# Deepgram TTS Adapter ------------------------------------------------------------
-
-
-class DeepgramTTSAdapter(TTSComponent):
-    """
-    # Milestone7: Deepgram REST TTS adapter with μ-law conversion and chunking.
-    """
-
-    def __init__(
-        self,
-        component_key: str,
-        app_config: AppConfig,
-        provider_config: DeepgramProviderConfig,
-        options: Optional[Dict[str, Any]] = None,
         *,
-        session_factory: Optional[Callable[[], aiohttp.ClientSession]] = None,
-    ):
-        self.component_key = component_key
-        self._app_config = app_config
-        self._provider_defaults = provider_config
-        self._pipeline_defaults = options or {}
-        self._session_factory = session_factory
-        self._session: Optional[aiohttp.ClientSession] = None
+        input_encoding: str,
+        input_sample_rate_hz: int,
+        output_encoding: str,
+        output_sample_rate_hz: int,
+    ) -> None:
+        call_id = self.call_id
+        if not call_id:
+            return
+        try:
+            _DEEPGRAM_INPUT_RATE.set(int(input_sample_rate_hz))
+        except Exception:
+            pass
+        try:
+            _DEEPGRAM_OUTPUT_RATE.set(int(output_sample_rate_hz))
+        except Exception:
+            pass
+        info_payload = {
+            "input_encoding": str(input_encoding or ""),
+            "input_sample_rate_hz": str(input_sample_rate_hz),
+            "output_encoding": str(output_encoding or ""),
+            "output_sample_rate_hz": str(output_sample_rate_hz),
+        }
+        try:
+            _DEEPGRAM_SESSION_AUDIO_INFO.info(info_payload)
+        except Exception:
+            pass
 
-    async def start(self) -> None:
-        logger.debug(
-            "Deepgram TTS adapter initialized",
-            component=self.component_key,
-            default_voice=self._provider_defaults.tts_model,
-        )
-
-    async def stop(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
-        self._session = None
-
-    async def open_call(self, call_id: str, options: Dict[str, Any]) -> None:
-        # No call-scoped preparation required beyond ensuring the session exists.
-        await self._ensure_session()
-
-    async def close_call(self, call_id: str) -> None:
-        # Nothing to tear down per call.
+    def _clear_metrics(self, call_id: Optional[str]) -> None:
         return
 
-    async def synthesize(
-        self,
-        call_id: str,
-        text: str,
-        options: Dict[str, Any],
-    ) -> AsyncIterator[bytes]:
-        if not text:
-            return  # Exit early - yields nothing (async generator)
-            yield  # Unreachable but makes this an async generator
-        await self._ensure_session()
+    def _apply_dc_block(self, pcm_bytes: bytes, r: float = 0.995) -> bytes:
+        """Apply first-order DC-block filter to PCM16 little-endian audio."""
+        if not pcm_bytes:
+            return pcm_bytes
+        try:
+            buf = array.array('h')
+            buf.frombytes(pcm_bytes)
+            prev_x = 0.0
+            prev_y = 0.0
+            for i, s in enumerate(buf):
+                x = float(int(s))
+                y = x - prev_x + r * prev_y
+                prev_x, prev_y = x, y
+                if y > 32767.0:
+                    y = 32767.0
+                elif y < -32768.0:
+                    y = -32768.0
+                buf[i] = int(y)
+            return buf.tobytes()
+        except Exception:
+            return pcm_bytes
 
-        merged = self._compose_options(options)
-        api_key = merged.get("api_key")
-        if not api_key:
-            raise RuntimeError("Deepgram TTS requires an API key")
+    async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
+        # Use configurable voice agent endpoint when available; fall back to default.
+        base_url = getattr(self.config, "voice_agent_base_url", None) or "wss://agent.deepgram.com/v1/agent/converse"
+        ws_url = base_url
+        headers = {'Authorization': f'Token {self.config.api_key}'}
 
-        target_format = merged["format"]
-        target_encoding = target_format.get("encoding", "mulaw")
-        target_sample_rate = int(target_format.get("sample_rate", 8000))
+        try:
+            logger.info("Connecting to Deepgram Voice Agent...", url=ws_url)
+            self.websocket = await websockets.connect(ws_url, additional_headers=list(headers.items()))
+            logger.info("✅ Successfully connected to Deepgram Voice Agent.")
 
-        request_id = f"dg-tts-{uuid.uuid4().hex[:12]}"
-        url, params = self._build_tts_request(merged, target_encoding, target_sample_rate)
+            # Persist call context for downstream events
+            self.call_id = call_id
+            # Per-call tool allowlist (contexts are the source of truth).
+            # Missing/None is treated as [] for safety.
+            if context and "tools" in context:
+                self._allowed_tools = list(context.get("tools") or [])
+            else:
+                self._allowed_tools = []
+            # Capture Deepgram request id if provided
+            try:
+                rid = None
+                if hasattr(self.websocket, "response_headers") and self.websocket.response_headers:
+                    rid = self.websocket.response_headers.get("x-request-id")
+                if rid:
+                    self.request_id = rid
+                    logger.info("Deepgram request id", call_id=call_id, request_id=rid)
+            except Exception:
+                logger.debug("Failed to read Deepgram response headers", exc_info=True)
 
+            # Prepare ACK gate and start receiver early to catch server responses
+            self._ack_event = asyncio.Event()
+            self._receive_task = asyncio.create_task(self._receive_loop())
+
+            await self._configure_agent()
+            self._keep_alive_task = asyncio.create_task(self._keep_alive())
+
+        except Exception as e:
+            logger.error("Failed to connect to Deepgram Voice Agent", exc_info=True)
+            if self._keep_alive_task:
+                self._keep_alive_task.cancel()
+            raise
+
+    async def _configure_agent(self):
+        """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
+        # Derive codec settings from config with safe defaults
+        input_encoding = self._get_config_value('input_encoding', None) or 'ulaw'
+        input_sample_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
+        # Choose output based on voice capabilities (fallback to configured defaults)
+        output_encoding = self._original_output_encoding
+        output_sample_rate = int(self._original_output_rate or 8000)
+        self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
+        self._dg_output_rate = output_sample_rate
+        self._dg_output_inferred = not self.allow_output_autodetect
+        # Canonicalize Deepgram V1 audio.format values
+        input_format = self._canonicalize_encoding(input_encoding)
+        output_format = self._canonicalize_encoding(output_encoding)
+
+        # Determine greeting precedence: provider override > global LLM greeting > safe default
+        try:
+            greeting_val = (self._get_config_value('greeting', None) or "").strip()
+        except Exception:
+            greeting_val = ""
+        if not greeting_val:
+            try:
+                greeting_val = (getattr(self.llm_config, 'initial_greeting', None) or "").strip()
+            except Exception:
+                greeting_val = ""
+        if not greeting_val:
+            greeting_val = "Hello, how can I help you today?"
+
+        # Final fallback aligned with DeepgramProviderConfig + shipped YAML defaults.
+        # In normal config flow this fallback never fires (config provides "nova-3"),
+        # but kept consistent so the unhappy-path doesn't downgrade behind users' backs.
+        listen_model = self._get_config_value('model', None) or getattr(self.llm_config, 'listen_model', None) or "nova-3"
+        speak_model = self._get_config_value('tts_model', None) or getattr(self.llm_config, 'tts_model', None) or "aura-asteria-en"
+
+        # Use configured output encoding/sample rate directly (no catalog fetch needed)
+        self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
+        self._dg_output_rate = int(output_sample_rate)
         logger.info(
-            "Deepgram TTS synthesis started",
-            call_id=call_id,
-            request_id=request_id,
-            text_preview=text[:64],
-            url=url,
-            params=params,
+            "Deepgram audio profile configured",
+            call_id=self.call_id,
+            speak_model=speak_model,
+            output_encoding=self._dg_output_encoding,
+            output_sample_rate=self._dg_output_rate,
+        )
+        # Resolved think (LLM) model used by both the primary Settings build and
+        # the `_last_settings_minimal` retry fallback. Default kept at
+        # "gpt-4o-mini" (the previously-hardcoded primary-path value) to
+        # preserve the conservative cost behavior on upgrade for deployments
+        # that don't set `llm_config.model`. Per CodeRabbit review of PR #384
+        # comment 3214130572 — eliminates the primary/retry think-model drift
+        # that pre-fix could swap a configured model for "gpt-4o-mini" on retry.
+        think_model = getattr(self.llm_config, 'model', None) or "gpt-4o-mini"
+        # Try context-injected prompt first (can be 'instructions' or 'prompt' key), then provider config, then llm_config, then default
+        think_prompt = (
+            self._get_config_value('instructions', None) or  # Context injection uses 'instructions' for Deepgram
+            self._get_config_value('prompt', None) or
+            getattr(self.llm_config, 'prompt', None) or
+            "You are a helpful assistant."
+        )
+        
+        # Log prompt source for debugging
+        prompt_source = "hardcoded_default"
+        if self._get_config_value('instructions', None):
+            prompt_source = "context_injection"
+        elif self._get_config_value('prompt', None):
+            prompt_source = "provider_config"
+        elif getattr(self.llm_config, 'prompt', None):
+            prompt_source = "global_llm_config"
+        
+        logger.info(
+            "Deepgram Think prompt resolved",
+            call_id=self.call_id,
+            prompt_source=prompt_source,
+            prompt_length=len(think_prompt),
+            prompt_preview=think_prompt[:80] + "..." if len(think_prompt) > 80 else think_prompt,
         )
 
-        payload = {"text": text}
-        headers = {
-            "Authorization": f"Token {api_key}",
-            "Accept": "audio/*",
-            "Content-Type": "application/json",
-        }
+        # Get configured agent language (default: "en")
+        agent_language = str(self._get_config_value("agent_language", "en") or "").strip() or "en"
+        
+        # Listen provider block. See `build_listen_provider_block` for the
+        # full rationale (Nova vs Flux divergence, version=v2 requirement,
+        # Flux-specific tuning fields).
+        listen_provider = build_listen_provider_block(
+            model=listen_model,
+            eot_threshold=self._get_config_value("eot_threshold", 0.7),
+            eager_eot_threshold=self._get_config_value("eager_eot_threshold", None),
+            keyterms=self._get_config_value("keyterms", None),
+        )
+        if listen_provider.get("version") == "v2":
+            logger.info(
+                "Deepgram Flux listen-provider configured",
+                call_id=self.call_id,
+                model=listen_model,
+                version="v2",
+                eot_threshold=listen_provider.get("eot_threshold"),
+                eager_eot_threshold=listen_provider.get("eager_eot_threshold"),
+                keyterms_count=len(listen_provider.get("keyterms") or []),
+            )
 
-        started_at = time.perf_counter()
-        async with self._session.post(url, json=payload, params=params, headers=headers) as response:
-            if response.status >= 400:
-                body = await response.text()
-                logger.error(
-                    "Deepgram TTS synthesis failed",
-                    call_id=call_id,
-                    request_id=request_id,
-                    status=response.status,
-                    body=body,
+        # Build settings with configured audio formats
+        settings = {
+            "type": "Settings",
+            "audio": {
+                "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) },
+                "output": { "encoding": output_format, "sample_rate": int(output_sample_rate), "container": "none" }
+            },
+            "agent": {
+                "language": agent_language,
+                "listen": {"provider": listen_provider},
+                "think": {
+                    "provider": {
+                        "type": "open_ai",
+                        # Use the resolved `think_model` so primary and retry
+                        # paths can't drift. Default still "gpt-4o-mini" (set
+                        # at the variable definition above) to preserve the
+                        # prior conservative cost default. Per CodeRabbit
+                        # review of PR #384 comment 3214130572.
+                        "model": think_model,
+                        "temperature": float(
+                            self._get_config_value("llm_temperature", None)
+                            or getattr(self.llm_config, "llm_temperature", 0.7)
+                        )
+                    },
+                    "prompt": think_prompt
+                },
+                "speak": {
+                    "provider": {"type": "deepgram", "model": speak_model}
+                },
+                "greeting": greeting_val
+            }
+        }
+        
+        # Add tools from context allowlist only.
+        # Per Deepgram docs: functions go in agent.think.functions.
+        try:
+            tools_schemas = self.tool_adapter.get_tools_config(list(self._allowed_tools or []))
+            if tools_schemas:
+                settings["agent"]["think"]["functions"] = tools_schemas
+                logger.info(
+                    "✅ Deepgram functions configured",
+                    call_id=self.call_id,
+                    function_count=len(tools_schemas),
+                    functions=[t["name"] for t in tools_schemas],
                 )
-                response.raise_for_status()
-
-            raw_audio = await response.read()
-            source_encoding = params.get("encoding", "linear16")
-            source_sample_rate = int(params.get("sample_rate", target_sample_rate))
-            converted = self._convert_audio(raw_audio, source_encoding, source_sample_rate, target_encoding, target_sample_rate)
-            latency_ms = (time.perf_counter() - started_at) * 1000.0
-
+        except Exception as e:
+            logger.warning(f"Failed to configure tools: {e}", call_id=self.call_id, exc_info=True)
+        # Build and store a minimal Settings payload for fallback retry on UNPARSABLE error.
+        # The retry's listen-provider block must match the primary one's shape (same
+        # call to `build_listen_provider_block`) so Flux models get `version: "v2"` plus
+        # threshold fields on retry too — otherwise the retry would silently drop those
+        # required fields and Deepgram would reject every retry. Per CodeRabbit review of
+        # PR #384 comment 3214117420.
+        try:
+            minimal_listen_provider = build_listen_provider_block(
+                model=listen_model,
+                eot_threshold=self._get_config_value("eot_threshold", 0.7),
+                eager_eot_threshold=self._get_config_value("eager_eot_threshold", None),
+                keyterms=self._get_config_value("keyterms", None),
+            )
+            self._last_settings_minimal = {
+                "type": "Settings",
+                "audio": {
+                    "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) }
+                },
+                "agent": {
+                    "greeting": greeting_val,
+                    "language": agent_language,
+                    "listen": { "provider": minimal_listen_provider },
+                    "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
+                    "speak": { "provider": { "type": "deepgram", "model": speak_model } }
+                }
+            }
+        except Exception:
+            self._last_settings_minimal = None
+        self._last_settings_payload = settings
+        # Log the exact Settings payload being sent to Deepgram
         logger.info(
-            "Deepgram TTS synthesis completed",
-            call_id=call_id,
-            request_id=request_id,
-            latency_ms=round(latency_ms, 2),
-            output_bytes=len(converted),
-            target_encoding=target_encoding,
-            target_sample_rate=target_sample_rate,
+            "Sending Settings to Deepgram Voice Agent",
+            call_id=self.call_id,
+            settings_payload=settings,
+        )
+        await self.websocket.send(json.dumps(settings))
+        # Mark settings sent; readiness only upon server response (ACK) or timeout
+        self._settings_sent = True
+        try:
+            import time as _t
+            self._settings_ts = _t.monotonic()
+        except Exception:
+            self._settings_ts = 0.0
+        # Start a fallback timer to avoid indefinite buffering if ACK never arrives
+        # Disable pre-ACK fallback readiness to avoid sending binary before SettingsApplied
+        # (prevents Deepgram error BINARY_MESSAGE_BEFORE_SETTINGS). We still keep a timestamp
+        # to log if ACK is slow, but we will not open the binary gate without an explicit ACK.
+        # async fallback task intentionally removed.
+
+        # Immediately inject greeting once to try to kick off TTS
+        async def _inject_greeting_immediate():
+            try:
+                if self.websocket and self.websocket.state.name == "OPEN" and greeting_val and self._greeting_injections < 1:
+                    logger.info("Injecting greeting immediately after Settings", call_id=self.call_id)
+                    self._greeting_injections += 1
+                    try:
+                        await self._inject_message_dual(greeting_val)
+                    except Exception:
+                        logger.debug("Immediate greeting injection failed", exc_info=True)
+            except Exception:
+                pass
+        # Wait up to 1.0s for a server response to mark readiness
+        try:
+            if self._ack_event is not None:
+                await asyncio.wait_for(self._ack_event.wait(), timeout=1.0)
+            else:
+                logger.debug("ACK gate not initialized; skipping wait")
+        except asyncio.TimeoutError:
+            logger.warning("Deepgram settings ACK not received within timeout; fallback readiness may be active")
+        # If ready and we haven't seen any audio burst within ~1s, inject greeting once to kick off TTS
+        async def _inject_greeting_if_quiet():
+            try:
+                await asyncio.sleep(1.5)
+                if self.websocket and self.websocket.state.name == "OPEN" and not self._in_audio_burst and greeting_val and self._greeting_injections < 2:
+                    logger.info("Injecting greeting via fallback as no AgentAudio detected", call_id=self.call_id)
+                    try:
+                        self._greeting_injections += 1
+                        await self._inject_message_dual(greeting_val)
+                    except Exception:
+                        logger.debug("Greeting injection failed", exc_info=True)
+            except Exception:
+                pass
+        # Greeting injection intentionally disabled.
+        # Deepgram's greeting field in Settings is pure TTS — InjectAgentMessage
+        # does NOT trigger LLM generation; it only causes Deepgram to speak that
+        # text and enter listening mode again (double-greeting with no LLM response).
+        # The personalized greeting must be built before Settings are sent, which
+        # is done by the engine's pre-call greeting substitution in engine.py.
+        # asyncio.create_task(_inject_greeting_immediate())
+        summary = {
+            "input_encoding": str(input_encoding).lower(),
+            "input_sample_rate_hz": int(input_sample_rate),
+            "output_encoding": str(self._dg_output_encoding).lower(),
+            "output_sample_rate_hz": int(self._dg_output_rate),
+        }
+        self._record_session_audio(**summary)
+        logger.info(
+            "Deepgram agent configured",
+            call_id=self.call_id,
+            **summary,
         )
 
-        chunk_ms = int(merged.get("chunk_size_ms", 20))
-        for chunk in self._chunk_audio(converted, target_encoding, target_sample_rate, chunk_ms):
-            if chunk:
-                yield chunk
+    async def send_audio(self, audio_chunk: bytes, sample_rate: int = None, encoding: str = None):
+        """Send caller audio to Deepgram in the declared input format.
 
-    async def _ensure_session(self) -> None:
-        if self._session and not self._session.closed:
+        Args:
+            audio_chunk: Audio data bytes
+            sample_rate: Source sample rate (if provided by engine)
+            encoding: Source encoding format (if provided by engine)
+        
+        Engine provides explicit encoding/sample_rate when available.
+        Falls back to chunk size inference for backward compatibility.
+        """
+        if self.websocket and audio_chunk:
+            try:
+                self._is_audio_flowing = True
+                chunk_len = len(audio_chunk)
+                input_encoding = (self._get_config_value("input_encoding", None) or "mulaw").strip().lower()
+                target_rate = int(self._get_config_value("input_sample_rate_hz", 8000) or 8000)
+                
+                # Use explicit encoding/sample_rate from engine if provided
+                if encoding and sample_rate:
+                    actual_format = encoding.lower().strip()
+                    if actual_format in ("slin16", "linear16", "pcm16"):
+                        actual_format = "pcm16"
+                    elif actual_format in ("ulaw", "mulaw", "g711_ulaw"):
+                        actual_format = "ulaw"
+                    src_rate = sample_rate
+                else:
+                    # Fallback: Infer from chunk size (backward compatibility)
+                    # - 160 B ≈ μ-law @ 8 kHz (20 ms)
+                    # - 320 B ≈ PCM16 @ 8 kHz (20 ms)
+                    # - 640 B ≈ PCM16 @ 16 kHz (20 ms)
+                    if chunk_len == 160:
+                        actual_format = "ulaw"
+                        src_rate = 8000
+                    elif chunk_len == 320:
+                        actual_format = "pcm16"
+                        src_rate = 8000
+                    elif chunk_len == 640:
+                        actual_format = "pcm16"
+                        src_rate = 16000
+                    else:
+                        actual_format = "pcm16" if input_encoding in ("slin16", "linear16", "pcm16") else "ulaw"
+                        try:
+                            src_rate = int(self._get_config_value("input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
+                        except Exception:
+                            src_rate = 8000
+
+                try:
+                    frame_bytes = 160 if actual_format == "ulaw" else int(max(1, src_rate) / 50) * 2
+                except Exception:
+                    frame_bytes = 0
+                if frame_bytes and chunk_len % frame_bytes != 0:
+                    logger.debug(
+                        "Deepgram provider irregular chunk size",
+                        bytes=chunk_len,
+                        frame_bytes=frame_bytes,
+                        actual_format=actual_format,
+                        src_rate=src_rate,
+                    )
+
+                payload: bytes = audio_chunk
+                pcm_for_rms: Optional[bytes] = None
+
+                if input_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    if actual_format == "pcm16":
+                        try:
+                            payload = audioop.lin2ulaw(audio_chunk, 2)
+                        except Exception:
+                            logger.warning("Failed to convert PCM to μ-law for Deepgram", exc_info=True)
+                            payload = audio_chunk
+                    else:
+                        payload = audio_chunk
+
+                    pcm_for_rms = mulaw_to_pcm16le(payload)
+                    if target_rate and target_rate != 8000:
+                        pcm_resampled, self._input_resample_state = resample_audio(
+                            pcm_for_rms,
+                            8000,
+                            target_rate,
+                            state=self._input_resample_state,
+                        )
+                        try:
+                            payload = audioop.lin2ulaw(pcm_resampled, 2)
+                        except Exception:
+                            logger.warning("Failed to convert resampled PCM back to μ-law", exc_info=True)
+                            payload = audio_chunk
+                        pcm_for_rms = pcm_resampled
+                    else:
+                        self._input_resample_state = None
+
+                elif input_encoding in ("slin16", "linear16", "pcm16"):
+                    # Normalize inbound to PCM16 and resample from detected source rate to target_rate
+                    if actual_format == "ulaw":
+                        pcm_src = mulaw_to_pcm16le(audio_chunk)
+                        src_rate = 8000
+                    else:
+                        pcm_src = audio_chunk
+                    pcm_for_rms = pcm_src
+                    if target_rate and target_rate != src_rate:
+                        pcm_dst, self._input_resample_state = resample_audio(
+                            pcm_src,
+                            src_rate,
+                            target_rate,
+                            state=self._input_resample_state,
+                        )
+                        payload = pcm_dst
+                        # Use the resampled buffer for RMS diagnostics to avoid false low-energy alerts
+                        pcm_for_rms = pcm_dst
+                    else:
+                        self._input_resample_state = None
+                        payload = pcm_src
+                else:
+                    logger.warning(
+                        "Unsupported Deepgram input_encoding",
+                        input_encoding=input_encoding,
+                    )
+                    payload = audio_chunk
+                    pcm_for_rms = None
+                    self._input_resample_state = None
+
+                if pcm_for_rms is not None:
+                    try:
+                        rms = audioop.rms(pcm_for_rms, 2)
+                        alpha = 0.2
+                        self._rms_ma = (alpha * float(rms)) + (1.0 - alpha) * float(self._rms_ma or 0.0)
+                        protect_elapsed = 0.0
+                        try:
+                            if getattr(self, "_settings_ts", 0.0):
+                                protect_elapsed = max(0.0, time.monotonic() - float(self._settings_ts or 0.0))
+                        except Exception:
+                            protect_elapsed = 0.0
+                        gate = (protect_elapsed >= 0.3) and bool(self._ready_to_stream)
+                        threshold = 250
+                        if gate and rms < threshold:
+                            self._low_rms_streak += 1
+                            if self._low_rms_streak % 10 == 0:
+                                # AAVA-15: Suppress low RMS warnings after first 3
+                                call_id = self.call_id or "unknown"
+                                warnings_count = self._low_rms_warnings_logged.get(call_id, 0)
+                                
+                                if warnings_count < 3:
+                                    logger.warning(
+                                        "Deepgram upstream low RMS sustained",
+                                        rms=rms,
+                                        rms_ma=int(self._rms_ma),
+                                        streak=self._low_rms_streak,
+                                        bytes=chunk_len,
+                                        target_rate=target_rate,
+                                        call_id=call_id,
+                                    )
+                                    self._low_rms_warnings_logged[call_id] = warnings_count + 1
+                                elif warnings_count == 3:
+                                    logger.info(
+                                        "Deepgram low RMS warnings suppressed (silence is normal)",
+                                        call_id=call_id,
+                                        total_warnings=3,
+                                        streak=self._low_rms_streak,
+                                    )
+                                    self._low_rms_warnings_logged[call_id] = warnings_count + 1
+                                # Else: suppress (already logged 3 warnings + suppression notice)
+                        else:
+                            if gate and not self._rms_log_started and rms >= threshold:
+                                logger.info(
+                                    "Deepgram upstream RMS flow",
+                                    rms=rms,
+                                    rms_ma=int(self._rms_ma),
+                                    bytes=chunk_len,
+                                    target_rate=target_rate,
+                                )
+                                self._rms_log_started = True
+                            self._low_rms_streak = 0
+                        # Quick integrity check on PCM (zeros ratio)
+                        # Note: High zero ratio during silence is normal in conversations
+                        try:
+                            if pcm_for_rms:
+                                zc = pcm_for_rms.count(b"\x00")
+                                zr = float(zc) / float(len(pcm_for_rms))
+                                if gate and zr > 0.5:
+                                    logger.debug(
+                                        "Deepgram upstream PCM mostly silent",
+                                        zero_ratio=round(zr, 3),
+                                        bytes=len(pcm_for_rms),
+                                    )
+                        except Exception:
+                            pass
+                    except Exception:
+                        logger.debug("Deepgram RMS check failed", exc_info=True)
+
+                if input_encoding in ("slin16", "linear16", "pcm16"):
+                    frame_bytes = (int(target_rate * 0.02) * 2) if target_rate else 640
+                    if frame_bytes <= 0:
+                        frame_bytes = 640
+                    self._pcm16_accum.extend(payload)
+                    frames_to_send: list[bytes] = []
+                    while len(self._pcm16_accum) >= frame_bytes:
+                        frames_to_send.append(bytes(self._pcm16_accum[:frame_bytes]))
+                        del self._pcm16_accum[:frame_bytes]
+
+                    if not self._settings_acked:
+                        try:
+                            for fr in frames_to_send:
+                                self._prestream_queue.append(fr)
+                                if len(self._prestream_queue) > 10:
+                                    self._prestream_queue.pop(0)
+                        except Exception:
+                            pass
+                        return
+
+                    if self._prestream_queue and self._settings_acked:
+                        try:
+                            for q in self._prestream_queue:
+                                await self.websocket.send(q)
+                        except Exception:
+                            logger.debug("Deepgram prestream flush failed", exc_info=True)
+                        finally:
+                            self._prestream_queue.clear()
+
+                    for fr in frames_to_send:
+                        await self.websocket.send(fr)
+                else:
+                    if not self._settings_acked:
+                        try:
+                            self._prestream_queue.append(payload)
+                            if len(self._prestream_queue) > 10:
+                                self._prestream_queue.pop(0)
+                        except Exception:
+                            pass
+                        return
+
+                    if self._prestream_queue:
+                        try:
+                            for q in self._prestream_queue:
+                                await self.websocket.send(q)
+                        except Exception:
+                            logger.debug("Deepgram prestream flush failed", exc_info=True)
+                        finally:
+                            self._prestream_queue.clear()
+
+                    await self.websocket.send(payload)
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
+            except Exception:
+                logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)
+    
+    async def _handle_function_call(self, event_data: Dict[str, Any]):
+        """
+        Handle function call request from Deepgram.
+        
+        Routes the function call to the appropriate tool via the tool adapter.
+        """
+        try:
+            # Build context for tool execution
+            # These will be injected by the engine when it sets up the provider
+            context = {
+                'call_id': self.call_id,
+                'caller_channel_id': getattr(self, '_caller_channel_id', None),
+                'bridge_id': getattr(self, '_bridge_id', None),
+                'called_number': getattr(self, '_called_number', None),
+                'context_name': getattr(self, '_context_name', None),
+                'session_store': getattr(self, '_session_store', None),
+                'ari_client': getattr(self, '_ari_client', None),
+                'config': getattr(self, '_full_config', None),
+                'allowed_tools': self._allowed_tools,
+                'websocket': self.websocket
+            }
+            
+            # Execute tool via adapter
+            result = await self.tool_adapter.handle_tool_call_event(event_data, context)
+            
+            # Check if this was a hangup request
+            if result.get('function_name') == 'hangup_call' and result.get('status') == 'success':
+                self._hangup_pending = True
+                self._farewell_message = result.get('farewell_message', '')
+                logger.info(
+                    "🔚 Hangup tool executed - will trigger after farewell audio completes",
+                    call_id=self.call_id,
+                    farewell=self._farewell_message
+                )
+            
+            # Capture function name BEFORE send_tool_result (which pops it from result)
+            func_name = result.get('function_name')
+            func_params = event_data.get('functions', [{}])[0].get('arguments', '{}')
+            
+            # Send result back to Deepgram
+            await self.tool_adapter.send_tool_result(result, context)
+            
+            # Log tool call to session for call history (Milestone 21)
+            try:
+                session_store = getattr(self, '_session_store', None)
+                if session_store and self.call_id and func_name:
+                    from datetime import datetime
+                    session = await session_store.get_by_call_id(self.call_id)
+                    if session:
+                        tool_record = {
+                            "name": func_name,
+                            "params": func_params,
+                            "result": result.get("status", "unknown") if isinstance(result, dict) else "success",
+                            "message": result.get("message", "") if isinstance(result, dict) else str(result),
+                            "timestamp": datetime.now().isoformat(),
+                            "duration_ms": 0,
+                        }
+                        if not hasattr(session, 'tool_calls') or session.tool_calls is None:
+                            session.tool_calls = []
+                        session.tool_calls.append(tool_record)
+                        await session_store.upsert_call(session)
+                        logger.debug("Tool call logged to session", call_id=self.call_id, tool=func_name)
+            except Exception as log_err:
+                logger.debug(f"Failed to log tool call to session: {log_err}", call_id=self.call_id)
+            
+        except Exception as e:
+            logger.error(
+                "Function call handling failed",
+                call_id=self.call_id,
+                function_name=event_data.get('function_name'),
+                error=str(e),
+                exc_info=True
+            )
+            # Send error response to Deepgram in correct format
+            try:
+                function_call_id = event_data.get("id")
+                if function_call_id:
+                    error_response = {
+                        "type": "function_call_result",
+                        "id": function_call_id,
+                        "function_call_result": {
+                            "status": "error",
+                            "message": f"Tool execution failed: {str(e)}",
+                            "error": str(e)
+                        }
+                    }
+                    if self.websocket and self.websocket.state.name == "OPEN":
+                        await self.websocket.send(json.dumps(error_response))
+                        logger.info("Sent error response to Deepgram", function_call_id=function_call_id)
+            except Exception as send_error:
+                logger.error(f"Failed to send error response: {send_error}")
+
+    async def stop_session(self):
+        # Prevent duplicate disconnect logs/ops
+        if self._closed or self._closing:
             return
-        factory = self._session_factory or aiohttp.ClientSession
-        self._session = factory()
+        self._closing = True
+        try:
+            if self._keep_alive_task:
+                self._keep_alive_task.cancel()
+            if self._receive_task and not self._receive_task.done():
+                self._receive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._receive_task
+            if self.websocket and self.websocket.state.name == "OPEN":
+                await self.websocket.close()
+            if not self._closed:
+                logger.info("Disconnected from Deepgram Voice Agent.")
+            self._closed = True
+        finally:
+            self._receive_task = None
+            self._clear_metrics(self.call_id)
+            self.call_id = None
+            self._closing = False
 
-    def _compose_options(self, runtime_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        runtime_options = runtime_options or {}
-        format_defaults = self._pipeline_defaults.get("format", {})
-        merged_format = {
-            "encoding": runtime_options.get("format", {}).get("encoding", format_defaults.get("encoding", "mulaw")),
-            "sample_rate": runtime_options.get("format", {}).get("sample_rate", format_defaults.get("sample_rate", 8000)),
-        }
+    async def _keep_alive(self):
+        while True:
+            try:
+                await asyncio.sleep(10)
+                if self.websocket and self.websocket.state.name == "OPEN":
+                    if not self._is_audio_flowing:
+                        await self.websocket.send(json.dumps({"type": "KeepAlive"}))
+                    self._is_audio_flowing = False
+                else:
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.error("Error in keep-alive task", exc_info=True)
+                break
 
-        merged = {
-            "base_url": runtime_options.get("base_url", self._pipeline_defaults.get("base_url", self._provider_defaults.base_url)),
-            "model": runtime_options.get("model", self._pipeline_defaults.get("model", self._provider_defaults.tts_model or self._provider_defaults.model)),
-            "voice": runtime_options.get("voice", self._pipeline_defaults.get("voice", self._provider_defaults.tts_model)),
-            "language": runtime_options.get("language", self._pipeline_defaults.get("language", self._provider_defaults.stt_language)),
-            "chunk_size_ms": runtime_options.get("chunk_size_ms", self._pipeline_defaults.get("chunk_size_ms", 20)),
-            "api_key": runtime_options.get("api_key", self._pipeline_defaults.get("api_key", self._provider_defaults.api_key)),
-            "format": merged_format,
-        }
-        # Default the provider output (source_format) sample rate to the target sample rate
-        # so we request 8 kHz from Deepgram when our downstream is μ-law 8 kHz.
-        source_cfg = runtime_options.get("source_format", self._pipeline_defaults.get("source_format", {}))
-        default_source_rate = int(merged_format.get("sample_rate", 8000))
-        merged["source_format"] = {
-            "encoding": source_cfg.get("encoding", "linear16"),
-            "sample_rate": int(source_cfg.get("sample_rate", default_source_rate)),
-        }
-        return merged
-
-    def _build_tts_request(
+    def describe_alignment(
         self,
-        options: Dict[str, Any],
-        target_encoding: str,
-        target_sample_rate: int,
-    ) -> Tuple[str, Dict[str, Any]]:
-        url = _normalize_rest_url(options.get("base_url"))
-        params: Dict[str, Any] = {
-            "model": options.get("model") or options.get("voice"),
-            "voice": options.get("voice"),
-            "language": options.get("language"),
-        }
-        source_format = options.get("source_format", {})
-        params["encoding"] = source_format.get("encoding", "linear16")
-        # Request provider to emit audio at the downstream target sample rate by default
-        params["sample_rate"] = int(source_format.get("sample_rate", target_sample_rate))
-        params["target_encoding"] = target_encoding
-        params["target_sample_rate"] = target_sample_rate
-        # Remove None values
-        params = {k: v for k, v in params.items() if v is not None}
-        return url, params
+        *,
+        audiosocket_format: str,
+        streaming_encoding: str,
+        streaming_sample_rate: int,
+    ) -> List[str]:
+        issues: List[str] = []
+        cfg_enc = (self._get_config_value("input_encoding", None) or "").lower()
+        try:
+            cfg_rate = int(self._get_config_value("input_sample_rate_hz", 0) or 0)
+        except Exception:
+            cfg_rate = 0
 
-    @staticmethod
-    def _convert_audio(
-        audio_bytes: bytes,
-        source_encoding: str,
-        source_rate: int,
-        target_encoding: str,
-        target_rate: int,
-    ) -> bytes:
-        if not audio_bytes:
-            return b""
+        if cfg_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            if cfg_rate and cfg_rate != 8000:
+                issues.append(
+                    f"Deepgram configuration declares μ-law at {cfg_rate} Hz; μ-law transport must be 8000 Hz."
+                )
+        if cfg_enc in ("slin16", "linear16", "pcm16") and audiosocket_format != "slin16":
+            issues.append(
+                f"Deepgram expects PCM16 input but audiosocket.format is {audiosocket_format}. "
+                "Set audiosocket.format=slin16 or change deepgram.input_encoding."
+            )
+        # Check streaming alignment with actual Deepgram output config (not hardcoded assumptions)
+        dg_out_enc = self._canonicalize_encoding(self._dg_output_encoding or "mulaw")
+        dg_out_rate = int(self._dg_output_rate or 8000)
 
-        fmt = (source_encoding or "").lower()
-        if fmt in ("ulaw", "mulaw", "mu-law", "g711_ulaw"):
-            pcm_bytes = mulaw_to_pcm16le(audio_bytes)
-        else:
-            pcm_bytes = audio_bytes
+        stream_enc_canon = self._canonicalize_encoding(streaming_encoding)
+        # Treat raw 'slin' as PCM16 for alignment comparisons
+        if stream_enc_canon == "slin":
+            stream_enc_canon = "linear16"
 
-        if source_rate != target_rate:
-            pcm_bytes, _ = resample_audio(pcm_bytes, source_rate, target_rate)
+        audiosocket_canon = self._canonicalize_encoding(audiosocket_format)
+        bridge_handled = (
+            stream_enc_canon in {"linear16", "slin16"}
+            and dg_out_enc == "mulaw"
+            and audiosocket_canon in {"slin", "slin16", "linear16"}
+        )
 
-        return convert_pcm16le_to_target_format(pcm_bytes, target_encoding)
+        if not bridge_handled and stream_enc_canon != dg_out_enc:
+            issues.append(
+                f"Streaming manager emits {streaming_encoding} frames but Deepgram output_encoding is {dg_out_enc}. "
+                f"Ensure downstream playback matches Deepgram output format."
+            )
+        if streaming_sample_rate != dg_out_rate:
+            issues.append(
+                f"Streaming sample rate is {streaming_sample_rate} Hz but Deepgram output_sample_rate is {dg_out_rate} Hz."
+            )
+        return issues
 
-    @staticmethod
-    def _chunk_audio(
-        audio_bytes: bytes,
-        encoding: str,
-        sample_rate: int,
-        chunk_ms: int,
-    ) -> Iterable[bytes]:
-        if not audio_bytes:
+    async def _receive_loop(self):
+        if not self.websocket:
             return
-        bytes_per = _bytes_per_sample(encoding)
-        frame_size = max(bytes_per, int(sample_rate * (chunk_ms / 1000.0) * bytes_per))
-        for idx in range(0, len(audio_bytes), frame_size):
-            yield audio_bytes[idx : idx + frame_size]
+        try:
+            async for message in self.websocket:
+                if isinstance(message, str):
+                    try:
+                        event_data = json.loads(message)
+                        et = event_data.get("type") if isinstance(event_data, dict) else None
+                        try:
+                            erid, esid = self._extract_request_session_ids(event_data)
+                            if erid and not getattr(self, "request_id", None):
+                                self.request_id = erid
+                                try:
+                                    logger.info("Deepgram request id (event)", call_id=self.call_id, request_id=erid)
+                                except Exception:
+                                    pass
+                            if esid and not getattr(self, "session_id", None):
+                                self.session_id = esid
+                                try:
+                                    logger.info("Deepgram session id (event)", call_id=self.call_id, session_id=esid)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        # Mark readiness only upon SettingsApplied to avoid pre-ACK races
+                        if et == "SettingsApplied":
+                            self._settings_acked = True
+                            self._ready_to_stream = True
+                            try:
+                                if self._ack_event and not self._ack_event.is_set():
+                                    self._ack_event.set()
+                            except Exception:
+                                pass
+                            # Emit SettingsApplied ACK latency
+                            try:
+                                if self._settings_ts:
+                                    latency_ms = max(0.0, (time.monotonic() - float(self._settings_ts)) * 1000.0)
+                                    if self.call_id:
+                                        _DEEPGRAM_SETTINGS_ACK_LATENCY_MS.set(latency_ms)
+                                        logger.info("Deepgram settings ACK latency", call_id=self.call_id, latency_ms=round(latency_ms, 1))
+                            except Exception:
+                                logger.debug("Failed to record settings ACK latency", exc_info=True)
+                        # One-time ACK settings log for effective audio configs (log full payload)
+                        try:
+                            if getattr(self, "_settings_sent", False) and not getattr(self, "_ack_logged", False):
+                                audio_ack = {}
+                                if isinstance(event_data, dict):
+                                    audio_ack = event_data.get("audio") or {}
+                                    # Capture request_id and session_id from ACK/Welcome if header was missing
+                                    rid = event_data.get("request_id")
+                                    sid = event_data.get("session_id")
+                                    if rid and not getattr(self, "request_id", None):
+                                        self.request_id = rid
+                                        try:
+                                            logger.info("Deepgram request id (ack)", call_id=self.call_id, request_id=rid)
+                                        except Exception:
+                                            pass
+                                    if sid and not getattr(self, "session_id", None):
+                                        self.session_id = sid
+                                        try:
+                                            logger.info("Deepgram session id (ack)", call_id=self.call_id, session_id=sid)
+                                        except Exception:
+                                            pass
+                                # Enhanced ACK diagnostics
+                                out_cfg = {}
+                                in_cfg = {}
+                                if isinstance(audio_ack, dict):
+                                    out_cfg = audio_ack.get("output") or {}
+                                    in_cfg = audio_ack.get("input") or {}
+                                
+                                ack_encoding = out_cfg.get("encoding")
+                                ack_rate = out_cfg.get("sample_rate")
+                                ack_container = out_cfg.get("container")
+                                ack_bitrate = out_cfg.get("bitrate")
+                                
+                                in_encoding = in_cfg.get("encoding")
+                                in_rate = in_cfg.get("sample_rate")
+                                
+                                # Determine if settings were accepted
+                                requested_encoding = self._dg_output_encoding
+                                requested_rate = self._dg_output_rate
+                                
+                                # Voice Agent API's SettingsApplied event doesn't include audio details
+                                # The presence of the event itself means settings were accepted
+                                settings_accepted = True  # SettingsApplied received = accepted
+                                
+                                # Check for explicit mismatch only if ACK has values
+                                settings_match = True
+                                if ack_encoding and ack_rate:
+                                    settings_match = (ack_encoding == requested_encoding and ack_rate == requested_rate)
+                                
+                                logger.info(
+                                    "🔧 DEEPGRAM ACK SETTINGS",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    # What we requested
+                                    requested_output_encoding=requested_encoding,
+                                    requested_output_rate=requested_rate,
+                                    # What Deepgram acknowledged
+                                    ack_output_encoding=ack_encoding,
+                                    ack_output_rate=ack_rate,
+                                    ack_output_container=ack_container,
+                                    ack_output_bitrate=ack_bitrate,
+                                    ack_input_encoding=in_encoding,
+                                    ack_input_rate=in_rate,
+                                    # Validation
+                                    settings_accepted=settings_accepted,
+                                    settings_match=settings_match,
+                                    ack_empty=not audio_ack,
+                                    event_type=(event_data.get("type") if isinstance(event_data, dict) else None),
+                                    full_ack=event_data,
+                                )
+                                
+                                # Empty ACK is normal for Voice Agent API
+                                if not audio_ack or (not ack_encoding and not ack_rate):
+                                    logger.debug(
+                                        "Deepgram SettingsApplied without audio details (normal for Voice Agent API)",
+                                        call_id=self.call_id,
+                                        requested_encoding=requested_encoding,
+                                        requested_rate=requested_rate,
+                                    )
+                                elif not settings_match:
+                                    logger.warning(
+                                        "⚠️ DEEPGRAM CHANGED OUTPUT SETTINGS",
+                                        call_id=self.call_id,
+                                        requested_encoding=requested_encoding,
+                                        requested_rate=requested_rate,
+                                        actual_encoding=ack_encoding,
+                                        actual_rate=ack_rate,
+                                    )
+                                
+                                try:
+                                    self._update_output_format(ack_encoding, ack_rate, source="ack")
+                                except Exception:
+                                    logger.debug("Deepgram ACK output parsing failed", exc_info=True)
+                                try:
+                                    self._ack_logged = True
+                                except Exception:
+                                    pass
+                        except Exception:
+                            logger.debug("Deepgram ACK logging failed", exc_info=True)
+                        # Surface final provider output format to engine for early alignment
+                        try:
+                            if self.on_event:
+                                await self.on_event({
+                                    'type': 'ProviderAudioFormat',
+                                    'call_id': self.call_id,
+                                    'encoding': self._dg_output_encoding,
+                                    'sample_rate': self._dg_output_rate,
+                                })
+                        except Exception:
+                            logger.debug("ProviderAudioFormat event emission failed", exc_info=True)
+                        # Always log control events with enhanced metadata
+                        try:
+                            et = event_data.get("type") if isinstance(event_data, dict) else None
+                            # Log all lifecycle events with full context
+                            logger.info(
+                                "Deepgram lifecycle event",
+                                call_id=self.call_id,
+                                event_type=et,
+                                request_id=getattr(self, "request_id", None),
+                                session_id=getattr(self, "session_id", None),
+                            )
+                            
+                            # Enhanced logging for specific event types
+                            if et == "SettingsApplied":
+                                logger.info(
+                                    "✅ Deepgram SettingsApplied",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    session_id=getattr(self, "session_id", None),
+                                    settings=event_data,
+                                )
+                            elif et == "Welcome":
+                                logger.info(
+                                    "🔌 Deepgram Welcome",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    session_id=getattr(self, "session_id", None),
+                                )
+                            elif et == "UserStartedSpeaking":
+                                logger.info(
+                                    "🎤 Deepgram UserStartedSpeaking",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                )
+                            elif et == "UserStoppedSpeaking":
+                                logger.info(
+                                    "🔇 Deepgram UserStoppedSpeaking",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                )
+                                # Track turn start time when user STOPS speaking (Milestone 21)
+                                # This measures: speech end → first AI audio response
+                                self._turn_start_time = time.time()
+                                self._turn_first_audio_received = False
+                            elif et == "FunctionCallRequest":
+                                # Extract function details for logging (actual Deepgram format)
+                                functions = event_data.get("functions", [])
+                                func_id = functions[0].get("id") if functions else None
+                                func_name = functions[0].get("name") if functions else None
+                                logger.info(
+                                    "📞 Deepgram FunctionCallRequest",
+                                    call_id=self.call_id,
+                                    function_call_id=func_id,
+                                    function_name=func_name,
+                                    function_count=len(functions),
+                                    request_id=getattr(self, "request_id", None),
+                                )
+                                # Handle function call via tool adapter
+                                _t = asyncio.create_task(self._handle_function_call(event_data))
+                                _t.add_done_callback(_log_provider_task_exception)
+                            elif et == "ConnectionClosed":
+                                logger.info(
+                                    "🔌 Deepgram ConnectionClosed",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    code=event_data.get("code"),
+                                    reason=event_data.get("reason"),
+                                )
+                            # Set ACK gate only on SettingsApplied (not Welcome)
+                            if et == "SettingsApplied" and self._ack_event and not self._ack_event.is_set():
+                                try:
+                                    self._ack_event.set()
+                                except Exception:
+                                    pass
+                            # Settings Error handling: retry once with minimal Settings, then stop
+                            if et == "Error":
+                                # Log payload details at error for RCA
+                                try:
+                                    logger.error("Deepgram error detail", call_id=self.call_id, payload=event_data)
+                                except Exception:
+                                    pass
+                                # If not yet retried and we have a minimal payload, attempt resend once
+                                if not self._settings_retry_attempted and self._last_settings_minimal and self.websocket and self.websocket.state.name == "OPEN":
+                                    try:
+                                        self._settings_retry_attempted = True
+                                        logger.warning("Deepgram Settings error; retrying with minimal Settings", call_id=self.call_id)
+                                        await self.websocket.send(json.dumps(self._last_settings_minimal))
+                                        # Do not continue here; allow loop to process next server message
+                                    except Exception:
+                                        logger.debug("Failed to send minimal Settings retry", exc_info=True)
+                                else:
+                                    try:
+                                        asyncio.create_task(self.stop_session())
+                                    except Exception:
+                                        pass
+                                    continue
+                            if isinstance(event_data, dict) and et == "ConversationText":
+                                try:
+                                    role = event_data.get("role")
+                                    text = event_data.get("text") or event_data.get("content")
+                                    logger.info(
+                                        "Deepgram conversation text",
+                                        call_id=self.call_id,
+                                        role=role,
+                                        text=text,
+                                        segments=event_data.get("segments"),
+                                    )
+                                    
+                                    # Track turn start time on user ConversationText (Milestone 21)
+                                    # Deepgram Voice Agent doesn't send UserStoppedSpeaking,
+                                    # so we use ConversationText with role="user" as speech end signal
+                                    if role == "user" and text:
+                                        self._turn_start_time = time.time()
+                                        self._turn_first_audio_received = False
+                                    
+                                    # Track conversation for email tools
+                                    # Debug: Check conditions
+                                    has_call_id = bool(self.call_id)
+                                    has_text = bool(text)
+                                    has_attr = hasattr(self, '_session_store')
+                                    has_store = bool(getattr(self, '_session_store', None))
+                                    
+                                    logger.debug(
+                                        "🔍 Conversation tracking check",
+                                        call_id=self.call_id,
+                                        has_call_id=has_call_id,
+                                        has_text=has_text,
+                                        has_attr=has_attr,
+                                        has_store=has_store,
+                                        role=role
+                                    )
+                                    
+                                    if self.call_id and text and hasattr(self, '_session_store') and self._session_store:
+                                        try:
+                                            session = await self._session_store.get_by_call_id(self.call_id)
+                                            if session:
+                                                # Add to conversation history
+                                                session.conversation_history.append({
+                                                    "role": role,  # "user" or "assistant"
+                                                    "content": text,
+                                                    "timestamp": time.time()
+                                                })
+                                                # Update session
+                                                await self._session_store.upsert_call(session)
+                                                logger.debug(
+                                                    "✅ Tracked conversation message",
+                                                    call_id=self.call_id,
+                                                    role=role,
+                                                    text_preview=text[:50] + "..." if len(text) > 50 else text
+                                                )
+                                            else:
+                                                logger.warning(
+                                                    "⚠️ Session not found for conversation tracking",
+                                                    call_id=self.call_id
+                                                )
+                                        except Exception as e:
+                                            logger.error(
+                                                "❌ Failed to track conversation",
+                                                call_id=self.call_id,
+                                                error=str(e),
+                                                exc_info=True
+                                            )
+                                except Exception:
+                                    logger.debug("Deepgram conversation text logging failed", exc_info=True)
+                            if et in ("Error", "Warning"):
+                                try:
+                                    logger.warning(
+                                        "Deepgram control detail",
+                                        call_id=self.call_id,
+                                        payload=event_data,
+                                    )
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        # Post-ACK injection when readiness events arrive and audio hasn't started
+                        # DISABLED: Let Deepgram Voice Agent handle greeting via agent.greeting setting
+                        # to avoid duplicate greeting (plays twice otherwise)
+                        try:
+                            et = event_data.get("type") if isinstance(event_data, dict) else None
+                            if et == "SettingsApplied" and not self._in_audio_burst and self._greeting_injections < 2:
+                                if self.websocket and self.websocket.state.name == "OPEN":
+                                    logger.info("Skipping greeting injection - using Deepgram agent greeting", call_id=self.call_id, event_type=et)
+                                    # Greeting injection disabled to prevent duplicate
+                                    # self._greeting_injections += 1
+                                    # try:
+                                    #     await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self._get_config_value('greeting', None) or "Hello, how can I help you today?").strip())
+                                    # except Exception:
+                                    #     logger.debug("Post-ACK greeting injection failed", exc_info=True)
+                        except Exception:
+                            pass
+                        # If we were in an audio burst, a JSON control/event frame marks a boundary
+                        if self._in_audio_burst and self.on_event:
+                            await self.on_event({
+                                'type': 'AgentAudioDone',
+                                'streaming_done': True,
+                                'call_id': self.call_id
+                            })
+                            self._in_audio_burst = False
+                            
+                            # Check if farewell audio completed after hangup request
+                            if self._hangup_pending:
+                                logger.info(
+                                    "🔚 Farewell audio completed - emitting HangupReady",
+                                    call_id=self.call_id,
+                                    had_audio=True
+                                )
+                                try:
+                                    await self.on_event({
+                                        'type': 'HangupReady',
+                                        'call_id': self.call_id,
+                                        'reason': 'farewell_completed',
+                                        'had_audio': True
+                                    })
+                                except Exception as e:
+                                    logger.error("Failed to emit HangupReady event", call_id=self.call_id, error=str(e))
+                                
+                                # Reset hangup tracking
+                                self._hangup_pending = False
+                                self._farewell_message = None
+
+                        if self.on_event:
+                            await self.on_event(event_data)
+                    except json.JSONDecodeError:
+                        logger.error("Failed to parse JSON message from Deepgram", message=message)
+                elif isinstance(message, bytes):
+                    self._ready_to_stream = True
+                    
+                    # Track turn latency on first audio output (Milestone 21 - Call History)
+                    if self._turn_start_time is not None and not self._turn_first_audio_received:
+                        self._turn_first_audio_received = True
+                        turn_latency_ms = (time.time() - self._turn_start_time) * 1000
+                        # Save to session for call history
+                        if self._session_store and self.call_id:
+                            try:
+                                call_id_copy = self.call_id
+                                latency_copy = turn_latency_ms
+                                async def save_latency():
+                                    try:
+                                        session = await self._session_store.get_by_call_id(call_id_copy)
+                                        if session:
+                                            session.turn_latencies_ms.append(latency_copy)
+                                            await self._session_store.upsert_call(session)
+                                            logger.debug("Turn latency saved to session", call_id=call_id_copy, latency_ms=round(latency_copy, 1))
+                                        else:
+                                            logger.debug("Session not found for latency tracking", call_id=call_id_copy)
+                                    except Exception as e:
+                                        logger.debug("Failed to save turn latency", call_id=call_id_copy, error=str(e))
+                                _t = asyncio.create_task(save_latency())
+                                _t.add_done_callback(_log_provider_task_exception)
+                            except Exception as e:
+                                logger.debug("Failed to create latency save task", error=str(e))
+                        logger.info("Turn latency recorded", call_id=self.call_id, latency_ms=round(turn_latency_ms, 1))
+                        # Reset for next turn
+                        self._turn_start_time = None
+                    
+                    # One-time runtime probe: infer output encoding/rate from first bytes
+                    can_autodetect = getattr(self, "allow_output_autodetect", False)
+                    try:
+                        # Run a one-time inference on the first binary payload to guard against
+                        # server-side defaults that differ from our declared output.
+                        if not getattr(self, "_dg_output_inferred", False):
+                            l = len(message)
+                            inferred: Optional[str] = None
+                            inferred_rate: Optional[int] = None
+                            # Quick structural hints
+                            if l % 2 == 1:
+                                inferred = "mulaw"
+                            else:
+                                # Compare RMS treating payload as PCM16 vs μ-law→PCM16
+                                try:
+                                    rms_pcm = audioop.rms(message[: min(960, l - (l % 2))], 2) if l >= 2 else 0
+                                except Exception:
+                                    rms_pcm = 0
+                                try:
+                                    pcm_from_ulaw = mulaw_to_pcm16le(message[: min(320, l)])
+                                    rms_ulaw = audioop.rms(pcm_from_ulaw, 2) if pcm_from_ulaw else 0
+                                except Exception:
+                                    rms_ulaw = 0
+                                if rms_ulaw > max(50, int(1.5 * (rms_pcm or 1))):
+                                    inferred = "mulaw"
+                                else:
+                                    inferred = "linear16"
+                            # Heuristic rate inference for PCM16: check 20ms multiples
+                            if inferred == "linear16":
+                                # 20ms frame sizes for PCM16: 320@8k, 640@16k, 960@24k
+                                if l % 960 == 0:
+                                    inferred_rate = 24000
+                                elif l % 640 == 0:
+                                    inferred_rate = 16000
+                                elif l % 320 == 0:
+                                    inferred_rate = 8000
+                            if inferred and inferred != self._dg_output_encoding:
+                                try:
+                                    logger.info(
+                                        "Deepgram output encoding inferred from runtime payload",
+                                        call_id=self.call_id,
+                                        previous_encoding=self._dg_output_encoding,
+                                        new_encoding=inferred,
+                                        bytes=l,
+                                        inferred_rate=inferred_rate,
+                                    )
+                                except Exception:
+                                    pass
+                                self._dg_output_encoding = inferred
+                                if inferred_rate:
+                                    self._dg_output_rate = inferred_rate
+                                try:
+                                    self._dg_output_inferred = True
+                                except Exception:
+                                    pass
+                        else:
+                            # Already inferred or no need; mark as completed to avoid repeating
+                            if not getattr(self, "_dg_output_inferred", False):
+                                self._dg_output_inferred = True
+                    except Exception:
+                        logger.debug("Deepgram output inference failed", exc_info=True)
+
+                    # Provider-side normalization
+                    try:
+                        enc = (self._dg_output_encoding or "mulaw").strip().lower()
+                        rate = int(self._dg_output_rate or 8000)
+                    except Exception:
+                        enc = "mulaw"
+                        rate = 8000
+
+                    if enc in {"linear16", "pcm16"}:
+                        pcm = message
+                        if len(pcm) % 2:
+                            pcm = pcm[:-1]
+                        try:
+                            pcm = self._apply_dc_block(pcm)
+                        except Exception:
+                            pass
+                        audio_event = {
+                            'type': 'AgentAudio',
+                            'data': pcm,
+                            'streaming_chunk': True,
+                            'call_id': self.call_id,
+                            'encoding': 'linear16',
+                            'sample_rate': rate,
+                        }
+                    else:
+                        payload_ulaw = message
+                        audio_event = {
+                            'type': 'AgentAudio',
+                            'data': payload_ulaw,
+                            'streaming_chunk': True,
+                            'call_id': self.call_id,
+                            'encoding': 'mulaw',
+                            'sample_rate': rate,
+                        }
+                    if not self._first_output_chunk_logged:
+                        logger.info(
+                            "Deepgram AgentAudio first chunk",
+                            call_id=self.call_id,
+                            bytes=len(audio_event['data']),
+                            encoding=audio_event['encoding'],
+                            sample_rate=audio_event['sample_rate'],
+                        )
+                        self._first_output_chunk_logged = True
+                    self._in_audio_burst = True
+                    if self.on_event:
+                        await self.on_event(audio_event)
+        except websockets.exceptions.ConnectionClosed as e:
+            # Only warn once; avoid info duplicate from stop_session
+            if not self._closed:
+                logger.warning("Deepgram Voice Agent connection closed", reason=str(e))
+        except Exception:
+            logger.error("Error receiving events from Deepgram Voice Agent", exc_info=True)
+        finally:
+            # If socket ends mid-burst, close the burst cleanly
+            if self._in_audio_burst and self.on_event:
+                try:
+                    await self.on_event({
+                        'type': 'AgentAudioDone',
+                        'streaming_done': True,
+                        'call_id': self.call_id
+                    })
+                    
+                    # Check if farewell audio completed after hangup request (socket closing)
+                    if self._hangup_pending:
+                        logger.info(
+                            "🔚 Farewell audio completed (socket closing) - emitting HangupReady",
+                            call_id=self.call_id,
+                            had_audio=True
+                        )
+                        try:
+                            await self.on_event({
+                                'type': 'HangupReady',
+                                'call_id': self.call_id,
+                                'reason': 'farewell_completed',
+                                'had_audio': True
+                            })
+                        except Exception as e:
+                            logger.error("Failed to emit HangupReady event", call_id=self.call_id, error=str(e))
+                        
+                        # Reset hangup tracking
+                        self._hangup_pending = False
+                        self._farewell_message = None
+                except Exception:
+                    pass
+            self._in_audio_burst = False
+
+    async def speak(self, text: str):
+        if not text or not self.websocket:
+            return
+        inject_message = {"type": "InjectAgentMessage", "content": text}
+        try:
+            await self.websocket.send(json.dumps(inject_message))
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.error("Failed to send inject agent message: Connection is closed.", exc_info=True, code=e.code, reason=e.reason)
+
+    async def _inject_message_dual(self, text: str):
+        if not text or not self.websocket:
+            return
+        try:
+            await self.websocket.send(json.dumps({"type": "InjectAgentMessage", "content": text}))
+        except Exception:
+            logger.debug("InjectAgentMessage failed", exc_info=True)
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about the provider and its capabilities."""
+        return {
+            "name": "DeepgramProvider",
+            "type": "cloud",
+            "supported_codecs": self.supported_codecs,
+            "model": self.config.model,
+            "tts_model": self.config.tts_model
+        }
+    
+    def is_ready(self) -> bool:
+        """Check if the provider is ready to process audio."""
+        # Configuration readiness: we consider the provider ready when it's properly
+        # configured and wired to emit events. A live websocket is only established
+        # after start_session(call_id) during an actual call.
+        try:
+            api_key_ok = bool(self._get_config_value('api_key', None))
+        except Exception:
+            api_key_ok = False
+        return api_key_ok and (self.on_event is not None)

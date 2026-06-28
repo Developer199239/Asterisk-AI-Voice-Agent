@@ -45,7 +45,7 @@ class ARIClient:
             ws_host = base_url.replace("http://", "").split('/')[0]
         safe_username = quote(username)
         safe_password = quote(password)
-        self.ws_url = f"{ws_scheme}://{ws_host}/ari/events?api_key={safe_username}:{safe_password}&app={app_name}&subscribeAll=true&subscribe=ChannelAudioFrame"
+        self.ws_url = f"{ws_scheme}://{ws_host}/ari/events?api_key={safe_username}:{safe_password}&app={app_name}&subscribeAll=true"
         self.websocket: Optional[ClientConnection] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
@@ -112,7 +112,7 @@ class ARIClient:
                     await self.websocket.close()
                 self.websocket = None
 
-            self.websocket = await websockets.connect(self.ws_url, ssl=ssl_context)
+            self.websocket = await websockets.connect(self.ws_url, ssl=ssl_context, open_timeout=30)
             self.running = True
             self._connected = True
             self._reconnect_attempt = 0  # Reset on successful connect

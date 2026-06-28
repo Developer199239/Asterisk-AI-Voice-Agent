@@ -24,6 +24,8 @@ when caller is done with the conversation say i warn firewell and use hangup_cal
 docker logs -f admin_ui
 docker logs -f ai_engine
 
+docker logs -f ai_engine 2>&1 | grep "conversation text"
+
 
 DEEPGRAM_API_KEY=
 GOOGLE_API_KEY=
