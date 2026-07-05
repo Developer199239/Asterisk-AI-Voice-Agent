@@ -125,6 +125,7 @@ import auth  # noqa: E402
 # their existing JWT dependency unchanged.
 # ── end Murtuza change ────────────────────────────────────────────────────────
 from api.outbound_trigger import trigger_router  # noqa: E402
+from api.lead_classify import lead_classify_router  # noqa: E402
 
 # Allow disabling API docs in production for security hardening
 _enable_api_docs = os.getenv("ENABLE_API_DOCS", "true").lower() in ("1", "true", "yes")
@@ -235,6 +236,8 @@ app.include_router(outbound.router, prefix="/api", tags=["outbound"], dependenci
 # instead of JWT. All other /api/outbound/* routes remain JWT-protected above.
 # ── end Murtuza change ────────────────────────────────────────────────────────
 app.include_router(trigger_router, prefix="/api", tags=["outbound"])
+# Lead classify — no JWT, uses LEAD_CLASSIFY_API_KEY (X-Api-Key header)
+app.include_router(lead_classify_router, prefix="/api", tags=["lead-classify"])
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(docs.router, tags=["documentation"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(custom_models.router, prefix="/api/custom-models", tags=["custom-models"], dependencies=[Depends(auth.get_current_user)])
