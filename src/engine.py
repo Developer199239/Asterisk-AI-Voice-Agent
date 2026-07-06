@@ -5882,6 +5882,15 @@ class Engine:
                 await self.streaming_playback_manager.stop_streaming_playback(call_id)
             except Exception:
                 logger.debug("Streaming playback stop failed during cleanup", call_id=call_id, exc_info=True)
+            # Clear the provider stream queue so that if the same caller_channel_id re-enters
+            # Stasis (transfer re-entry), new audio creates a fresh queue + streaming task
+            # instead of enqueueing into the now-stopped old queue (silent audio bug).
+            try:
+                self._provider_stream_queues.pop(call_id, None)
+                self._provider_stream_formats.pop(call_id, None)
+                self._provider_coalesce_buf.pop(call_id, None)
+            except Exception:
+                logger.debug("Failed to clear provider stream buffers during cleanup", call_id=call_id, exc_info=True)
 
             try:
                 self._cancel_attended_transfer_screening(call_id, reason="call-cleanup")
