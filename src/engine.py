@@ -3161,7 +3161,19 @@ class Engine:
             else:
                 logger.warning("🎯 HYBRID ARI - Caller already in progress", channel_id=caller_channel_id)
                 return
-        
+
+            # Clear the cleanup TTL guard for this channel_id. The same channel_id
+            # is reused as call_id for the new session. Without this, the
+            # _cleanup_completed_at guard (meant to deduplicate same-session events)
+            # incorrectly blocks the NEW session's cleanup, silently skipping
+            # post_call_tools and call history for the transferred leg.
+            _cleanup_completed_at.pop(caller_channel_id, None)
+            _cleanup_in_progress.discard(caller_channel_id)
+            logger.info(
+                "🎯 HYBRID ARI - Cleanup guards cleared for re-entering channel",
+                channel_id=caller_channel_id,
+            )
+
         try:
             # Answer the caller (inbound) or skip (outbound already answered)
             if not is_outbound:
