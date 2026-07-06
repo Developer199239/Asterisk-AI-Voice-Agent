@@ -1,5 +1,5 @@
 audiosocket:
-  host: 192.168.0.195
+  host: 0.0.0.0
 contexts:
   default:
     greeting: Great! Which doctor would you like to see?
@@ -96,6 +96,7 @@ contexts:
     - name_look_up
     post_call_tools:
     - smart_doctor_call_log
+    - lead_classify_webhook
   outbound_reminder:
     greeting: Hello, may I speak with {patient_name}?
     prompt: "You are Ava, an AI appointment assistant calling on behalf of Smart Doctor Clinic.\n\n      You are making an OUTBOUND\
@@ -143,6 +144,7 @@ contexts:
     - cancel_appointment
     post_call_tools:
     - smart_doctor_call_log
+    - lead_classify_webhook
   ivr_main:
     greeting: Welcome to Smart Doctor Clinic. How can I help you?
     prompt: "You are Ava, the AI receptionist for Smart Doctor Clinic.\n\n      The greeting has already been played. Do NOT\
@@ -192,6 +194,9 @@ contexts:
     - hangup_call
     pre_call_tools:
     - name_look_up
+    post_call_tools:
+    - smart_doctor_call_log
+    - lead_classify_webhook
   ivr_appointments:
     greeting: For a new appointment, say New appointment. To reschedule an appointment, say Reschedule. To cancel an appointment,
       say Cancel. To check your existing appointments, say Check. For doctor information, say Doctors. To go back to the main
@@ -929,6 +934,20 @@ tools:
     phase: post_call
     enabled: false
     url: ''
+  lead_classify_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: true
+    is_global: false
+    timeout_ms: 15000
+    url: http://127.0.0.1:3003/api/lead/classify
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Api-Key: ${LEAD_CLASSIFY_API_KEY}
+    query_params: {}
+    output_variables: {}
+    payload_template: "{\n        \"conversation\": {transcript_json},\n        \"caller_number\": \"{caller_number}\",\n        \"call_id\": \"{call_id}\"\n      }"
   smart_doctor_call_log:
     kind: generic_webhook
     phase: post_call

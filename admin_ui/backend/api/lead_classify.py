@@ -278,12 +278,18 @@ async def classify_lead(
         )
 
     conversation_text = _format_conversation(req.conversation)
-    logger.info(
-        "Lead classify: analysing conversation — call_id=%s caller=%s turns=%d",
-        req.call_id or "(none)",
-        req.caller_number or "(none)",
-        len(req.conversation),
-    )
+
+    # ── Request details ─────────────────────────────────────────────────────
+    logger.info("=" * 60)
+    logger.info("LEAD CLASSIFY REQUEST")
+    logger.info("=" * 60)
+    logger.info("  call_id       : %s", req.call_id or "(none)")
+    logger.info("  caller_number : %s", req.caller_number or "(none)")
+    logger.info("  turns         : %d", len(req.conversation))
+    logger.info("  conversation  :")
+    for i, turn in enumerate(req.conversation, 1):
+        logger.info("    [%d] %s: %s", i, turn.role.upper(), turn.content)
+    logger.info("=" * 60)
 
     try:
         result = await _call_openai(conversation_text, openai_key)
@@ -300,14 +306,19 @@ async def classify_lead(
     entities: Dict[str, Any] = result.get("entities", {}) if is_lead else {}
     routing = _derive_routing(confidence)
 
-    logger.info(
-        "Lead classify: result — is_lead=%s lead_type=%s confidence=%.2f routing=%s call_id=%s",
-        is_lead,
-        lead_type or "none",
-        confidence,
-        routing,
-        req.call_id or "(none)",
-    )
+    # ── Response details ─────────────────────────────────────────────────────
+    import json as _json
+    logger.info("LEAD CLASSIFY RESPONSE")
+    logger.info("=" * 60)
+    logger.info("  call_id       : %s", req.call_id or "(none)")
+    logger.info("  caller_number : %s", req.caller_number or "(none)")
+    logger.info("  is_lead       : %s", is_lead)
+    logger.info("  lead_type     : %s", lead_type or "none")
+    logger.info("  intent        : %s", intent or "none")
+    logger.info("  confidence    : %.2f", confidence)
+    logger.info("  routing       : %s", routing)
+    logger.info("  entities      : %s", _json.dumps(entities, ensure_ascii=False))
+    logger.info("=" * 60)
 
     return LeadClassifyResponse(
         is_lead=is_lead,
