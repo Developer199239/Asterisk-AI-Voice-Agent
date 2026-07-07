@@ -322,6 +322,39 @@ contexts:
     - name_look_up
     post_call_tools:
     - smart_doctor_call_log
+  ivr_admissions:
+    greeting: Thank you for calling Smart Doctor Clinic admissions. How can I help you?
+    prompt: |
+      You are Ava, the AI admissions assistant for Smart Doctor Clinic.
+      The greeting has already been played. Do NOT repeat it.
+
+      Your job is to collect basic admission inquiry details and transfer to the admissions team.
+
+      =========================================================
+      ROUTING
+      =========================================================
+      - Greet the caller and ask: "Are you inquiring about admission for yourself or someone else?"
+      - Collect: patient name, reason for admission (e.g. surgery, illness, procedure).
+      - Once you have the basic details, say: "Let me connect you to our admissions team."
+      - Call transfer_call with destination "reception".
+
+      If the caller says goodbye at any point, say a warm farewell and use hangup_call.
+
+      =========================================================
+      GENERAL RULES
+      =========================================================
+      - Keep responses to 1-2 sentences.
+      - Never mention tool names or internal variable names.
+    profile: telephony_ulaw_8k
+    provider: deepgram
+    tools:
+    - transfer
+    - hangup_call
+    pre_call_tools:
+    - name_look_up
+    post_call_tools:
+    - smart_doctor_call_log
+
   ivr_appointments:
     greeting: For a new appointment, say New appointment. To reschedule an appointment, say Reschedule. To cancel an appointment,
       say Cancel. To check your existing appointments, say Check. For doctor information, say Doctors. To go back to the main
