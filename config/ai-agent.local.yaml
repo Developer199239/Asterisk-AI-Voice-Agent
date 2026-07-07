@@ -96,7 +96,6 @@ contexts:
     - name_look_up
     post_call_tools:
     - smart_doctor_call_log
-    - lead_classify_webhook
   outbound_reminder:
     greeting: Hello, may I speak with {patient_name}?
     prompt: "You are Ava, an AI appointment assistant calling on behalf of Smart Doctor Clinic.\n\n      You are making an OUTBOUND\
@@ -322,6 +321,7 @@ contexts:
     - name_look_up
     post_call_tools:
     - smart_doctor_call_log
+    - lead_classify_webhook
   ivr_admissions:
     greeting: Thank you for calling Smart Doctor Clinic. You have reached the admissions department. How can I help you today?
     prompt: |
@@ -451,6 +451,7 @@ contexts:
     - name_look_up
     post_call_tools:
     - smart_doctor_call_log
+    - lead_classify_webhook
 
   ivr_appointments:
     greeting: For a new appointment, say New appointment. To reschedule an appointment, say Reschedule. To cancel an appointment,
