@@ -6,6 +6,9 @@ POST /api/lead/classify
 Authentication: X-Api-Key header (LEAD_CLASSIFY_API_KEY in .env).
 LLM logic  → llm/openai_client.py
 Prompt     → prompts/lead_classify.py
+
+After classification, if is_lead is true, the handler automatically
+POSTs the lead to HOS via HOS_API_BASE_URL/api/v1/tools/leads.
 """
 
 import json
@@ -13,6 +16,7 @@ import logging
 import os
 from typing import Any, Dict, List, Literal, Optional
 
+import httpx
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
@@ -130,6 +134,86 @@ def _derive_routing(confidence: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Lead save helper
+# ---------------------------------------------------------------------------
+
+# Lead types that warrant HIGH priority
+_HIGH_PRIORITY_TYPES = {"emergency", "admission", "surgery", "icu"}
+
+
+async def _save_lead(
+    result: Dict[str, Any],
+    caller_number: str,
+    call_id: str,
+    conversation_text: str,
+) -> None:
+    """POST lead to HOS API when is_lead is true. Errors are logged but never raised."""
+    lead_type = result.get("lead_type") or "Other"
+    intent = result.get("intent") or ""
+    entities = result.get("entities") or {}
+
+    name = (
+        entities.get("patient")
+        or entities.get("patient_name")
+        or caller_number
+        or "Unknown"
+    )
+    priority = "HIGH" if lead_type.lower() in _HIGH_PRIORITY_TYPES else "NORMAL"
+
+    payload = {
+        "name": name,
+        "phone": caller_number or "",
+        "source": "AI_VOICE_AGENT",
+        "interestedService": lead_type,
+        "processingMode": "AI_AUTOMATED",
+        "priority": priority,
+        "assignedTo": "",
+        "discussionSummary": intent,
+        "discussionDetails": conversation_text,
+    }
+
+    hos_base = _env("HOS_API_BASE_URL", "http://168.144.27.225")
+    hos_key = _env("HOS_API_KEY", "dev-api-key-replace-in-production")
+    hos_tenant = _env("HOS_TENANT_ID", "1")
+    url = f"{hos_base}/api/v1/tools/leads"
+
+    logger.info("=" * 60)
+    logger.info("LEAD SAVE REQUEST")
+    logger.info("  call_id          : %s", call_id)
+    logger.info("  url              : %s", url)
+    logger.info("  name             : %s", name)
+    logger.info("  phone            : %s", caller_number)
+    logger.info("  interestedService: %s", lead_type)
+    logger.info("  priority         : %s", priority)
+    logger.info("  discussionSummary: %s", intent)
+    logger.info("=" * 60)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Tenant-ID": hos_tenant,
+                    "X-API-Key": hos_key,
+                },
+            )
+        if resp.status_code < 300:
+            logger.info(
+                "LEAD SAVE SUCCESS: call_id=%s lead_type=%s status=%d",
+                call_id, lead_type, resp.status_code,
+            )
+        else:
+            logger.warning(
+                "LEAD SAVE FAILED: status=%d body=%s",
+                resp.status_code, resp.text[:300],
+            )
+    except Exception as exc:
+        logger.error("LEAD SAVE ERROR: %s", exc, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
 
@@ -203,6 +287,15 @@ async def classify_lead(
     confidence: float = float(result.get("confidence", 0.0))
     entities: Dict[str, Any] = result.get("entities", {}) if is_lead else {}
     routing = _derive_routing(confidence)
+
+    # ── Save lead to HOS if detected ─────────────────────────────────────────
+    if is_lead:
+        await _save_lead(
+            result=result,
+            caller_number=req.caller_number or "",
+            call_id=req.call_id or "",
+            conversation_text=conversation_text,
+        )
 
     # ── Log response ─────────────────────────────────────────────────────────
     logger.info("LEAD CLASSIFY RESPONSE")
