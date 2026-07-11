@@ -1,5 +1,5 @@
 """
-Outbound single-shot trigger API for Smart Doctor appointment reminder calls.
+Outbound single-shot trigger API for Smart Doctor appointment reminder and lead follow-up calls.
 
 # ── Murtuza change ────────────────────────────────────────────────────────────
 # REASON: HOS backend Java scheduler needs to trigger one outbound call per
@@ -100,8 +100,13 @@ def _outbound_trigger_api_key() -> str:
 
 
 def _outbound_dial_context() -> str:
-    """FreePBX dialplan context for outbound calls (matches campaign dialer default)."""
+    """FreePBX dialplan context for outbound reminder calls."""
     return _env("AAVA_OUTBOUND_DIAL_CONTEXT", "from-internal")
+
+
+def _outbound_lead_dial_context() -> str:
+    """FreePBX dialplan context for outbound lead follow-up calls."""
+    return _env("AAVA_OUTBOUND_LEAD_DIAL_CONTEXT", "from-ai-outbound-lead")
 
 
 # ---------------------------------------------------------------------------
@@ -110,46 +115,54 @@ def _outbound_dial_context() -> str:
 
 class OutboundTriggerRequest(BaseModel):
     """
-    Payload sent by HOS backend Java scheduler to trigger a reminder call.
+    Payload sent by HOS backend to trigger a single outbound call.
 
-    All patient/appointment fields are passed through as Asterisk channel
-    variables so the AI engine can inject them into the outbound prompt
-    without making a separate pre-call HTTP lookup.
+    For outbound_reminder: phone_number + patient_id + patient_name + appointment_id +
+    doctor_name + appointment_date + start_time are required.
+
+    For outbound_lead: phone_number + patient_name + lead_id are required;
+    all appointment fields are optional and ignored.
     """
     phone_number: str = Field(
         ...,
         description="Patient phone number. E.164 (+923001234567) or local format (03001234567).",
         examples=["+923001234567"],
     )
-    patient_id: str = Field(
-        ...,
-        description="Patient ID from HOS backend (integer, sent as string).",
-    )
     patient_name: str = Field(
         ...,
         description="Patient full name — Ava uses this in the greeting.",
     )
-    appointment_id: str = Field(
-        ...,
-        description="Appointment ID — used by cancel/reschedule tools during the call.",
-    )
-    doctor_name: str = Field(
-        ...,
-        description="Doctor full name — Ava mentions this in the reminder.",
-    )
-    appointment_date: str = Field(
-        ...,
-        description="Appointment date in YYYY-MM-DD format.",
-        examples=["2026-05-20"],
-    )
-    start_time: str = Field(
-        ...,
-        description="Appointment time in HH:MM format (24h). Ava reads it as 12h to patient.",
-        examples=["09:00"],
-    )
     context: str = Field(
         default="outbound_reminder",
         description="AI engine context name. Must exist in ai-agent.yaml contexts.",
+    )
+    # ── Reminder-only fields ────────────────────────────────────────────────
+    patient_id: Optional[str] = Field(
+        default=None,
+        description="Patient ID from HOS backend. Required for outbound_reminder.",
+    )
+    appointment_id: Optional[str] = Field(
+        default=None,
+        description="Appointment ID. Required for outbound_reminder.",
+    )
+    doctor_name: Optional[str] = Field(
+        default=None,
+        description="Doctor full name. Required for outbound_reminder.",
+    )
+    appointment_date: Optional[str] = Field(
+        default=None,
+        description="Appointment date in YYYY-MM-DD format. Required for outbound_reminder.",
+        examples=["2026-05-20"],
+    )
+    start_time: Optional[str] = Field(
+        default=None,
+        description="Appointment time in HH:MM format (24h). Required for outbound_reminder.",
+        examples=["09:00"],
+    )
+    # ── Lead-only fields ────────────────────────────────────────────────────
+    lead_id: Optional[str] = Field(
+        default=None,
+        description="Lead ID from HOS backend. Required for outbound_lead.",
     )
     caller_id: Optional[str] = Field(
         default=None,
@@ -172,9 +185,11 @@ class OutboundTriggerResponse(BaseModel):
 @trigger_router.post(
     "/trigger",
     response_model=OutboundTriggerResponse,
-    summary="Trigger a single outbound appointment reminder call",
+    summary="Trigger a single outbound call (reminder or lead follow-up)",
     description=(
-        "Called by the HOS backend Java scheduler 1 hour before an appointment. "
+        "Called by the HOS backend to trigger one outbound call. "
+        "Set context='outbound_reminder' for appointment reminders, "
+        "'outbound_lead' for lead follow-up calls. "
         "Authenticates via `X-Api-Key` header (set `OUTBOUND_TRIGGER_API_KEY` in .env). "
         "Does NOT require a JWT token — this endpoint is intentionally public to support "
         "machine-to-machine calls from the HOS backend."
@@ -187,10 +202,6 @@ async def trigger_outbound_call(
         description="Shared API key. Must match OUTBOUND_TRIGGER_API_KEY in .env.",
     ),
 ):
-    # ── API key gate ────────────────────────────────────────────────────────
-    # If OUTBOUND_TRIGGER_API_KEY is not set in .env → 503 (safe disabled state)
-    # If wrong key → 401
-    # ────────────────────────────────────────────────────────────────────────
     api_key = _outbound_trigger_api_key()
     if not api_key:
         logger.error("OUTBOUND_TRIGGER_API_KEY not set in .env — outbound trigger is disabled")
@@ -215,100 +226,117 @@ async def trigger_outbound_call(
         or "Smart Doctor Clinic"
     )
 
-    # ── Murtuza change ──────────────────────────────────────────────────────
-    # BUG FIX: ARI POST /channels requires a specific split:
-    #   - URL query params: endpoint, app, appArgs, timeout, callerId
-    #   - JSON body:        { "channelVars": { ... } }
-    #
-    # Original code sent everything as json= body. ARI ignored endpoint/app
-    # (not in the right place) → returned 400 → unhandled → 500.
-    # Confirmed from src/ari_client.py send_command() which does the same split.
-    # ── end Murtuza change ──────────────────────────────────────────────────
-    # ── Murtuza change ──────────────────────────────────────────────────────
-    # appArgs="outbound_reminder" is REQUIRED.
-    # The engine's StasisStart handler checks args[0] to route the call:
-    #   - "outbound" / "outbound_amd" → campaign dialer handler
-    #   - "outbound_reminder"          → _handle_caller_stasis_start_hybrid
-    #                                    (Murtuza change in engine.py)
-    #   - anything else with <2 args   → agent action handler → hangup
-    #   - no args + Local channel      → _handle_local_stasis_start_hybrid
-    #                                    (transfer helper, not an AI call)
-    # Without appArgs="outbound_reminder", the Local/;1 channel would be
-    # silently dropped. The engine.py change routes this action type to the
-    # normal AI call flow, bypassing the _is_caller_channel() PJSIP/SIP gate.
-    # ── end Murtuza change ──────────────────────────────────────────────────
-    dial_context = _outbound_dial_context()
-
-    # ── Murtuza change ────────────────────────────────────────────────────────
-    # ROOT-CAUSE FIX: ARI POST /channels returns the Local;2 channel (dialplan
-    # side), NOT the Local;1 channel that enters Stasis. Trying to SET channel
-    # vars on the ;2 ID always returns HTTP 409 ("not in a Stasis application").
-    #
-    # Solution: encode all patient/appointment data directly into appArgs.
-    # appArgs are baked into the Stasis event at call-creation time and are
-    # available immediately in StasisStart.args[] — zero race condition, no
-    # channel-var reads needed at all.
-    #
-    # Format: "outbound_reminder,key=value|key=value|..."
-    # Pipe (|) is used as the field separator (safe — not present in names/dates).
-    # Commas and pipes in field values are replaced with spaces as a safety guard.
-    # ── end Murtuza change ──────────────────────────────────────────────────
     def _safe(s: str) -> str:
         return (s or "").replace(",", " ").replace("|", " ")
 
-    _patient_arg = "|".join([
-        f"patient_name={_safe(req.patient_name)}",
-        f"doctor_name={_safe(req.doctor_name)}",
-        f"appointment_date={_safe(req.appointment_date)}",
-        f"start_time={_safe(req.start_time)}",
-        f"appointment_id={_safe(req.appointment_id)}",
-        f"patient_id={_safe(req.patient_id)}",
-        f"context={_safe(req.context)}",
-    ])
+    ari_url = f"{_ari_base_url()}/ari/channels"
 
-    # Encode appointment_id and patient_id into the extension string so the
-    # dialplan (Local;2) can read them via CUT().  Channel vars set via ARI
-    # only land on ;1 (Stasis side) — ;2 never sees them.
-    # Format: PHONE_APPTID_PATID  e.g. 6002_29_3
-    # Underscores are safe: phone numbers, appointment IDs, and patient IDs
-    # never contain underscores.  The _X. pattern in from-ai-outbound matches.
-    _dial_ext = f"{req.phone_number}_{req.appointment_id}_{req.patient_id}"
+    # ── Branch: outbound_lead vs outbound_reminder ──────────────────────────
+    if req.context == "outbound_lead":
+        if not req.lead_id:
+            raise HTTPException(status_code=422, detail="lead_id is required for outbound_lead")
 
-    ari_query_params = {
-        "endpoint": f"Local/{_dial_ext}@{dial_context}",
-        "app":      _app_name(),
-        "appArgs":  f"outbound_reminder,{_patient_arg}",
-        "timeout":  "20",
-        "callerId": caller_id,
-    }
+        dial_context = _outbound_lead_dial_context()
+        # Extension format: PHONE_LEADID (2 parts, parsed by dialplan CUT())
+        _dial_ext = f"{req.phone_number}_{req.lead_id}"
 
-    ari_body = {
-        "channelVars": {
+        _data_arg = "|".join([
+            f"patient_name={_safe(req.patient_name)}",
+            f"lead_id={_safe(req.lead_id)}",
+            f"context=outbound_lead",
+        ])
+
+        ari_query_params = {
+            "endpoint": f"Local/{_dial_ext}@{dial_context}",
+            "app":      _app_name(),
+            "appArgs":  f"outbound_lead,{_data_arg}",
+            "timeout":  "20",
+            "callerId": caller_id,
+        }
+        ari_body = {
+            "channelVars": {
+                "AI_CONTEXT":   "outbound_lead",
+                "LEAD_ID":      req.lead_id,
+                "PATIENT_NAME": req.patient_name,
+                "CALL_TYPE":    "outbound_lead",
+            },
+        }
+        _vars_to_set = {
+            "AI_CONTEXT":   "outbound_lead",
+            "LEAD_ID":      req.lead_id,
+            "PATIENT_NAME": req.patient_name,
+            "CALL_TYPE":    "outbound_lead",
+        }
+
+        logger.info(
+            "Outbound trigger [lead]: originating — phone=%s lead_id=%s dial_context=%s ari=%s",
+            req.phone_number, req.lead_id, dial_context, ari_url,
+        )
+
+    else:
+        # outbound_reminder (default) — all appointment fields required
+        missing = [f for f in ("patient_id", "appointment_id", "doctor_name", "appointment_date", "start_time")
+                   if not getattr(req, f)]
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Fields required for outbound_reminder: {', '.join(missing)}",
+            )
+
+        dial_context = _outbound_dial_context()
+        _dial_ext = f"{req.phone_number}_{req.appointment_id}_{req.patient_id}"
+
+        _data_arg = "|".join([
+            f"patient_name={_safe(req.patient_name)}",
+            f"doctor_name={_safe(req.doctor_name)}",
+            f"appointment_date={_safe(req.appointment_date)}",
+            f"start_time={_safe(req.start_time)}",
+            f"appointment_id={_safe(req.appointment_id)}",
+            f"patient_id={_safe(req.patient_id)}",
+            f"context={_safe(req.context)}",
+        ])
+
+        ari_query_params = {
+            "endpoint": f"Local/{_dial_ext}@{dial_context}",
+            "app":      _app_name(),
+            "appArgs":  f"outbound_reminder,{_data_arg}",
+            "timeout":  "20",
+            "callerId": caller_id,
+        }
+        ari_body = {
+            "channelVars": {
+                "AI_CONTEXT":       req.context,
+                "PATIENT_ID":       req.patient_id,
+                "PATIENT_NAME":     req.patient_name,
+                "APPOINTMENT_ID":   req.appointment_id,
+                "DOCTOR_NAME":      req.doctor_name,
+                "APPOINTMENT_DATE": req.appointment_date,
+                "START_TIME":       req.start_time,
+                "CALL_TYPE":        "outbound_reminder",
+            },
+        }
+        _vars_to_set = {
             "AI_CONTEXT":       req.context,
-            "PATIENT_ID":       req.patient_id,
+            "CALL_TYPE":        "outbound_reminder",
             "PATIENT_NAME":     req.patient_name,
+            "PATIENT_ID":       req.patient_id,
             "APPOINTMENT_ID":   req.appointment_id,
             "DOCTOR_NAME":      req.doctor_name,
             "APPOINTMENT_DATE": req.appointment_date,
             "START_TIME":       req.start_time,
-            "CALL_TYPE":        "outbound_reminder",
-        },
-    }
+        }
 
-    ari_url = f"{_ari_base_url()}/ari/channels"
-
-    logger.info(
-        "Outbound trigger: originating call — phone=%s patient_id=%s appointment_id=%s context=%s dial_context=%s ari=%s",
-        req.phone_number, req.patient_id, req.appointment_id, req.context, dial_context, ari_url,
-    )
+        logger.info(
+            "Outbound trigger [reminder]: originating — phone=%s patient_id=%s appointment_id=%s context=%s dial_context=%s ari=%s",
+            req.phone_number, req.patient_id, req.appointment_id, req.context, dial_context, ari_url,
+        )
 
     try:
         async with aiohttp.ClientSession(auth=_ari_auth()) as http_session:
-            # Step 1: Originate the call
             async with http_session.post(
                 ari_url,
-                params=ari_query_params,  # endpoint/app/timeout → URL query string
-                json=ari_body,            # channelVars → JSON body
+                params=ari_query_params,
+                json=ari_body,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 body = {}
@@ -329,36 +357,12 @@ async def trigger_outbound_call(
 
                 channel_id = body.get("id", "unknown")
                 logger.info(
-                    "Outbound trigger: call originated — channel_id=%s phone=%s patient_id=%s appointment_id=%s",
-                    channel_id, req.phone_number, req.patient_id, req.appointment_id,
+                    "Outbound trigger: call originated — channel_id=%s phone=%s context=%s",
+                    channel_id, req.phone_number, req.context,
                 )
 
-            # ── Murtuza change ────────────────────────────────────────────────
-            # BUG FIX: ARI channelVars sent in the originate JSON body are NOT
-            # readable via GET /channels/{id}/variable on Local/ channels.
-            # All three GET requests (AI_PROVIDER, AI_AUDIO_PROFILE, AI_CONTEXT)
-            # return 404 — confirmed from engine logs.
-            #
-            # Fix: After getting the channel_id, explicitly SET each variable
-            # using POST /channels/{id}/variable.  Variables set this way ARE
-            # readable by subsequent GET requests in the AI engine.
-            #
-            # Timing is safe: the engine reads AI_CONTEXT ~160 ms after
-            # StasisStart (bridge creation + session setup overhead), while
-            # these 8 parallel SET requests complete in ~20–30 ms.
-            # ── end Murtuza change ──────────────────────────────────────────
             if channel_id and channel_id != "unknown":
                 _var_url = f"{ari_url}/{channel_id}/variable"
-                _vars_to_set = {
-                    "AI_CONTEXT":       req.context,
-                    "CALL_TYPE":        "outbound_reminder",
-                    "PATIENT_NAME":     req.patient_name,
-                    "PATIENT_ID":       req.patient_id,
-                    "APPOINTMENT_ID":   req.appointment_id,
-                    "DOCTOR_NAME":      req.doctor_name,
-                    "APPOINTMENT_DATE": req.appointment_date,
-                    "START_TIME":       req.start_time,
-                }
                 import asyncio as _asyncio
 
                 async def _set_var(vname: str, vval: str) -> None:

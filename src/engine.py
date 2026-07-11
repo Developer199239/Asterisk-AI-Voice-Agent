@@ -2509,6 +2509,51 @@ class Engine:
                 await self._handle_caller_stasis_start_hybrid(channel_id, channel)
                 return
 
+            if action_type == "outbound_lead":
+                logger.info(
+                    "📞 OUTBOUND LEAD - Routing to caller handler",
+                    channel_id=channel_id,
+                )
+                if not hasattr(self, "_outbound_reminder_vars"):
+                    self._outbound_reminder_vars: dict = {}
+
+                _lead_context_name = "outbound_lead"
+                if len(args) > 1 and "=" in args[1]:
+                    _lead_parsed: dict = {}
+                    for _kv in args[1].split("|"):
+                        if "=" in _kv:
+                            _k, _, _v = _kv.partition("=")
+                            _lead_parsed[_k.strip()] = _v.strip()
+                    if _lead_parsed:
+                        self._outbound_reminder_vars[channel_id] = _lead_parsed
+                        _lead_context_name = _lead_parsed.get("context", "outbound_lead")
+                        logger.info(
+                            "📞 OUTBOUND LEAD - Lead data parsed from appArgs",
+                            channel_id=channel_id,
+                            context=_lead_context_name,
+                            keys=list(_lead_parsed.keys()),
+                        )
+                elif len(args) > 1:
+                    _lead_context_name = args[1]
+
+                try:
+                    await self.ari_client.set_channel_var(
+                        channel_id, "AI_CONTEXT", _lead_context_name
+                    )
+                    logger.info(
+                        "📞 OUTBOUND LEAD - SET AI_CONTEXT=%s on channel",
+                        _lead_context_name,
+                        channel_id=channel_id,
+                    )
+                except Exception:
+                    logger.debug(
+                        "OUTBOUND LEAD: failed to SET AI_CONTEXT; will use fallback",
+                        channel_id=channel_id,
+                        exc_info=True,
+                    )
+                await self._handle_caller_stasis_start_hybrid(channel_id, channel)
+                return
+
             # Agent action (transfer, voicemail, queue, etc.)
             logger.info(
                 f"🔀 AGENT ACTION - Stasis entry with action: {action_type}",
