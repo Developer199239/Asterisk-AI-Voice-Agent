@@ -3404,6 +3404,11 @@ class Engine:
                         # If ARI GET failed, set context_name from the cached dict
                         if not _ai_ctx_now and _outbound_context_for_seeding:
                             session.context_name = _outbound_context_for_seeding
+                        # Populate outbound_lead_id so the built-in "lead_id" substitution
+                        # in _build_prompt_substitutions picks it up. Without this the
+                        # outbound_lead_id field stays None and {lead_id} resolves to "".
+                        if "lead_id" in _outbound_data and not getattr(session, "outbound_lead_id", None):
+                            session.outbound_lead_id = _outbound_data["lead_id"]
                         await self._save_session(session)
                         logger.info(
                             "Outbound: pre-seeded pre_call_results from appArgs",
