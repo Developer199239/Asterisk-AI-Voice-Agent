@@ -145,7 +145,7 @@ async def _save_lead(
     result: Dict[str, Any],
     caller_number: str,
     call_id: str,
-    conversation_text: str,
+    conversation_turns: List[Any],
 ) -> None:
     """POST lead to HOS API when is_lead is true. Errors are logged but never raised."""
     lead_type = result.get("lead_type") or "Other"
@@ -160,6 +160,12 @@ async def _save_lead(
     )
     priority = "HIGH" if lead_type.lower() in _HIGH_PRIORITY_TYPES else "NORMAL"
 
+    # Build conversation JSON — same shape as {transcript_json} in webhooks
+    discussion_details = json.dumps(
+        [{"role": t.role, "content": t.content} for t in conversation_turns],
+        ensure_ascii=False,
+    )
+
     payload = {
         "name": name,
         "phone": caller_number or "",
@@ -169,7 +175,7 @@ async def _save_lead(
         "priority": priority,
         "assignedTo": "",
         "discussionSummary": intent,
-        "discussionDetails": conversation_text,
+        "discussionDetails": discussion_details,
     }
 
     hos_base = _env("HOS_API_BASE_URL", "http://168.144.27.225")
@@ -177,38 +183,46 @@ async def _save_lead(
     hos_tenant = _env("HOS_TENANT_ID", "1")
     url = f"{hos_base}/api/v1/tools/leads"
 
+    request_headers = {
+        "Content-Type": "application/json",
+        "X-Tenant-ID": hos_tenant,
+        "X-API-Key": hos_key,
+    }
+
     logger.info("=" * 60)
     logger.info("LEAD SAVE REQUEST")
-    logger.info("  call_id          : %s", call_id)
-    logger.info("  url              : %s", url)
-    logger.info("  name             : %s", name)
-    logger.info("  phone            : %s", caller_number)
-    logger.info("  interestedService: %s", lead_type)
-    logger.info("  priority         : %s", priority)
-    logger.info("  discussionSummary: %s", intent)
+    logger.info("  call_id : %s", call_id)
+    logger.info("  METHOD  : POST")
+    logger.info("  URL     : %s", url)
+    logger.info("  HEADERS :")
+    for k, v in request_headers.items():
+        logger.info("    %s: %s", k, v)
+    logger.info("  BODY    :")
+    logger.info("%s", json.dumps(payload, indent=4, ensure_ascii=False))
     logger.info("=" * 60)
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Tenant-ID": hos_tenant,
-                    "X-API-Key": hos_key,
-                },
-            )
+            resp = await client.post(url, json=payload, headers=request_headers)
+
+        logger.info("=" * 60)
+        logger.info("LEAD SAVE RESPONSE")
+        logger.info("  call_id    : %s", call_id)
+        logger.info("  STATUS     : %d", resp.status_code)
+        logger.info("  HEADERS    :")
+        for k, v in resp.headers.items():
+            logger.info("    %s: %s", k, v)
+        logger.info("  BODY       :")
+        try:
+            logger.info("%s", json.dumps(resp.json(), indent=4, ensure_ascii=False))
+        except Exception:
+            logger.info("%s", resp.text)
+        logger.info("=" * 60)
+
         if resp.status_code < 300:
-            logger.info(
-                "LEAD SAVE SUCCESS: call_id=%s lead_type=%s status=%d",
-                call_id, lead_type, resp.status_code,
-            )
+            logger.info("LEAD SAVE SUCCESS: call_id=%s lead_type=%s", call_id, lead_type)
         else:
-            logger.warning(
-                "LEAD SAVE FAILED: status=%d body=%s",
-                resp.status_code, resp.text[:300],
-            )
+            logger.warning("LEAD SAVE FAILED: call_id=%s status=%d", call_id, resp.status_code)
     except Exception as exc:
         logger.error("LEAD SAVE ERROR: %s", exc, exc_info=True)
 
@@ -294,7 +308,7 @@ async def classify_lead(
             result=result,
             caller_number=req.caller_number or "",
             call_id=req.call_id or "",
-            conversation_text=conversation_text,
+            conversation_turns=req.conversation,
         )
 
     # ── Log response ─────────────────────────────────────────────────────────
