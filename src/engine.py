@@ -3356,7 +3356,22 @@ class Engine:
                 # For any outbound_ context, seed pre_call_results with
                 # patient/appointment data so template vars ({patient_name} etc.)
                 # are substituted before the provider session starts.
-                if _ai_ctx_now.startswith("outbound_"):
+                #
+                # Fallback: if the ARI GET returned empty (happens with Local/
+                # channels under load), read the context from the cached appArgs
+                # dict so the seeding is never silently skipped.
+                _outbound_context_for_seeding = _ai_ctx_now
+                if not _outbound_context_for_seeding and hasattr(self, "_outbound_reminder_vars"):
+                    _outbound_context_for_seeding = (
+                        self._outbound_reminder_vars.get(caller_channel_id, {}).get("context", "")
+                    )
+                    if _outbound_context_for_seeding:
+                        logger.info(
+                            "Outbound: context resolved from cached appArgs (ARI GET returned empty)",
+                            call_id=caller_channel_id,
+                            context=_outbound_context_for_seeding,
+                        )
+                if _outbound_context_for_seeding.startswith("outbound_"):
                     # ── Murtuza change ──────────────────────────────────────────
                     # FIX (v3 — appArgs approach, no channel vars needed):
                     #
@@ -3386,11 +3401,14 @@ class Engine:
                         # Remove internal routing key before storing
                         _outbound_data.pop("context", None)
                         session.pre_call_results = _outbound_data
+                        # If ARI GET failed, set context_name from the cached dict
+                        if not _ai_ctx_now and _outbound_context_for_seeding:
+                            session.context_name = _outbound_context_for_seeding
                         await self._save_session(session)
                         logger.info(
                             "Outbound: pre-seeded pre_call_results from appArgs",
                             call_id=caller_channel_id,
-                            context=_ai_ctx_now,
+                            context=_outbound_context_for_seeding,
                             keys=list(_outbound_data.keys()),
                         )
                     else:

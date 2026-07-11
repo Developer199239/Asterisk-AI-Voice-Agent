@@ -163,8 +163,10 @@ contexts:
       STEP 1 - CONFIRM IDENTITY
       Greet the caller and confirm you are speaking with {patient_name}.
         - If yes / it is them → move to STEP 2.
-        - If someone else   → apologise, say you will call back, then use hangup_call.
-        - If no answer      → use hangup_call.
+        - If someone else   → apologise, say you will call back, then call update_lead_call_result
+          with lead_id={lead_id} and interest=wrong_person, then use hangup_call.
+        - If no answer      → call update_lead_call_result with lead_id={lead_id}
+          and interest=no_answer, then use hangup_call.
 
       STEP 2 - INTRODUCE PURPOSE
       Say: "I am calling because you recently enquired about our services.
@@ -178,22 +180,36 @@ contexts:
            Collect a preferred date or time window.
            Say: "I have noted your preferred time. Our team will confirm the booking
                  shortly. Is there anything else I can help you with?"
+           Call update_lead_call_result with lead_id={lead_id} and interest=interested.
            Then use hangup_call.
 
         b) NOT INTERESTED (no / not now):
            Say: "No problem at all. If you change your mind, feel free to call us.
                  Have a wonderful day."
+           Call update_lead_call_result with lead_id={lead_id} and interest=not_interested.
            Then use hangup_call.
 
         c) BUSY / WRONG TIME:
            Say: "No problem. Please call us at your convenience. Goodbye."
+           Call update_lead_call_result with lead_id={lead_id} and interest=busy.
            Then use hangup_call.
+
+        d) VOICEMAIL / ANSWERING MACHINE:
+           Do not leave a message. Call update_lead_call_result with lead_id={lead_id}
+           and interest=voicemail. Then use hangup_call.
 
       =========================================================
       GENERAL RULES
       =========================================================
-      - Never reveal lead_id or any internal IDs.
-      - After any terminal action, ALWAYS call hangup_call to end the call.
+      - Never reveal lead_id or any internal IDs to the caller.
+      - BEFORE calling hangup_call, ALWAYS call update_lead_call_result first with
+        lead_id={lead_id} and the appropriate interest value:
+          interested     = person confirmed interest and gave a preferred time
+          not_interested = person declined or said not now
+          busy           = person is busy and cannot talk
+          wrong_person   = someone else answered, not {patient_name}
+          no_answer      = no response after greeting
+          voicemail      = reached voicemail or answering machine
       - Do NOT keep the line open after saying goodbye.
       - Do NOT invent services, prices, or availability not mentioned above.
     profile: telephony_ulaw_8k
@@ -201,6 +217,8 @@ contexts:
     tools:
     - hangup_call
     - transfer
+    in_call_http_tools:
+    - update_lead_call_result
     post_call_tools:
     - smart_doctor_call_log
   ivr_main:
@@ -1089,6 +1107,36 @@ in_call_tools:
     return_raw_json: false
     error_message: Could not update call result right now.
     body_template: '{"appointmentId": "{appointment_id}", "result": "{call_result}", "patientId": "{patient_id}"}'
+  update_lead_call_result:
+    kind: in_call_http_lookup
+    phase: in_call
+    enabled: true
+    is_global: false
+    timeout_ms: 5000
+    url: http://168.144.27.225/api/v1/tools/call-result
+    method: POST
+    headers:
+      Content-Type: application/json
+      X-Tenant-ID: '1'
+      X-API-Key: dev-api-key-replace-in-production
+    query_params: {}
+    output_variables: {}
+    description: "Reports the outcome of an outbound lead follow-up call to the HOS system.
+      result is always 'answer' (call was connected). interest captures what the person said:
+      interested (confirmed interest and gave a time), not_interested (declined),
+      busy (cannot talk now), wrong_person (someone else answered), voicemail (answering machine)."
+    parameters:
+    - name: lead_id
+      type: string
+      description: The lead ID from the call context — always pass {lead_id}
+      required: true
+    - name: interest
+      type: string
+      description: "The person's response: interested, not_interested, busy, wrong_person, or voicemail"
+      required: true
+    return_raw_json: false
+    error_message: Could not update lead call result right now.
+    body_template: '{"leadId": "{lead_id}", "result": "answer", "interest": "{interest}"}'
   cancel_appointment:
     kind: in_call_http_lookup
     phase: in_call
